@@ -28,24 +28,26 @@ Running detection leaves every file and folder unchanged (names, sizes and modif
 - **Critical:** always shown to the agent in full
 - **Id:** `inv_bee7349a`
 
-#### Saving .swerepo.toml, also after changes, keeps people's comments and every key SWERepo doesn't know
+#### An older SWERepo never replaces a .swerepo.toml from a newer SWERepo or standard, loaded, new or stale
 
-Saving .swerepo.toml, including after SWERepo changed values and when a newer SWERepo saves, keeps comments on their own line and at the end of lines it changed, and every key SWERepo doesn't know, top-level, in a table it knows, or in a table of its own, with its value.
-
-- **Applies to:** `swerepo/state.py`
-- **Approved by:** Vamshidhar Pandrapagada, 2026-11-20, in the terminal
-- **Test:** `.seamspec/tests/test_inv_d8603926.py` (pytest)
-- **Id:** `inv_d8603926`
-
-#### A .swerepo.toml from a newer SWERepo or standard loads, but an older SWERepo never overwrites it
-
-A .swerepo.toml written by a newer SWERepo version, or in a newer standard, loads even when it names components this version doesn't know, but this older SWERepo refuses to save over it and leaves the file unchanged.
+An older SWERepo never replaces a .swerepo.toml written by a newer SWERepo version or in a newer standard: not after loading it (it still loads, even naming components this version doesn't know), not with a new state, and not with a state loaded before the newer SWERepo rewrote the file. The file stays unchanged.
 
 - **Applies to:** `swerepo/state.py`
 - **Approved by:** Vamshidhar Pandrapagada, 2026-11-20, in the terminal
-- **Test:** `.seamspec/tests/test_inv_070db19c.py` (pytest)
+- **Test:** `.seamspec/tests/test_inv_71e4b33d.py` (pytest)
 - **Critical:** always shown to the agent in full
-- **Id:** `inv_070db19c`
+- **Replaces:** A .swerepo.toml from a newer SWERepo or standard loads, but an older SWERepo never overwrites it (`inv_070db19c`)
+- **Id:** `inv_71e4b33d`
+
+#### Saving .swerepo.toml keeps comments and unknown keys, also inside records SWERepo updates
+
+Saving .swerepo.toml, including after SWERepo changed values and updated or added records, and when a newer SWERepo saves, keeps comments on their own line and at the end of lines it changed, and every key SWERepo doesn't know (top-level, in a table it knows, in a record it updated, or in a table of its own) with its value.
+
+- **Applies to:** `swerepo/state.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-20, in the terminal
+- **Test:** `.seamspec/tests/test_inv_afb6dfea.py` (pytest)
+- **Replaces:** Saving .swerepo.toml, also after changes, keeps people's comments and every key SWERepo doesn't know (`inv_d8603926`)
+- **Id:** `inv_afb6dfea`
 
 ### `(repository root)` (2 rules)
 
@@ -67,3 +69,14 @@ CHANGELOG.md exists and has a '## [Unreleased]' heading, so every change has a p
 - **Approved by:** Vamshidhar Pandrapagada, 2026-11-20, in the terminal
 - **Test:** `.seamspec/tests/test_inv_b2000e40.py` (pytest)
 - **Id:** `inv_b2000e40`
+
+## Retired rules
+
+These were approved once and are no longer checked.
+
+- **Saving .swerepo.toml, also after changes, keeps people's comments and every key SWERepo doesn't know** (`inv_d8603926`): Saving .swerepo.toml, including after SWERepo changed values and when a newer SWERepo saves, keeps comments on their own line and at the end of lines it changed, and every key SWERepo doesn't know, top-level, in a table it knows, or in a table of its own, with its value.
+  - Retired because: GitHub Copilot's review of PR #2 showed updating an existing record dropped comments and unknown keys inside it, which the rule promises to keep but its test didn't exercise. Code fixed in b827f00; the replacement's test updates an existing record.
+  - Replaced by Saving .swerepo.toml keeps comments and unknown keys, also inside records SWERepo updates (`inv_afb6dfea`).
+- **A .swerepo.toml from a newer SWERepo or standard loads, but an older SWERepo never overwrites it** (`inv_070db19c`): A .swerepo.toml written by a newer SWERepo version, or in a newer standard, loads even when it names components this version doesn't know, but this older SWERepo refuses to save over it and leaves the file unchanged.
+  - Retired because: GitHub Copilot's review of PR #2 showed the rule's promise (an older SWERepo never overwrites a newer file) was broken for a new or stale state saved over a newer file on disk, a path the test didn't exercise. Code fixed in b827f00; the replacement's test covers loaded, new and stale states.
+  - Replaced by An older SWERepo never replaces a .swerepo.toml from a newer SWERepo or standard, loaded, new or stale (`inv_71e4b33d`).

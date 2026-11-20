@@ -338,5 +338,4 @@ At the owner's request, a GitHub Copilot code review was requested on PR #2 (the
 2. **High: updating a record replaced its whole table**, dropping a person's comments and extra keys in it. `_set_record` now updates the three known keys in place.
 3. **Medium: a closing fence followed by a non-breaking space still closed it.** Only spaces and tabs may follow a closing fence now (CommonMark).
 
-Six regression tests; five fail against the reviewed code and pass with the fixes (the sixth checks that an older file is still replaced). Findings 1 and 2 are paths the locked rules inv_070db19c and inv_d8603926 promise but their tests didn't exercise; superseding them with tests that do is proposed separately for the owner. ADR-20261120-ecf7 and ADR-20261120-9495 updated.
-
+Six regression tests; five fail against the reviewed code and pass with the fixes (the sixth checks that an older file is still replaced). Findings 1 and 2 are paths the locked rules inv_070db19c and inv_d8603926 promise but their tests didn't exercise; the owner then approved replacements whose tests do: inv_71e4b33d replaced inv_070db19c and inv_afb6dfea replaced inv_d8603926. (SeamSpec's own red-green check reported both replacements as passing on HEAD, which already contained the fix; run against the reviewed code, 59f9127, both fail.) ADR-20261120-ecf7 and ADR-20261120-9495 updated.

@@ -9,7 +9,7 @@
     ],
     "tags": []
   },
-  "status": "PROPOSED",
+  "status": "LOCKED",
   "origin": {
     "type": "manual",
     "text": "GitHub Copilot's review of PR #2 found paths the locked rule inv_070db19c promises but its test didn't exercise; the code is fixed (b827f00) and this replacement's test covers them (ADR-20261120-ecf7).",
@@ -17,16 +17,16 @@
   },
   "verification": {
     "runner": "pytest",
-    "harness_path": ".seamspec/proposed/inv_71e4b33d/test_inv_71e4b33d.py",
-    "harness_sha256": null,
-    "assertion_sha256": null
+    "harness_path": ".seamspec/tests/test_inv_71e4b33d.py",
+    "harness_sha256": "cd29a40839dc164cefcb7aed74a721ea86e98a2739794f78f16a239edb8e9b1f",
+    "assertion_sha256": "394b190c9ce1ad8261ff2874ab032498d9f75fc1dfa8acfc33d2bea4843a5291"
   },
   "adr_id": null,
   "created_at": "2026-11-20T10:36:23.310577Z",
-  "approved_at": null,
-  "approved_by": null,
+  "approved_at": "2026-11-20T10:42:38.045795Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
   "superseded_by": null,
   "status_reason": null,
-  "decided_via": null,
+  "decided_via": "terminal",
   "critical": true
 }
