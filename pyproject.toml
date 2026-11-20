@@ -1,0 +1,64 @@
+[project]
+name = "swerepo"
+version = "0.1.0.dev0"
+description = "Set up a repository the way an AI-assisted team should work, and keep it that way."
+readme = "README.md"
+license = "Apache-2.0"  # ADR-20261119-7384
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+keywords = ["ai", "coding-agents", "repository", "ci", "adr", "governance"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Quality Assurance",
+]
+# Runtime dependencies need an ADR (ADR-20261119-db50).
+dependencies = [
+    "typer>=0.12",
+]
+
+[project.urls]  # ADR-20261120-1a27
+Homepage = "https://github.com/swerepo/swerepo"
+Source = "https://github.com/swerepo/swerepo"
+Issues = "https://github.com/swerepo/swerepo/issues"
+Changelog = "https://github.com/swerepo/swerepo/blob/main/CHANGELOG.md"
+
+[project.scripts]
+swerepo = "swerepo.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "seamspec==0.1.1",  # governs this repository (ADR-20261119-6b94); upgrade on purpose
+]
+
+[build-system]
+requires = ["uv_build>=0.9.28,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""  # flat layout: the package lives in ./swerepo (ADR-20261119-db50)
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+# .seamspec: approved rule tests are locked by hash, so a linter or formatter must never touch them
+# (SeamSpec ADR-20261013-c3f7; SWEREPO-SPEC §6.3).
+extend-exclude = [".seamspec"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

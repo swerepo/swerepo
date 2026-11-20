@@ -1,0 +1,32 @@
+{
+  "schema_version": "1",
+  "id": "inv_62d51113",
+  "title": "No personal email addresses or home-folder paths in tracked files",
+  "assertion": "Every tracked text file is free of personal email addresses and home-folder paths. Allowed: GitHub noreply addresses, reserved example domains, git@ in SSH remotes, emails declared in pyproject.toml's [project] authors and maintainers, emails in SECURITY.md, placeholder home folders (/Users/me, /home/user, C:\\Users\\you, runner, Shared), and any line marked 'swerepo: allow-privacy'.",
+  "scope": {
+    "paths": [
+      "**/*"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "Day-one rule agreed with the owner for Phase 0 (ADR-20261119-6b94, SWEREPO-SPEC section 6.4 and 6.8 rule 1): personal details must never leak into the repository.",
+    "ref": "ADR-20261119-6b94"
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_62d51113.py",
+    "harness_sha256": "88ee3aca4ab27a443e341d28dbd14c9f48534628752d46ddded62230e9b3704c",
+    "assertion_sha256": "567172c25b128892d00a06725bd634a7d28019dd26044c0ee2f7d23e79505bbd"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-20T06:58:29.440593Z",
+  "approved_at": "2026-11-20T08:48:40.020090Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

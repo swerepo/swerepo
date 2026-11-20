@@ -1,0 +1,14 @@
+{
+  "extraKnownMarketplaces": {
+    "seamspec": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/seamspec/seamspec.git",
+        "ref": "v0.1.1"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "seamspec@seamspec": true
+  }
+}

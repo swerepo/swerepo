@@ -1,0 +1,33 @@
+# Placeholder that reserves the name `swerepo` on PyPI (ADR-20261119-d68b).
+# Not the real package: that is ../../pyproject.toml. Built and published by the owner only.
+[project]
+name = "swerepo"
+version = "0.0.1"
+description = "Name reserved for SWERepo, which isn't released yet. See the project page."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/swerepo/swerepo"
+Source = "https://github.com/swerepo/swerepo"
+Issues = "https://github.com/swerepo/swerepo/issues"
+
+[project.scripts]
+swerepo = "swerepo:main"
+
+[build-system]
+requires = ["uv_build>=0.9.28,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""

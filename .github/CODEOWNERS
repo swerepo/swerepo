@@ -1,0 +1,17 @@
+# Code owners. The last matching line wins, so the governance block stays at the end of this file
+# (SWEREPO-SPEC §6.1). Add per-folder owners above it.
+
+# This repository's own files.
+/SWEREPO-SPEC.md         @vamshidhar-pandrapagada
+/LICENSE                 @vamshidhar-pandrapagada
+
+# swerepo:begin (governance paths, spec §6.1; written by hand until SWERepo can apply it, ADR-20261120-1a27)
+/.github/                @vamshidhar-pandrapagada
+/.swerepo.toml           @vamshidhar-pandrapagada
+/AGENTS.md               @vamshidhar-pandrapagada
+/CLAUDE.md               @vamshidhar-pandrapagada
+/docs/adr/               @vamshidhar-pandrapagada
+/docs/agents/            @vamshidhar-pandrapagada
+/docs/EARNED_SPEC.md     @vamshidhar-pandrapagada
+/.seamspec/              @vamshidhar-pandrapagada
+# swerepo:end
