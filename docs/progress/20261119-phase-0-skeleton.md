@@ -4,7 +4,7 @@
 
 ## Done
 
-- Git repository; Python package `swerepo` (flat layout, `uv_build`, Typer) with `swerepo --version` and `python -m swerepo`; 6 tests.
+- Git repository; Python package `swerepo` (flat layout, `uv_build`, Typer) with `swerepo --version` and `python -m swerepo`; 6 tests (7 after the CI fix below).
 - CI workflow `.github/workflows/ci.yml`: lint, tests on 3.11 to 3.14, macOS on `main`, zizmor, SeamSpec, `ci-ok`. SHA-pinned actions.
 - ADRs: ADR-20261119-9f87 (phases and peer review), ADR-20261119-6b94 (SeamSpec), ADR-20261119-db50 (packaging and dependencies), ADR-20261119-dd1a (CI), ADR-20261119-75e6 (following the standard by hand).
 - `AGENTS.md`, `CLAUDE.md` (imports it), `CONTRIBUTING.md`, `CHANGELOG.md`, `docs/PROGRESS.md`, ADR index and template.
@@ -15,6 +15,8 @@
 - Both commits simulated in a scratch copy first: the bootstrap commit needs `CHANGELOG.md` (the locked changelog rule runs at every commit), so it has five files; the Phase 0 commit (39 files) passes the hook, and `seamspec doctor --ci` against `main` reports no errors.
 
 - Review (Gemini), 3 rounds, closed 2026-11-20: 8 findings, all fixed; one partial pushback accepted. Fixes: the privacy rule gained the spec's allowances and self-checks; CI's `doctor` uses an explicit base (root commits and multi-commit pushes); `docs/EARNED_SPEC.md` is generated and checked in CI; the bootstrap commit is defined.
+
+- First CI run on PR #1 failed in `test_help_describes_the_tool` on all four Python versions: Typer forces Rich's styled terminal output when `GITHUB_ACTIONS` is set, so `--version` was split by colour codes. Tests now compare plain text (`click.unstyle`), and a new test runs the help with `GITHUB_ACTIONS=true` (7 tests).
 
 ## Next
 
