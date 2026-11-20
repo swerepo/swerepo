@@ -1,0 +1,32 @@
+{
+  "schema_version": "1",
+  "id": "inv_afb6dfea",
+  "title": "Saving .swerepo.toml keeps comments and unknown keys, also inside records SWERepo updates",
+  "assertion": "Saving .swerepo.toml, including after SWERepo changed values and updated or added records, and when a newer SWERepo saves, keeps comments on their own line and at the end of lines it changed, and every key SWERepo doesn't know (top-level, in a table it knows, in a record it updated, or in a table of its own) with its value.",
+  "scope": {
+    "paths": [
+      "swerepo/state.py"
+    ],
+    "tags": []
+  },
+  "status": "PROPOSED",
+  "origin": {
+    "type": "manual",
+    "text": "GitHub Copilot's review of PR #2 found paths the locked rule inv_d8603926 promises but its test didn't exercise; the code is fixed (b827f00) and this replacement's test covers them (ADR-20261120-ecf7).",
+    "ref": "ADR-20261120-ecf7"
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/proposed/inv_afb6dfea/test_inv_afb6dfea.py",
+    "harness_sha256": null,
+    "assertion_sha256": null
+  },
+  "adr_id": null,
+  "created_at": "2026-11-20T10:36:23.530366Z",
+  "approved_at": null,
+  "approved_by": null,
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": null,
+  "critical": false
+}

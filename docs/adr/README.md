@@ -42,4 +42,5 @@ Kept by hand until `swerepo adr index` exists (Phase 3); then it is generated be
 | [ADR-20261120-b25a](ADR-20261120-b25a-template-format.md) | Templates are plain files with @@name@@ placeholders, versioned by file name and never changed once released | ACCEPTED |
 | [ADR-20261120-ecf7](ADR-20261120-ecf7-state-file-format.md) | .swerepo.toml is read and written with tomlkit, validated on load, and never overwritten by an older SWERepo | ACCEPTED |
 | [ADR-20261120-25b5](ADR-20261120-25b5-project-detection.md) | Detection is read-only, lists files through git, skips conventional non-project folders, and reads Python versions with packaging | ACCEPTED |
+| [ADR-20261120-2e50](ADR-20261120-2e50-copilot-review-on-every-pr.md) | Every pull request gets a Copilot code review, and its threads must be resolved before merging | ACCEPTED |
 <!-- swerepo:adr-index:end -->

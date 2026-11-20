@@ -12,7 +12,7 @@ SWERepo is built in phases from [SWEREPO-SPEC.md](SWEREPO-SPEC.md), the source o
 6. Before committing: no personal emails, home-folder paths, `file:///` links, keys or passwords in the change.
 7. When a test fails, fix the code; never weaken the test. Never edit a file in `.seamspec/`; request a supersede instead.
 8. Never publish a package, approve a SeamSpec rule, or create a GitHub repository or organisation unless the owner explicitly asks. Those are the owner's.
-9. A phase ends with `CODE_REVIEW.md` (format in ADR-20261119-9f87). Answer every reviewer finding: fix it, push back with reasons, or defer it to a named phase.
+9. A phase ends with `CODE_REVIEW.md` (format in ADR-20261119-9f87). Answer every reviewer finding: fix it, push back with reasons, or defer it to a named phase. On a pull request, reply in every Copilot thread with the fix commit or the reason; the owner resolves threads, never the agent (ADR-20261120-2e50).
 
 ## Commands
 
