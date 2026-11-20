@@ -1,0 +1,41 @@
+# Architecture Decision Records
+
+Decisions that **change or add to** [SWEREPO-SPEC.md](../../SWEREPO-SPEC.md), and decisions about how this repository is built, are recorded here. Every one of them gets an ADR, in the same pull request as the change it explains.
+
+## When to write one
+
+| Change | ADR? |
+|---|---|
+| Behaviour, file format, command, flag, `.swerepo.toml` key or default differs from the spec | **Yes**, and update the spec in the same PR |
+| Something new the spec doesn't cover | **Yes**, and add it to the spec |
+| A spec item moves between v0.1, v0.2 and Later | **Yes** |
+| A new runtime dependency | **Yes** |
+| A change to CI workflows, git hooks, or how we track, review or release work | **Yes** |
+| Internal refactor, naming inside a module, test layout, a bug fix that matches the spec | No |
+
+## Format
+
+The SeamSpec convention, which SWERepo also installs in other repositories (spec §6.5):
+
+- **File name:** `ADR-YYYYMMDD-xxxx-short-slug.md`, where `xxxx` is 4 random hex characters (`python3 -c "import secrets; print(secrets.token_hex(2))"`), so two branches never pick the same name.
+- **Frontmatter:** `id`, `title`, `status` (`PROPOSED | ACCEPTED | SUPERSEDED | REJECTED`), `date`, `scopes`, `invariants`, `supersedes`, `superseded_by`.
+- **Sections:** Context, Decision (with alternatives considered), Enforced Invariants, Consequences. Start from [TEMPLATE.md](TEMPLATE.md).
+- To replace a decision, write a new ADR with `supersedes:` set, and set `status: SUPERSEDED` and `superseded_by:` on the old one. Never delete an ADR.
+
+## Index
+
+Kept by hand until `swerepo adr index` exists (Phase 3); then it is generated between the markers.
+
+<!-- swerepo:adr-index:begin -->
+| ID | Title | Status |
+|---|---|---|
+| [ADR-20261119-9f87](ADR-20261119-9f87-phased-build-with-peer-review.md) | Build in phases, each closed by a peer code review | ACCEPTED |
+| [ADR-20261119-6b94](ADR-20261119-6b94-seamspec-governs-this-repo.md) | SeamSpec governs this repository from Phase 0; rules are locked once earned | ACCEPTED |
+| [ADR-20261119-db50](ADR-20261119-db50-package-layout-and-dependencies.md) | Package layout, build backend and runtime dependencies | ACCEPTED |
+| [ADR-20261119-dd1a](ADR-20261119-dd1a-ci-for-this-repo.md) | CI for this repository, with a single required check | ACCEPTED |
+| [ADR-20261119-75e6](ADR-20261119-75e6-repo-follows-its-own-standard.md) | This repository follows the SWERepo standard by hand until SWERepo can apply it | ACCEPTED |
+| [ADR-20261119-7384](ADR-20261119-7384-apache-2-license.md) | SWERepo is licensed under Apache-2.0 | ACCEPTED |
+| [ADR-20261119-13fc](ADR-20261119-13fc-hosting-goldenrepo-dev-org.md) | The repository lives at goldenrepo-dev/goldenrepo, public; the package and command stay goldenrepo | SUPERSEDED by ADR-20261120-1a27 |
+| [ADR-20261119-d68b](ADR-20261119-d68b-reserve-pypi-name-with-placeholder.md) | Reserve the PyPI name with a 0.0.1 placeholder, published by the owner | ACCEPTED |
+| [ADR-20261120-1a27](ADR-20261120-1a27-rename-to-swerepo.md) | The project is renamed SWERepo (package and command swerepo), hosted at swerepo/swerepo | ACCEPTED |
+<!-- swerepo:adr-index:end -->
