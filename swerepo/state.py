@@ -1,0 +1,295 @@
+"""`.swerepo.toml`: what SWERepo applied to a repository (spec §9, ADR-20261120-ecf7).
+
+Read and written with tomlkit, so comments, key order and keys this version doesn't know survive.
+Validated on load; never saved over a file that a newer SWERepo wrote.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import Any
+
+import tomlkit
+from packaging.version import InvalidVersion, Version
+from tomlkit.exceptions import TOMLKitError
+from tomlkit.items import Table
+from tomlkit.toml_document import TOMLDocument
+
+from swerepo import __version__
+from swerepo.fingerprint import is_fingerprint
+from swerepo.render import TEMPLATE_ID
+
+FILE_NAME = ".swerepo.toml"
+SUPPORTED_STANDARD = 1
+COMPONENTS = ("docs", "agents", "ci", "security", "github", "seamspec", "openspec", "release")
+MODES = ("solo", "team")
+HEADER = "# Written by SWERepo (SWEREPO-SPEC §9). Commit this file. Settings may be edited; fingerprints may not."
+
+
+class StateError(ValueError):
+    """`.swerepo.toml` is malformed, or can't be saved."""
+
+
+@dataclass(frozen=True)
+class Record:
+    """What SWERepo wrote at a path: the template, the template's own output, and what was written."""
+
+    template: str
+    rendered: str
+    written: str
+
+
+def check_path(path: object, *, key: str) -> str:
+    """A repository-relative POSIX path, written one way only: not empty or `.`, not absolute, no `.` or
+    `..` parts, no empty parts (`a//b`), no trailing `/`, no backslashes or control characters."""
+    if not isinstance(path, str) or not path or path.strip() != path or any(ord(c) < 32 for c in path):
+        raise StateError(f"{key}: {path!r} is not a repository path")
+    if "\\" in path or path.startswith("/") or re.match(r"^[A-Za-z]:", path):
+        raise StateError(f"{key}: {path!r} must be relative and use '/'")
+    if any(part in ("", ".", "..") for part in path.split("/")):
+        raise StateError(f"{key}: {path!r} must not have empty, '.' or '..' parts, or end with '/'")
+    return PurePosixPath(path).as_posix()
+
+
+def _version(value: str, *, key: str) -> Version:
+    try:
+        return Version(value)
+    except InvalidVersion as error:
+        raise StateError(f"{key}: {value!r} is not a version") from error
+
+
+class State:
+    def __init__(self, doc: TOMLDocument, *, running: str = __version__) -> None:
+        self.doc = doc
+        _validate(doc, running)
+
+    # --- creating, reading, writing --------------------------------------------------------------
+
+    @classmethod
+    def new(cls, *, standard: int = SUPPORTED_STANDARD, version: str = __version__) -> State:
+        doc = tomlkit.document()
+        doc.add(tomlkit.comment(HEADER.removeprefix("# ")))
+        doc.add("standard", standard)
+        doc.add("swerepo", version)
+        doc.add("components", tomlkit.array())
+        return cls(doc)
+
+    @classmethod
+    def parse(cls, text: str, *, source: str = FILE_NAME, running: str = __version__) -> State:
+        try:
+            doc = tomlkit.parse(text)
+        except TOMLKitError as error:
+            raise StateError(f"{source}: not valid TOML: {error}") from error
+        try:
+            return cls(doc, running=running)
+        except StateError as error:
+            raise StateError(f"{source}: {error}") from error
+
+    @classmethod
+    def load(cls, root: Path, *, running: str = __version__) -> State | None:
+        """The state of the repository at `root`, or None if it has no `.swerepo.toml`."""
+        path = root / FILE_NAME
+        if not path.is_file():
+            return None
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            raise StateError(f"{FILE_NAME}: can't read it: {error}") from error
+        return cls.parse(text, source=FILE_NAME, running=running)
+
+    def dumps(self) -> str:
+        return tomlkit.dumps(self.doc)
+
+    def written_by_newer(self, running: str = __version__) -> str | None:
+        """Why this file must not be saved by the running SWERepo, or None if it may be."""
+        if self.standard > SUPPORTED_STANDARD:
+            return f"it uses standard {self.standard}; this SWERepo supports up to {SUPPORTED_STANDARD}"
+        if Version(self.swerepo_version) > Version(running):
+            return f"SWERepo {self.swerepo_version} wrote it; this is {running}"
+        return None
+
+    def save(self, root: Path, *, running: str = __version__) -> Path:
+        """Write atomically, recording the running version. Refuses a file a newer SWERepo wrote."""
+        reason = self.written_by_newer(running)
+        if reason:
+            raise StateError(f"{FILE_NAME} not saved: {reason}. Upgrade SWERepo.")
+        self.doc["swerepo"] = running
+        target = root / FILE_NAME
+        mode = target.stat().st_mode & 0o777 if target.exists() else 0o644
+        fd, temp_name = tempfile.mkstemp(dir=root, prefix=f"{FILE_NAME}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(self.dumps())
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temp_name, mode)
+            os.replace(temp_name, target)
+        except BaseException:
+            Path(temp_name).unlink(missing_ok=True)
+            raise
+        return target
+
+    # --- reading values --------------------------------------------------------------------------
+
+    @property
+    def standard(self) -> int:
+        return int(self.doc["standard"])
+
+    @property
+    def swerepo_version(self) -> str:
+        return str(self.doc["swerepo"])
+
+    @property
+    def components(self) -> list[str]:
+        return [str(c) for c in self.doc.get("components", [])]
+
+    @property
+    def mode(self) -> str | None:
+        mode = self.doc.get("mode")
+        return None if mode is None else str(mode)
+
+    @property
+    def values(self) -> dict[str, Any]:
+        table = self.doc.get("values")
+        return {} if table is None else table.unwrap()
+
+    @property
+    def project_ignore(self) -> list[str]:
+        projects = self.doc.get("projects")
+        return [] if projects is None else [str(p) for p in projects.get("ignore", [])]
+
+    def files(self) -> dict[str, Record]:
+        return _records(self.doc.get("files"))
+
+    def blocks(self) -> dict[str, Record]:
+        return _records(self.doc.get("blocks"))
+
+    # --- changing values -------------------------------------------------------------------------
+
+    def set_components(self, components: list[str]) -> None:
+        _check_components(components, key="components")
+        array = tomlkit.array()  # tomlkit.array(x) would parse x as TOML text, not take a list
+        array.extend(components)
+        self.doc["components"] = array
+
+    def set_mode(self, mode: str) -> None:
+        if mode not in MODES:
+            raise StateError(f"mode: {mode!r} is not one of {', '.join(MODES)}")
+        self.doc["mode"] = mode
+
+    def set_value(self, name: str, value: str | list[str]) -> None:
+        _check_value(name, value)
+        self._table("values")[name] = value
+
+    def set_file(self, path: str, record: Record) -> None:
+        self._set_record("files", path, record)
+
+    def set_block(self, path: str, record: Record) -> None:
+        self._set_record("blocks", path, record)
+
+    def remove_file(self, path: str) -> None:
+        files = self.doc.get("files")
+        if files is not None and path in files:
+            del files[path]
+
+    def _table(self, name: str) -> Table:
+        if name not in self.doc:
+            self.doc.add(name, tomlkit.table())
+        return self.doc[name]
+
+    def _set_record(self, kind: str, path: str, record: Record) -> None:
+        key = f"{kind}.{path}"
+        check_path(path, key=key)
+        _check_record(record.template, record.rendered, record.written, key=key)
+        if kind not in self.doc:
+            self.doc.add(kind, tomlkit.table(is_super_table=True))
+        entry = tomlkit.table()
+        entry.add("template", record.template)
+        entry.add("rendered", record.rendered)
+        entry.add("written", record.written)
+        self.doc[kind][path] = entry
+
+
+# --- validation ----------------------------------------------------------------------------------
+
+
+def _records(table: Any) -> dict[str, Record]:
+    if table is None:
+        return {}
+    return {
+        str(path): Record(str(entry["template"]), str(entry["rendered"]), str(entry["written"]))
+        for path, entry in table.items()
+    }
+
+
+def _check_components(components: Any, *, key: str) -> None:
+    if not isinstance(components, list) or not all(isinstance(c, str) for c in components):
+        raise StateError(f"{key}: must be a list of component names")
+    unknown = [c for c in components if c not in COMPONENTS]
+    if unknown:
+        raise StateError(f"{key}: unknown component {', '.join(map(repr, unknown))} (known: {', '.join(COMPONENTS)})")
+
+
+def _check_record(template: Any, rendered: Any, written: Any, *, key: str) -> None:
+    if not isinstance(template, str) or not TEMPLATE_ID.fullmatch(template):
+        raise StateError(f"{key}.template: {template!r} is not a template id")
+    for name, value in (("rendered", rendered), ("written", written)):
+        if not is_fingerprint(value):
+            raise StateError(f"{key}.{name}: not a fingerprint (64 lower-case hex characters)")
+
+
+def _check_value(name: str, value: Any) -> None:
+    text_list = isinstance(value, list) and all(isinstance(v, str) for v in value)
+    if not (isinstance(value, str) or text_list):
+        raise StateError(f"values.{name}: must be text or a list of text")
+
+
+def _validate(doc: TOMLDocument, running: str = __version__) -> None:
+    data = doc.unwrap()
+    standard = data.get("standard")
+    if not isinstance(standard, int) or isinstance(standard, bool) or standard < 1:
+        raise StateError("standard: must be a positive whole number")
+    version = data.get("swerepo")
+    if not isinstance(version, str):
+        raise StateError("swerepo: must be the version that last wrote this file")
+    # A file from a newer SWERepo or standard may name components and modes this version doesn't know.
+    # It must still load, so `check` can say "upgrade SWERepo"; `save` refuses it (written_by_newer).
+    written_by = _version(version, key="swerepo")  # always validated, whatever the standard (P1-F10)
+    newer = standard > SUPPORTED_STANDARD or written_by > Version(running)
+    components = data.get("components", [])
+    if newer:
+        if not isinstance(components, list) or not all(isinstance(c, str) for c in components):
+            raise StateError("components: must be a list of component names")
+        if "mode" in data and not isinstance(data["mode"], str):
+            raise StateError("mode: must be text")
+    else:
+        _check_components(components, key="components")
+        if "mode" in data and data["mode"] not in MODES:
+            raise StateError(f"mode: {data['mode']!r} is not one of {', '.join(MODES)}")
+    values = data.get("values", {})
+    if not isinstance(values, dict):
+        raise StateError("values: must be a table")
+    for name, value in values.items():
+        _check_value(name, value)
+    for kind in ("files", "blocks"):
+        table = data.get(kind, {})
+        if not isinstance(table, dict):
+            raise StateError(f"{kind}: must be a table of paths")
+        for path, entry in table.items():
+            key = f"{kind}.{path}"
+            check_path(path, key=key)
+            if not isinstance(entry, dict):
+                raise StateError(f"{key}: must be a table with template, rendered and written")
+            _check_record(entry.get("template"), entry.get("rendered"), entry.get("written"), key=key)
+    projects = data.get("projects", {})
+    if not isinstance(projects, dict):
+        raise StateError("projects: must be a table")
+    ignore = projects.get("ignore", [])
+    if not isinstance(ignore, list):
+        raise StateError("projects.ignore: must be a list of folders")
+    for folder in ignore:
+        check_path(folder, key="projects.ignore")

@@ -2,9 +2,50 @@
 
 # Spec: what this code guarantees
 
-2 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
+6 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
 
 ## Rules in force
+
+### `swerepo` (4 rules)
+
+#### A fingerprint ignores only line endings, trailing whitespace, trailing blank lines and a BOM
+
+A file's fingerprint stays the same when only its line endings (CRLF or CR), trailing whitespace on any line, trailing blank lines, a missing final newline or a leading byte-order mark differ, for text and bytes alike, and changes for any other edit, including indentation, tabs for spaces, and blank or deleted lines inside the text.
+
+- **Applies to:** `swerepo/fingerprint.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-20, in the terminal
+- **Test:** `.seamspec/tests/test_inv_7c5f3156.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_7c5f3156`
+
+#### Detection never writes to the repository it looks at, with or without git
+
+Running detection leaves every file and folder unchanged (names, sizes and modification times): in a committed git repository whose index is out of date, and in a folder that isn't a repository, while it reads workflows, pre-commit, setup.cfg and tox.ini (and the test checks it found them).
+
+- **Applies to:** `swerepo/detect.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-20, in the terminal
+- **Test:** `.seamspec/tests/test_inv_bee7349a.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_bee7349a`
+
+#### Saving .swerepo.toml, also after changes, keeps people's comments and every key SWERepo doesn't know
+
+Saving .swerepo.toml, including after SWERepo changed values and when a newer SWERepo saves, keeps comments on their own line and at the end of lines it changed, and every key SWERepo doesn't know, top-level, in a table it knows, or in a table of its own, with its value.
+
+- **Applies to:** `swerepo/state.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-20, in the terminal
+- **Test:** `.seamspec/tests/test_inv_d8603926.py` (pytest)
+- **Id:** `inv_d8603926`
+
+#### A .swerepo.toml from a newer SWERepo or standard loads, but an older SWERepo never overwrites it
+
+A .swerepo.toml written by a newer SWERepo version, or in a newer standard, loads even when it names components this version doesn't know, but this older SWERepo refuses to save over it and leaves the file unchanged.
+
+- **Applies to:** `swerepo/state.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-20, in the terminal
+- **Test:** `.seamspec/tests/test_inv_070db19c.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_070db19c`
 
 ### `(repository root)` (2 rules)
 

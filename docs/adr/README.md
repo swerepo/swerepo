@@ -38,4 +38,8 @@ Kept by hand until `swerepo adr index` exists (Phase 3); then it is generated be
 | [ADR-20261119-13fc](ADR-20261119-13fc-hosting-goldenrepo-dev-org.md) | The repository lives at goldenrepo-dev/goldenrepo, public; the package and command stay goldenrepo | SUPERSEDED by ADR-20261120-1a27 |
 | [ADR-20261119-d68b](ADR-20261119-d68b-reserve-pypi-name-with-placeholder.md) | Reserve the PyPI name with a 0.0.1 placeholder, published by the owner | ACCEPTED |
 | [ADR-20261120-1a27](ADR-20261120-1a27-rename-to-swerepo.md) | The project is renamed SWERepo (package and command swerepo), hosted at swerepo/swerepo | ACCEPTED |
+| [ADR-20261120-9495](ADR-20261120-9495-fingerprints-and-marked-blocks.md) | Fingerprints hash normalised UTF-8 text with SHA-256; marked blocks are found by comment-style markers | ACCEPTED |
+| [ADR-20261120-b25a](ADR-20261120-b25a-template-format.md) | Templates are plain files with @@name@@ placeholders, versioned by file name and never changed once released | ACCEPTED |
+| [ADR-20261120-ecf7](ADR-20261120-ecf7-state-file-format.md) | .swerepo.toml is read and written with tomlkit, validated on load, and never overwritten by an older SWERepo | ACCEPTED |
+| [ADR-20261120-25b5](ADR-20261120-25b5-project-detection.md) | Detection is read-only, lists files through git, skips conventional non-project folders, and reads Python versions with packaging | ACCEPTED |
 <!-- swerepo:adr-index:end -->
