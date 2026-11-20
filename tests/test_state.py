@@ -190,6 +190,48 @@ def test_an_unreadable_file_is_a_state_error(tmp_path: Path):
         State.load(tmp_path)
 
 
+class TestTheFileOnDisk:  # review: Copilot on PR #2 (finding 1)
+    NEWER_ON_DISK = 'standard = 1\nswerepo = "0.3.0"\ncomponents = ["docs"]\n'
+
+    def test_a_new_state_is_not_saved_over_a_newer_file(self, tmp_path: Path):
+        (tmp_path / FILE_NAME).write_text(self.NEWER_ON_DISK, encoding="utf-8")
+        with pytest.raises(StateError, match="the file on disk: SWERepo 0.3.0 wrote it; this is 0.1.0"):
+            State.new(version="0.1.0").save(tmp_path, running="0.1.0")
+        assert (tmp_path / FILE_NAME).read_text(encoding="utf-8") == self.NEWER_ON_DISK
+
+    def test_a_stale_state_is_not_saved_over_a_file_a_newer_swerepo_wrote_since(self, tmp_path: Path):
+        (tmp_path / FILE_NAME).write_text(SPEC_EXAMPLE, encoding="utf-8")
+        state = State.load(tmp_path, running="0.1.0")
+        (tmp_path / FILE_NAME).write_text(SPEC_EXAMPLE.replace("standard = 1", "standard = 2"), encoding="utf-8")
+        with pytest.raises(StateError, match="the file on disk: it uses standard 2"):
+            state.save(tmp_path, running="0.1.0")
+
+    def test_an_unreadable_file_on_disk_is_not_replaced(self, tmp_path: Path):
+        (tmp_path / FILE_NAME).write_text("standard = \n", encoding="utf-8")
+        with pytest.raises(StateError, match="the existing file can't be read"):
+            State.new(version="0.1.0").save(tmp_path, running="0.1.0")
+        assert (tmp_path / FILE_NAME).read_text(encoding="utf-8") == "standard = \n"
+
+    def test_an_older_file_on_disk_is_replaced(self, tmp_path: Path):
+        (tmp_path / FILE_NAME).write_text(self.NEWER_ON_DISK.replace("0.3.0", "0.0.9"), encoding="utf-8")
+        State.new(version="0.1.0").save(tmp_path, running="0.1.0")
+        assert State.load(tmp_path, running="0.1.0").swerepo_version == "0.1.0"
+        assert [p.name for p in tmp_path.iterdir()] == [FILE_NAME]
+
+
+def test_updating_a_record_keeps_its_comments_and_extra_keys():  # review: Copilot on PR #2 (finding 2)
+    text = SPEC_EXAMPLE.replace('template = "docs/adr-template@1"', 'template = "docs/adr-template@1"  # why')
+    text = text.replace(f'written = "{HASH_B}"', f'written = "{HASH_B}"\nnote = "mine"')
+    state = State.parse(text, running="0.1.0")
+    state.set_file("docs/adr/TEMPLATE.md", Record("docs/adr-template@2", HASH_B, HASH_B))
+    state.set_block("AGENTS.md", Record("agents/block@2", HASH_B, HASH_B))
+    out = state.dumps()
+    assert "# why" in out and 'note = "mine"' in out
+    again = State.parse(out, running="0.1.0")
+    assert again.files()["docs/adr/TEMPLATE.md"] == Record("docs/adr-template@2", HASH_B, HASH_B)
+    assert again.blocks()["AGENTS.md"] == Record("agents/block@2", HASH_B, HASH_B)
+
+
 def test_invalid_toml_is_an_error():
     with pytest.raises(StateError, match=r"\.swerepo\.toml: not valid TOML"):
         State.parse("standard = \n")

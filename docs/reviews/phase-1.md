@@ -329,3 +329,14 @@ A second explanation by SeamSpec's reviewer judged inv_7c5f3156 and inv_070db19c
 Four more in-memory breakages, all caught.
 
 **Approved and locked by the owner on 2026-11-20:** inv_7c5f3156, inv_bee7349a, inv_d8603926 and inv_070db19c. `docs/EARNED_SPEC.md` regenerated (6 rules in force).
+
+### After merge-readiness: GitHub Copilot's review on PR #2
+
+At the owner's request, a GitHub Copilot code review was requested on PR #2 (the first PR it reviewed). It opened three threads, all reproduced before fixing:
+
+1. **High: the no-overwrite guard checked only the state in memory.** `State.new(version="0.1.0").save(root)` replaced a file 0.3.0 wrote. Now `save` also reads the file on disk (`_on_disk_reason`): a newer version or standard there, or a file that can't be read, is never replaced.
+2. **High: updating a record replaced its whole table**, dropping a person's comments and extra keys in it. `_set_record` now updates the three known keys in place.
+3. **Medium: a closing fence followed by a non-breaking space still closed it.** Only spaces and tabs may follow a closing fence now (CommonMark).
+
+Six regression tests; five fail against the reviewed code and pass with the fixes (the sixth checks that an older file is still replaced). Findings 1 and 2 are paths the locked rules inv_070db19c and inv_d8603926 promise but their tests didn't exercise; superseding them with tests that do is proposed separately for the owner. ADR-20261120-ecf7 and ADR-20261120-9495 updated.
+

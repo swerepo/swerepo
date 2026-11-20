@@ -94,7 +94,8 @@ def find_block(text: str, *, style: str, marker: str = "swerepo") -> Block | Non
                 if mark[0] != "`" or "`" not in line[opening.end() :]:
                     fence = mark
                     continue
-            elif mark[0] == fence[0] and len(mark) >= len(fence) and not line.strip().strip(mark[0]):
+            elif mark[0] == fence[0] and len(mark) >= len(fence) and not line[opening.end() :].strip(" \t"):
+                # CommonMark: only spaces and tabs may follow a closing fence (review: Copilot on PR #2).
                 fence = None
                 continue
         if fence is not None:

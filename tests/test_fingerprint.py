@@ -186,6 +186,17 @@ class TestFindBlock:
         text = "~~~ `example`\n<!-- swerepo:begin -->\n~~~\n<!-- swerepo:begin -->\nx\n<!-- swerepo:end -->\n"
         assert find_block(text, style=HTML).begin_line == 4
 
+    def test_only_spaces_and_tabs_may_follow_a_closing_fence(self):  # review: Copilot on PR #2 (finding 3)
+        text = (
+            "```\n<!-- swerepo:begin -->\n```\u00a0\n<!-- swerepo:end -->\n```\n"
+            "<!-- swerepo:begin -->\nreal\n<!-- swerepo:end -->\n"
+        )
+        block = find_block(text, style=HTML)
+        assert block is not None and (block.begin_line, block.content) == (6, "real\n")
+        assert (
+            find_block("```\nx\n``` \t\n<!-- swerepo:begin -->\ny\n<!-- swerepo:end -->\n", style=HTML).content == "y\n"
+        )
+
     def test_fences_mean_nothing_in_hash_style_files(self):
         text = "```\n# swerepo:begin\nx\n# swerepo:end\n"
         assert find_block(text, style=HASH).content == "x\n"

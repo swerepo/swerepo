@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import tempfile
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -106,19 +107,19 @@ class State:
 
     def written_by_newer(self, running: str = __version__) -> str | None:
         """Why this file must not be saved by the running SWERepo, or None if it may be."""
-        if self.standard > SUPPORTED_STANDARD:
-            return f"it uses standard {self.standard}; this SWERepo supports up to {SUPPORTED_STANDARD}"
-        if Version(self.swerepo_version) > Version(running):
-            return f"SWERepo {self.swerepo_version} wrote it; this is {running}"
-        return None
+        return _newer_reason(self.standard, self.swerepo_version, running)
 
     def save(self, root: Path, *, running: str = __version__) -> Path:
-        """Write atomically, recording the running version. Refuses a file a newer SWERepo wrote."""
+        """Write atomically, recording the running version. Refuses when this state, or the file it would
+        replace on disk, was written by a newer SWERepo or in a newer standard (review: Copilot on PR #2)."""
         reason = self.written_by_newer(running)
         if reason:
             raise StateError(f"{FILE_NAME} not saved: {reason}. Upgrade SWERepo.")
-        self.doc["swerepo"] = running
         target = root / FILE_NAME
+        on_disk = _on_disk_reason(target, running)
+        if on_disk:
+            raise StateError(f"{FILE_NAME} not saved: {on_disk}")
+        self.doc["swerepo"] = running
         mode = target.stat().st_mode & 0o777 if target.exists() else 0o644
         fd, temp_name = tempfile.mkstemp(dir=root, prefix=f"{FILE_NAME}.", suffix=".tmp")
         try:
@@ -207,14 +208,46 @@ class State:
         _check_record(record.template, record.rendered, record.written, key=key)
         if kind not in self.doc:
             self.doc.add(kind, tomlkit.table(is_super_table=True))
+        values = {"template": record.template, "rendered": record.rendered, "written": record.written}
+        existing = self.doc[kind].get(path)
+        if existing is not None:
+            # Update the known keys in place: a person's comments and extra keys in the record stay
+            # (review: Copilot on PR #2).
+            for name, value in values.items():
+                existing[name] = value
+            return
         entry = tomlkit.table()
-        entry.add("template", record.template)
-        entry.add("rendered", record.rendered)
-        entry.add("written", record.written)
+        for name, value in values.items():
+            entry.add(name, value)
         self.doc[kind][path] = entry
 
 
 # --- validation ----------------------------------------------------------------------------------
+
+
+def _newer_reason(standard: int, version: str, running: str) -> str | None:
+    if standard > SUPPORTED_STANDARD:
+        return f"it uses standard {standard}; this SWERepo supports up to {SUPPORTED_STANDARD}"
+    if Version(version) > Version(running):
+        return f"SWERepo {version} wrote it; this is {running}"
+    return None
+
+
+def _on_disk_reason(target: Path, running: str) -> str | None:
+    """Why the file already at `target` must not be replaced, or None. It may have been written by a
+    newer SWERepo since this state was loaded, or this state may be new (State.new) and never have
+    seen it. A file that can't be read is not replaced either."""
+    if not target.exists():
+        return None
+    try:
+        data = tomllib.loads(target.read_text(encoding="utf-8"))
+        standard, version = data.get("standard"), data.get("swerepo")
+        if not isinstance(standard, int) or isinstance(standard, bool) or not isinstance(version, str):
+            raise ValueError("no standard or swerepo version")
+        reason = _newer_reason(standard, version, running)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError, InvalidVersion) as error:
+        return f"the existing file can't be read ({error}), so it isn't replaced. Fix or remove it first."
+    return None if reason is None else f"the file on disk: {reason}. Upgrade SWERepo."
 
 
 def _records(table: Any) -> dict[str, Record]:
