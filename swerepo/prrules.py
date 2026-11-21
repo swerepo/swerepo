@@ -70,7 +70,7 @@ def _changes(ctx: Context, merge_base: str) -> list[tuple[str, str]] | None:
 
 
 def _dependencies(text: str | None) -> tuple[set[str], list[str]]:
-    """PEP 503-normalised names in [project].dependencies, and the entries that can't be parsed."""
+    """PEP 503-normalised names in [project].dependencies, and what can't be read (never the values)."""
     if text is None:
         return set(), []
     try:
@@ -80,12 +80,15 @@ def _dependencies(text: str | None) -> tuple[set[str], list[str]]:
     if not isinstance(project, dict):
         return set(), ["[project] isn't a table"]
     deps = project.get("dependencies", [])
+    if not isinstance(deps, list):
+        return set(), ["[project].dependencies isn't a list"]
     names, bad = set(), []
-    for entry in deps if isinstance(deps, list) else []:
+    for number, entry in enumerate(deps, start=1):
         try:
             names.add(canonicalize_name(Requirement(str(entry)).name))
         except InvalidRequirement:
-            bad.append(str(entry))
+            # by position, never the text: an invalid entry may be a local path or a URL with an address
+            bad.append(f"entry {number} of [project].dependencies isn't a valid requirement")
     return names, bad
 
 
@@ -141,7 +144,7 @@ def pr_findings(ctx: Context, *, base: str, author: str | None, skip_progress: b
 
     old, _ = _dependencies(ctx.git("show", f"{merge_base}:pyproject.toml"))
     new, bad = _dependencies(ctx.read("pyproject.toml"))
-    found.extend(Finding(c, "pr.dependencies", UNKNOWN, f"can't read dependency {e!r}", "pyproject.toml") for e in bad)
+    found.extend(Finding(c, "pr.dependencies", UNKNOWN, f"can't read dependencies: {e}", "pyproject.toml") for e in bad)
     added = sorted(new - old)
     if added:
         names = ", ".join(added)
