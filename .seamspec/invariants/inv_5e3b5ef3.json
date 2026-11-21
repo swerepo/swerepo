@@ -1,0 +1,35 @@
+{
+  "schema_version": "1",
+  "id": "inv_5e3b5ef3",
+  "title": "Check output shows no absolute paths or personal emails, in the cases tested",
+  "assertion": "In a repository where git's configured email and a commit use a personal address, a CODEOWNERS line after SWERepo's block is just that address, and .swerepo.toml can't be read (the error names its absolute path), `swerepo check` output in text, `--json`, and `--ci` annotations on GitHub Actions, each with the pull-request rules (`--base`), contains neither the address nor the checked folder's absolute path (as given or resolved), its parent's, or the home folder. The test confirms each case's message (unreadable state file, configured email, commit email, CODEOWNERS, missing progress entry) appears in every output.",
+  "scope": {
+    "paths": [
+      "swerepo/check.py",
+      "swerepo/prrules.py",
+      "swerepo/cli.py",
+      "swerepo/state.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261120-fc5a point 7. Suggested by Gemini's Phase 2 review (Q5) after P2-F03 leaked an absolute path; extended for P2-F10 (email-only CODEOWNERS line). Then narrowed to the cases it tests, with the two email warnings checked separately and a --base run added, after SeamSpec's reviewer found \"isn't a noreply\" couldn't tell the two apart and \"never\" overclaimed. Proposed for the owner to approve.",
+    "ref": "ADR-20261120-fc5a"
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_5e3b5ef3.py",
+    "harness_sha256": "5350a9b8be2116f43a8863e5480cc576429890389edbf61cfa3810223c20d10c",
+    "assertion_sha256": "152e88423b67852593cba73b033c260aaec32ae7684ee07b55f3ee820c60d5f3"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-21T06:42:37.731529Z",
+  "approved_at": "2026-11-21T07:59:10.318505Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

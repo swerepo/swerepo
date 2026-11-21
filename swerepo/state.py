@@ -28,6 +28,7 @@ FILE_NAME = ".swerepo.toml"
 SUPPORTED_STANDARD = 1
 COMPONENTS = ("docs", "agents", "ci", "security", "github", "seamspec", "openspec", "release")
 MODES = ("solo", "team")
+DEFAULT_EXEMPT_AUTHORS = ("dependabot[bot]",)
 HEADER = "# Written by SWERepo (SWEREPO-SPEC §9). Commit this file. Settings may be edited; fingerprints may not."
 
 
@@ -99,7 +100,7 @@ class State:
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError) as error:
-            raise StateError(f"{FILE_NAME}: can't read it: {error}") from error
+            raise StateError(f"{FILE_NAME}: can't read it: {_reason(error)}") from error
         return cls.parse(text, source=FILE_NAME, running=running)
 
     def dumps(self) -> str:
@@ -162,6 +163,31 @@ class State:
     def project_ignore(self) -> list[str]:
         projects = self.doc.get("projects")
         return [] if projects is None else [str(p) for p in projects.get("ignore", [])]
+
+    @property
+    def hosts(self) -> list[str]:
+        """Editors chosen for the `agents` component (`[agents] hosts`), or [] if not recorded."""
+        agents = self.doc.get("agents")
+        return [] if agents is None else [str(h) for h in agents.get("hosts", [])]
+
+    @property
+    def adopted(self) -> dict[str, Any]:
+        """Existing conventions SWERepo follows (`[adopted]`): adr_dir, progress_dir, linters."""
+        table = self.doc.get("adopted")
+        return {} if table is None else table.unwrap()
+
+    @property
+    def pr_enforce(self) -> bool:
+        """Whether pull-request rules fail `check --ci` (`[pr] enforce`; enforced when absent)."""
+        pr = self.doc.get("pr")
+        return True if pr is None else bool(pr.get("enforce", True))
+
+    @property
+    def exempt_authors(self) -> list[str]:
+        pr = self.doc.get("pr")
+        if pr is None or "exempt_authors" not in pr:
+            return list(DEFAULT_EXEMPT_AUTHORS)
+        return [str(a) for a in pr["exempt_authors"]]
 
     def files(self) -> dict[str, Record]:
         return _records(self.doc.get("files"))
@@ -246,8 +272,16 @@ def _on_disk_reason(target: Path, running: str) -> str | None:
             raise ValueError("no standard or swerepo version")
         reason = _newer_reason(standard, version, running)
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ValueError, InvalidVersion) as error:
-        return f"the existing file can't be read ({error}), so it isn't replaced. Fix or remove it first."
+        return f"the existing file can't be read ({_reason(error)}), so it isn't replaced. Fix or remove it first."
     return None if reason is None else f"the file on disk: {reason}. Upgrade SWERepo."
+
+
+def _reason(error: Exception) -> str:
+    """An error's text without the file's path: an OSError's message names the absolute path, which
+    would put a home folder into `check` output and CI logs (ADR-20261120-fc5a point 7)."""
+    if isinstance(error, OSError):
+        return error.strerror or type(error).__name__
+    return str(error)
 
 
 def _records(table: Any) -> dict[str, Record]:
@@ -318,6 +352,7 @@ def _validate(doc: TOMLDocument, running: str = __version__) -> None:
             if not isinstance(entry, dict):
                 raise StateError(f"{key}: must be a table with template, rendered and written")
             _check_record(entry.get("template"), entry.get("rendered"), entry.get("written"), key=key)
+    _validate_settings(data)
     projects = data.get("projects", {})
     if not isinstance(projects, dict):
         raise StateError("projects: must be a table")
@@ -326,3 +361,29 @@ def _validate(doc: TOMLDocument, running: str = __version__) -> None:
         raise StateError("projects.ignore: must be a list of folders")
     for folder in ignore:
         check_path(folder, key="projects.ignore")
+
+
+def _text_list(value: Any, *, key: str) -> None:
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise StateError(f"{key}: must be a list of text")
+
+
+def _validate_settings(data: dict[str, Any]) -> None:
+    """`[agents]`, `[adopted]` and `[pr]` (ADR-20261120-5e21)."""
+    for name in ("agents", "adopted", "pr"):
+        if name in data and not isinstance(data[name], dict):
+            raise StateError(f"{name}: must be a table")
+    agents, adopted, pr = data.get("agents", {}), data.get("adopted", {}), data.get("pr", {})
+    if "hosts" in agents:
+        _text_list(agents["hosts"], key="agents.hosts")
+    for key in ("adr_dir", "progress_dir"):
+        if key in adopted:
+            check_path(adopted[key], key=f"adopted.{key}")
+    if "linters" in adopted:
+        _text_list(adopted["linters"], key="adopted.linters")
+    if "enforce" in pr and not isinstance(pr["enforce"], bool):
+        raise StateError("pr.enforce: must be true or false")
+    if "exempt_authors" in pr:
+        _text_list(pr["exempt_authors"], key="pr.exempt_authors")
+    if "skip_progress_label" in pr and not isinstance(pr["skip_progress_label"], str):
+        raise StateError("pr.skip_progress_label: must be text")

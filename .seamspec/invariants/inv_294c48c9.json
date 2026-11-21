@@ -1,0 +1,36 @@
+{
+  "schema_version": "1",
+  "id": "inv_294c48c9",
+  "title": "Check never writes to the folder it checks, not even git's index",
+  "assertion": "Running `swerepo check` leaves every file and folder unchanged (names, sizes, modification times and contents, git's index included): in a git repository whose index is out of date, with all six default components, a file recorded in .swerepo.toml, the pull-request rules (`--base`) and the command line (`--base --ci` on GitHub Actions, with and without `--json`); and in a folder that isn't a git repository. The test confirms each part ran: a finding from each of the six components and the recorded file, the new dependency found by the diff, and both command-line runs finishing with exit code 1, annotations and parsable JSON.",
+  "scope": {
+    "paths": [
+      "swerepo/check.py",
+      "swerepo/prrules.py",
+      "swerepo/cli.py",
+      "swerepo/state.py",
+      "swerepo/detect.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "Phase 2 behaviour (SWEREPO-SPEC §15: check is read-only). Drafting this test found a real bug: `git diff` rewrote .git/index when it was out of date, even with --no-optional-locks; check now runs that diff on a temporary copy of the index. Strengthened after Gemini's review (P2-F08) and again after SeamSpec's reviewer found the command-line runs weren't checked and three components weren't confirmed. Proposed for the owner to approve.",
+    "ref": "ADR-20261120-fc5a"
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_294c48c9.py",
+    "harness_sha256": "1a34b7902f8875618e20f89d96b20a64043182d98e49c1e7b127723af3452571",
+    "assertion_sha256": "aa5d2afb0aac6841f55b6c256e23021551b76311efd56761f3078cfc0704c4ba"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-21T06:08:07.517799Z",
+  "approved_at": "2026-11-21T07:59:02.257788Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

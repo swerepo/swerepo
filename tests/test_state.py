@@ -232,6 +232,40 @@ def test_updating_a_record_keeps_its_comments_and_extra_keys():  # review: Copil
     assert again.blocks()["AGENTS.md"] == Record("agents/block@2", HASH_B, HASH_B)
 
 
+class TestSettings:  # [agents], [adopted], [pr] (ADR-20261120-5e21)
+    BASE = 'standard = 1\nswerepo = "0.1.0"\n'
+
+    def test_defaults_without_the_tables(self):
+        state = State.parse(self.BASE, running="0.1.0")
+        assert state.hosts == [] and state.adopted == {}
+        assert state.pr_enforce is True and state.exempt_authors == ["dependabot[bot]"]
+
+    def test_values_are_read(self):
+        state = State.parse(
+            self.BASE + '[agents]\nhosts = ["claude"]\n[adopted]\nadr_dir = "doc/decisions"\nlinters = ["black"]\n'
+            '[pr]\nenforce = false\nexempt_authors = []\nskip_progress_label = "no-progress"\n',
+            running="0.1.0",
+        )
+        assert state.hosts == ["claude"] and state.adopted["adr_dir"] == "doc/decisions"
+        assert state.pr_enforce is False and state.exempt_authors == []
+
+    @pytest.mark.parametrize(
+        ("body", "message"),
+        [
+            ('[pr]\nenforce = "no"\n', "pr.enforce: must be true or false"),
+            ('[pr]\nexempt_authors = "bot"\n', "pr.exempt_authors: must be a list of text"),
+            ("[pr]\nskip_progress_label = 1\n", "pr.skip_progress_label: must be text"),
+            ('[adopted]\nadr_dir = "../decisions"\n', "adopted.adr_dir"),
+            ("[adopted]\nlinters = [1]\n", "adopted.linters: must be a list of text"),
+            ('[agents]\nhosts = "claude"\n', "agents.hosts: must be a list of text"),
+            ('pr = "x"\n', "pr: must be a table"),
+        ],
+    )
+    def test_invalid_settings(self, body: str, message: str):
+        with pytest.raises(StateError, match=message):
+            State.parse(self.BASE + body, running="0.1.0")
+
+
 def test_invalid_toml_is_an_error():
     with pytest.raises(StateError, match=r"\.swerepo\.toml: not valid TOML"):
         State.parse("standard = \n")

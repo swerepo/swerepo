@@ -4,7 +4,7 @@
 
 `swerepo init` brings a new or existing Python repository up to an agent-first engineering standard: CI with a single required check, branch rules with code review, decision records and a progress log, instructions for AI agents, and locked rules through SeamSpec. `swerepo check` reports what a repository is missing; `swerepo update` brings it up to the latest standard.
 
-> **Status: pre-alpha, under construction.** Only `swerepo --version` works today. The full design is in [SWEREPO-SPEC.md](SWEREPO-SPEC.md); what is built so far is in [docs/PROGRESS.md](docs/PROGRESS.md).
+> **Status: pre-alpha, under construction.** `swerepo check` works today (read-only); `init` and `update` are next. The full design is in [SWEREPO-SPEC.md](SWEREPO-SPEC.md); what is built so far is in [docs/PROGRESS.md](docs/PROGRESS.md).
 
 SWERepo is an independent project. It is not part of, or endorsed by, SWE-agent, SWE-bench or Open SWE.
 

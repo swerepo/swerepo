@@ -1,6 +1,6 @@
 # SWERepo — Specification
 
-**Status:** draft for the owner's review · **Version:** 0.7 (design) · **Date:** 2026-11-20
+**Status:** draft for the owner's review · **Version:** 0.8 (design) · **Date:** 2026-11-20
 **Name:** SWERepo, command `swerepo`, at `github.com/swerepo/swerepo` (renamed from Golden Repo in v0.6, ADR-20261120-1a27)
 **What changed:** Appendix A. **How the BLUEPRINT's ideas were handled:** Appendix B.
 
@@ -257,7 +257,7 @@ Designed so that parallel branches don't collide: each PR adds its own files, an
 
 ```
 swerepo init     [--only C,...] [--no-C ...] [--mode solo|team] [--projects P,...] [--dry-run] [--yes] [--path DIR] [--json]
-swerepo check    [--only C,...] [--base REF] [--skip progress] [--json] [--ci] [--path DIR]
+swerepo check    [--only C,...] [--base REF] [--author LOGIN] [--skip progress] [--json] [--ci] [--path DIR]
 swerepo update   [--only C,...] [--enforce-pr-rules] [--dry-run] [--yes] [--path DIR] [--json]
 swerepo -u       (short for `update`; `swerepo -u --seamspec` = `update --only seamspec`)
 swerepo diff     [FILE ...]          what update would change in files you edited, and any merge conflicts
@@ -360,6 +360,7 @@ openspec = "absent"
 
 [adopted]
 adr_dir = "doc/decisions"         # an existing convention SWERepo follows instead of its own (§10)
+progress_dir = "docs/changes"     # where per-PR progress entries go, if not docs/progress
 linters = ["black", "flake8"]     # kept instead of ruff (§6.3)
 
 [agents]
@@ -541,6 +542,7 @@ SWERepo · check · /Users/me/code/legacy-api (standard 1, mode: team)
   - the ADR index matches the ADR files.
   With `[pr] enforce = false` (existing repositories at first, §10), these findings are warnings: printed, shown as annotations on the PR, but not failing `--ci`.
   Skipped for pull requests by bots listed under `[pr] exempt_authors` (default `dependabot[bot]`, passed in by the workflow) and for diffs that touch only lockfiles.
+- **What this version checks** is listed in `swerepo/standard.py`; checks a later phase adds show as `?` naming that phase, never silently skipped. The header names the folder, not its absolute path, and the commit-email check counts addresses without printing them (ADR-20261120-fc5a). `--base` runs at the repository's top level; its mechanics (merge base vs working tree, PEP 503 dependency names, `--author` for the bot exemption) are in ADR-20261120-5e21. `--json` prints one JSON value and nothing else, also with `--ci`.
 - **No score.** A number invites gaming and hides what matters; the list says what to do next.
 
 ---
@@ -643,6 +645,14 @@ TypeScript (npm/pnpm, vitest/jest, eslint/prettier), matching SeamSpec's presets
 ---
 
 ## Appendix A: Revision history
+
+### 0.7 → 0.8
+
+Decisions from building Phase 2 (`swerepo check`):
+
+1. **The report** (ADR-20261120-fc5a): findings per component, chosen components, `?` for checks a later phase adds, exit codes, plain text and JSON, no absolute paths or email addresses in output (§15).
+2. **Pull-request rules** (ADR-20261120-5e21): the diff is the working tree against the merge base; new dependencies by normalised name; `--author` (new flag, §7) for the bot exemption; `[adopted] progress_dir` (§9).
+3. **From Phase 2's review:** `--base` runs at the repository's top level; `--json` with `--ci` prints JSON only; workflows SWERepo *added* are exempt like those it modified (as §6.5 already said).
 
 ### 0.6 → 0.7
 
