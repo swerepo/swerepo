@@ -1,6 +1,6 @@
 # SWERepo — Specification
 
-**Status:** draft for the owner's review · **Version:** 0.6 (design) · **Date:** 2026-11-20
+**Status:** draft for the owner's review · **Version:** 0.7 (design) · **Date:** 2026-11-20
 **Name:** SWERepo, command `swerepo`, at `github.com/swerepo/swerepo` (renamed from Golden Repo in v0.6, ADR-20261120-1a27)
 **What changed:** Appendix A. **How the BLUEPRINT's ideas were handled:** Appendix B.
 
@@ -314,7 +314,7 @@ Each component has the same four parts: what it **writes**, what it **runs**, wh
 | `openspec` | — (OpenSpec writes its own files) | OpenSpec's init command | before installing it, if missing | OpenSpec set up |
 | `release` | `release.yml` | — | the PyPI project name; asks whether this is a package at all | workflow present; protected environment exists (if readable) |
 
-**Generated files** are rendered from templates bundled in the package, with a few values filled in (project name, Python versions, default branch, code owner, mode). Every released template version stays in the package, so an earlier render can always be rebuilt for a three-way merge (§16).
+**Generated files** are rendered from templates bundled in the package, with a few values filled in (project name, Python versions, default branch, code owner, mode). Every released template version stays in the package, so an earlier render can always be rebuilt for a three-way merge (§16). Templates are plain files at `swerepo/templates/<component>/<name>/<version>[.<ext>]` with `@@name@@` placeholders and no logic; a missing value is an error, and a released version never changes (ADR-20261120-b25a).
 
 ---
 
@@ -379,12 +379,14 @@ applied = true                    # false until the ruleset and settings are app
 extra_required_checks = []        # monorepo: other workflows' checks required beside ci-ok (§11)
 
 [projects]                        # monorepos only (§11)
+ignore = []                       # folders that are not projects, besides tests/, docs/, tools/ … (§11)
 listed = []                       # Python projects with their own SWERepo jobs
 not_covered = []                  # project roots knowingly outside every required check
 ```
 
-- **Hashes are of normalised content:** LF line endings, trailing whitespace removed from each line, exactly one final newline. Line-ending conversion and end-of-file fixers don't make a file look edited. A formatter that changes more than that (reflowing Markdown, reformatting YAML) does, and `check` reports it as `~`; the generated files are written to pass ruff and common formatters unchanged.
+- **Hashes are of normalised content** (SHA-256, 64 hex characters, ADR-20261120-9495): UTF-8, no byte-order mark, LF line endings, trailing whitespace removed from each line, exactly one final newline. Line-ending conversion and end-of-file fixers don't make a file look edited. A formatter that changes more than that (reflowing Markdown, reformatting YAML) does, and `check` reports it as `~`; the generated files are written to pass ruff and common formatters unchanged.
 - **Edited or not:** a file whose current hash equals `written` was not edited since SWERepo last wrote it. Otherwise a person changed it, and `update` merges (§16).
+- **Read and written with tomlkit**, so comments and unknown keys survive; validated on load; an older SWERepo never overwrites a file a newer one wrote (ADR-20261120-ecf7).
 - **No secrets, no personal data** ever go in this file. `[values]` holds only what is already in the repository's own files.
 - Deleting `.swerepo.toml` makes the next run treat every existing file as the person's own (safe default).
 
@@ -430,7 +432,7 @@ Established repositories are a first-class case, not an afterthought.
 
 A **monorepo** holds several projects in one repository, for example `services/orders/`, `services/payments/` and `web/`, each with its own dependencies and tests.
 
-- **Detection:** more than one project root (several `pyproject.toml` files, or `package.json` beside Python projects) below the repository root.
+- **Detection:** more than one project root below the repository root: folders with a project manifest, Python's (`pyproject.toml`, `setup.py`, `Pipfile`, or `setup.cfg` / `requirements*.txt` with Python source in the folder) or another language's (`package.json`, `go.mod`, `Cargo.toml`, `pom.xml`, `build.gradle`, `Gemfile`). Folders under `tests/`, `test/`, `testing/`, `fixtures/`, `examples/`, `example/`, `docs/`, `doc/`, `tools/`, `scripts/`, `vendor/` and `third_party/` are not projects, nor are folders listed in `[projects] ignore`; files are listed through git, so ignored folders never count (ADR-20261120-25b5).
 - **v0.1:**
   - reports the layout;
   - sets up the repository-level parts (docs, agents, security, GitHub, the CI aggregator) once, at the root. One ADR folder and one progress folder serve every project; one progress file per PR keeps many teams from colliding;
@@ -595,7 +597,7 @@ The rules make breaking the process **visible**; they make it **impossible** onl
 4. **Type checker.** None by default, mypy, pyright or ty. Proposal: none in standard 1, offered as an option.
 5. **Secret scanning.** GitHub's own secret scanning plus the privacy check only, or also a local scanner (for example gitleaks) as an option. Proposal: GitHub's plus the privacy check; a local scanner with the pre-commit option later (it's a separate binary).
 6. **OpenSpec details** (§14), confirmed from its public docs before building that component.
-7. **Copilot review in rulesets.** Confirm from GitHub's REST documentation the exact rule for automatic Copilot review and its parameters, and whether the API says if an account can use it; otherwise ask the person.
+7. **Copilot review in rulesets.** *Decided:* rule `copilot_code_review` (parameters `review_on_push`, `review_draft_pull_requests`); it requests a review when the pull request author has Copilot code review access, so the account check is GitHub's. This repository uses it on every pull request with resolved threads required (ADR-20261120-2e50).
 8. **Should SWERepo create the branch and PR for each step** (`--pr`, through `gh`), or leave git to the person? Proposal: leave it to the person in v0.1; consider `--pr` later.
 9. **Agent instructions length.** The target is under 40 lines; measure with real sessions how much is followed. In the same sessions, check whether Claude Code reading both SeamSpec blocks through `@AGENTS.md` (mixed-editor projects, §6.6) causes confusion; if it does, switch to rendering SWERepo's block into both files.
 10. **Changelog fragments.** `CHANGELOG.md [Unreleased]` is edited by many PRs and conflicts like the old progress log did. Proposal: keep Keep a Changelog in standard 1; offer fragments (`changelog.d/`, compiled at release) as an option once the release component needs it.
@@ -641,6 +643,15 @@ TypeScript (npm/pnpm, vitest/jest, eslint/prettier), matching SeamSpec's presets
 ---
 
 ## Appendix A: Revision history
+
+### 0.6 → 0.7
+
+Decisions from building Phase 1:
+
+1. **Fingerprints:** SHA-256 of normalised UTF-8 text; marked blocks found by comment-style markers (ADR-20261120-9495, §9).
+2. **Templates:** plain files with `@@name@@` placeholders, versioned by file name (ADR-20261120-b25a, §8).
+3. **`.swerepo.toml`:** tomlkit, validated, never overwritten by an older SWERepo (ADR-20261120-ecf7, §9).
+4. **Detection:** read-only, git-listed files, conventional non-project folders and `[projects] ignore`, Python versions read with `packaging` (ADR-20261120-25b5, §9, §11).
 
 ### 0.5 → 0.6
 

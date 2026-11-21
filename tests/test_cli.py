@@ -37,7 +37,9 @@ def test_help_describes_the_tool():
 
 def test_help_reads_the_same_when_ci_forces_terminal_styling():
     # Found on the first CI run (PR #1): on GitHub Actions the help is styled, which split "--version".
-    env = {**os.environ, "GITHUB_ACTIONS": "true"}
+    # A known terminal, without NO_COLOR, so the styling is really on wherever the tests run (P1-F04).
+    inherited = {key: value for key, value in os.environ.items() if key not in ("NO_COLOR", "TERM")}
+    env = inherited | {"GITHUB_ACTIONS": "true", "TERM": "xterm-256color"}
     completed = subprocess.run(
         [sys.executable, "-m", "swerepo", "--help"], capture_output=True, text=True, env=env, check=False
     )

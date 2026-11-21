@@ -10,3 +10,4 @@ All notable changes to this project are documented here. The format is based on 
 - CI workflow with lint, tests on Python 3.11 to 3.14, macOS on `main`, workflow audit, SeamSpec, and a single required check `ci-ok`.
 - ADRs for the build process, SeamSpec, packaging and CI; agent rules, contributing guide and progress log.
 - Apache-2.0 license.
+- Foundations for `check`, `init` and `update` (no new commands yet): fingerprints of generated files and marked blocks, the template store and renderer, the `.swerepo.toml` state file, and read-only project detection.

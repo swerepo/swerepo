@@ -1,0 +1,32 @@
+{
+  "schema_version": "1",
+  "id": "inv_7c5f3156",
+  "title": "A fingerprint ignores only line endings, trailing whitespace, trailing blank lines and a BOM",
+  "assertion": "A file's fingerprint stays the same when only its line endings (CRLF or CR), trailing whitespace on any line, trailing blank lines, a missing final newline or a leading byte-order mark differ, for text and bytes alike, and changes for any other edit, including indentation, tabs for spaces, and blank or deleted lines inside the text.",
+  "scope": {
+    "paths": [
+      "swerepo/fingerprint.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "Phase 1 behaviour, reviewed by Gemini in 3 rounds and strengthened after SeamSpec's reviewer explained two drafts (ADR-20261120-9495); proposed for the owner to approve.",
+    "ref": "ADR-20261120-9495"
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_7c5f3156.py",
+    "harness_sha256": "321ec62a5cbfe7d93e0ede23bff38ce7cff84909fc393b5064041ffaf0ff840d",
+    "assertion_sha256": "56a08fbcd4f535fe066819c33fff4edca20ff4576a6789f6532146f63330ae0b"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-20T09:12:48.547121Z",
+  "approved_at": "2026-11-20T10:07:34.471893Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

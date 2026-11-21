@@ -1,0 +1,32 @@
+{
+  "schema_version": "1",
+  "id": "inv_070db19c",
+  "title": "A .swerepo.toml from a newer SWERepo or standard loads, but an older SWERepo never overwrites it",
+  "assertion": "A .swerepo.toml written by a newer SWERepo version, or in a newer standard, loads even when it names components this version doesn't know, but this older SWERepo refuses to save over it and leaves the file unchanged.",
+  "scope": {
+    "paths": [
+      "swerepo/state.py"
+    ],
+    "tags": []
+  },
+  "status": "SUPERSEDED",
+  "origin": {
+    "type": "manual",
+    "text": "Phase 1 behaviour, reviewed by Gemini in 3 rounds and strengthened after SeamSpec's reviewer explained the first drafts (ADR-20261120-ecf7); proposed for the owner to approve.",
+    "ref": "ADR-20261120-ecf7"
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/retired/inv_070db19c/test_inv_070db19c.py",
+    "harness_sha256": "79bbedea4cdd91adacfb8df8d05c039cf6f9b39ad6e142d60cb0014e88e9de43",
+    "assertion_sha256": "dc45baafd524fa23ec50069b2454b3dbb9377abd4efef864c25e8468bbd14318"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-20T09:57:53.089920Z",
+  "approved_at": "2026-11-20T10:08:19.759333Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": "inv_71e4b33d",
+  "status_reason": "GitHub Copilot's review of PR #2 showed the rule's promise (an older SWERepo never overwrites a newer file) was broken for a new or stale state saved over a newer file on disk, a path the test didn't exercise. Code fixed in b827f00; the replacement's test covers loaded, new and stale states.",
+  "decided_via": "terminal",
+  "critical": true
+}
