@@ -12,6 +12,7 @@
 - `.swerepo.toml` errors don't repeat rejected paths; dependency findings name an invalid entry by position, and dependencies that aren't a list are `?`.
 - ADR-20261120-fc5a items 2, 3, 6, 7 and ADR-20261120-5e21 item 3 amended; CHANGELOG "Fixed".
 - 15 regression tests, each shown to fail with its fix undone.
+- Copilot's review of PR #4 (3 findings, all reproduced): the run-step reader follows `steps:` lists and the step's own key column, and recognises `seamspec verify` only as a command (shlex, with `uv run`/`uvx`/`python -m`), not as an argument or an `env` value. 10 more cases.
 
 ## Next
 

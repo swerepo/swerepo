@@ -447,6 +447,17 @@ class TestCopilotReviewOfPR3:
             ("      - run: uvx seamspec==0.1.1 verify --all\n", OK),
             ("      - name: rules\n        run: |\n          uv sync\n          uv run seamspec verify --all\n", OK),
             ('      - run: "seamspec verify"\n', OK),
+            # Copilot's review of PR #4: arguments, `env` keys named `run`, and keys after a block don't count
+            ("      - run: echo seamspec verify\n", MISSING),
+            ("      - run: pytest\n        env:\n          run: seamspec verify\n", MISSING),
+            ("      - run: |\n          pytest\n        env:\n          NOTE: seamspec verify\n", MISSING),
+            ("      - uses: x/y@v1\n        with:\n          steps:\n            - run: seamspec verify\n", MISSING),
+            ("      - run: uv run --frozen seamspec verify --all\n", OK),
+            ("      - run: FOO=1 uv run seamspec verify\n", OK),
+            ("      - run: cd app && uvx --from seamspec==0.1.1 seamspec verify\n", OK),
+            ("      - run: python -m seamspec verify\n", OK),
+            ("      - run: >\n          uv run\n          seamspec verify\n", OK),
+            ("      - run: pytest\n  b:\n    steps:\n    - name: rules\n      run: uv run seamspec verify --all\n", OK),
         ],
     )
     def test_only_a_run_step_counts_as_running_the_locked_rules(self, repo: Path, steps: str, status: str):

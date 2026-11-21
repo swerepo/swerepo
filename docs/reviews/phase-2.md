@@ -369,3 +369,13 @@ Two `test_state.py` expectations that the rejected value is echoed (`projects.ig
 
 **Process gap:** the ruleset's `copilot_code_review` rule requests the review but doesn't make merging wait for it, so a PR can be merged before Copilot comments (ADR-20261120-2e50).
 
+### GitHub Copilot's review on PR #4
+
+Copilot's review of the follow-up PR found three more false `✓`s in the run-step reader written for finding 4 above, all reproduced:
+
+1. **`run: echo seamspec verify` counted.** Each shell command is now split (`;`, `&&`, `||`, `|`, `&`, newlines) and read with `shlex` (shell comments removed); `seamspec verify` counts only as the command itself, after `VAR=value` assignments and the `uv run`, `uvx`, `uv tool run` and `python -m` wrappers (their options skipped).
+2. **An `env` variable named `run` counted.** Only the `run` key of an item of a job's `steps:` list counts, at that step's own key column; a `steps:` inside a step's `with:` doesn't start a list.
+3. **`- run: |` measured indentation before the dash**, so a sibling `env:` after the block was read as part of the script. The block now ends at the step's key column.
+
+Ten parametrised cases added (the three above, a nested `steps:` argument, five wrapper forms, a folded `>` block, a second job with an unindented list). Breaking each part of the fix makes a case fail. This repository's `ci.yml` still reads as `✓ CI runs the locked rules`.
+
