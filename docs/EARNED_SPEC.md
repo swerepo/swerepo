@@ -2,11 +2,11 @@
 
 # Spec: what this code guarantees
 
-6 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
+8 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
 
 ## Rules in force
 
-### `swerepo` (4 rules)
+### `swerepo` (6 rules)
 
 #### A fingerprint ignores only line endings, trailing whitespace, trailing blank lines and a BOM
 
@@ -49,6 +49,26 @@ Saving .swerepo.toml, including after SWERepo changed values and updated or adde
 - **Replaces:** Saving .swerepo.toml, also after changes, keeps people's comments and every key SWERepo doesn't know (`inv_d8603926`)
 - **Id:** `inv_afb6dfea`
 
+#### Check never writes to the folder it checks, not even git's index
+
+Running `swerepo check` leaves every file and folder unchanged (names, sizes, modification times and contents, git's index included): in a git repository whose index is out of date, with all six default components, a file recorded in .swerepo.toml, the pull-request rules (`--base`) and the command line (`--base --ci` on GitHub Actions, with and without `--json`); and in a folder that isn't a git repository. The test confirms each part ran: a finding from each of the six components and the recorded file, the new dependency found by the diff, and both command-line runs finishing with exit code 1, annotations and parsable JSON.
+
+- **Applies to:** `swerepo/check.py`, `swerepo/prrules.py`, `swerepo/cli.py`, `swerepo/state.py`, `swerepo/detect.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-21, in the terminal
+- **Test:** `.seamspec/tests/test_inv_294c48c9.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_294c48c9`
+
+#### Check output shows no absolute paths or personal emails, in the cases tested
+
+In a repository where git's configured email and a commit use a personal address, a CODEOWNERS line after SWERepo's block is just that address, and .swerepo.toml can't be read (the error names its absolute path), `swerepo check` output in text, `--json`, and `--ci` annotations on GitHub Actions, each with the pull-request rules (`--base`), contains neither the address nor the checked folder's absolute path (as given or resolved), its parent's, or the home folder. The test confirms each case's message (unreadable state file, configured email, commit email, CODEOWNERS, missing progress entry) appears in every output.
+
+- **Applies to:** `swerepo/check.py`, `swerepo/prrules.py`, `swerepo/cli.py`, `swerepo/state.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-21, in the terminal
+- **Test:** `.seamspec/tests/test_inv_5e3b5ef3.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_5e3b5ef3`
+
 ### `(repository root)` (2 rules)
 
 #### No personal email addresses or home-folder paths in tracked files
@@ -80,3 +100,13 @@ These were approved once and are no longer checked.
 - **A .swerepo.toml from a newer SWERepo or standard loads, but an older SWERepo never overwrites it** (`inv_070db19c`): A .swerepo.toml written by a newer SWERepo version, or in a newer standard, loads even when it names components this version doesn't know, but this older SWERepo refuses to save over it and leaves the file unchanged.
   - Retired because: GitHub Copilot's review of PR #2 showed the rule's promise (an older SWERepo never overwrites a newer file) was broken for a new or stale state saved over a newer file on disk, a path the test didn't exercise. Code fixed in b827f00; the replacement's test covers loaded, new and stale states.
   - Replaced by An older SWERepo never replaces a .swerepo.toml from a newer SWERepo or standard, loaded, new or stale (`inv_71e4b33d`).
+
+## Tried and failed
+
+Approaches that were tried and did not work. They carry no test; they are here so nobody repeats them without knowing why they failed.
+
+### `swerepo`
+
+- **Tried:** Keep `git diff <ref>` (working tree against a commit) from writing .git/index by adding `git --no-optional-locks`.
+  - **Why it failed:** With an out-of-date index (a file touched but unchanged), `git --no-optional-locks diff --name-status <ref>` still rewrote .git/index (mtime changed; git 2.50). The switch does not cover `git diff`. Fix used: run that diff with GIT_INDEX_FILE pointing at a temporary copy of the index. Plain `git diff-index` without refreshing doesn't write but reports touched-but-unchanged files as modified.
+  - Applies to `swerepo/check.py`, `swerepo/prrules.py`, `swerepo/detect.py` · recorded 2026-11-21 · `de_a22b43fe`

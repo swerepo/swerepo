@@ -43,4 +43,7 @@ Kept by hand until `swerepo adr index` exists (Phase 3); then it is generated be
 | [ADR-20261120-ecf7](ADR-20261120-ecf7-state-file-format.md) | .swerepo.toml is read and written with tomlkit, validated on load, and never overwritten by an older SWERepo | ACCEPTED |
 | [ADR-20261120-25b5](ADR-20261120-25b5-project-detection.md) | Detection is read-only, lists files through git, skips conventional non-project folders, and reads Python versions with packaging | ACCEPTED |
 | [ADR-20261120-2e50](ADR-20261120-2e50-copilot-review-on-every-pr.md) | Every pull request gets a Copilot code review, and its threads must be resolved before merging | ACCEPTED |
+| [ADR-20261120-fc5a](ADR-20261120-fc5a-check-report.md) | How swerepo check reports: findings per component, honest "?" for what this version can't check, exit codes, and no personal data in output | ACCEPTED |
+| [ADR-20261120-5e21](ADR-20261120-5e21-pull-request-rules.md) | How check --base computes the pull-request rules, and who it skips | ACCEPTED |
+| [ADR-20261121-8259](ADR-20261121-8259-seamspec-for-antigravity.md) | SeamSpec is also set up for Antigravity, where the Gemini reviewer works | ACCEPTED |
 <!-- swerepo:adr-index:end -->
