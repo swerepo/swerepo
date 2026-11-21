@@ -140,9 +140,9 @@ class TestLoadAndSave:
         (('[files."docs/adr/TEMPLATE.md"]', '[files."docs//adr/TEMPLATE.md"]'), "must not have empty"),
         (('[files."docs/adr/TEMPLATE.md"]', '[files."docs/./adr.md"]'), "must not have empty, '.' or '..'"),
         (('[files."docs/adr/TEMPLATE.md"]', '[files."docs/a\\u0000b.md"]'), "is not a repository path"),
-        (('ignore = ["tools", "examples/legacy"]', 'ignore = ["."]'), "projects.ignore: '.'"),
+        (('ignore = ["tools", "examples/legacy"]', 'ignore = ["."]'), "projects.ignore: a path must not have empty"),
         (('template = "docs/adr-template@1"', 'template = "docs/adr-template@1\\n"'), "is not a template id"),
-        (('ignore = ["tools", "examples/legacy"]', 'ignore = ["tools/"]'), "projects.ignore: 'tools/'"),
+        (('ignore = ["tools", "examples/legacy"]', 'ignore = ["tools/"]'), "projects.ignore: a path .* end with '/'"),
         (('python = ["3.11", "3.12"]', "python = 3.11"), "values.python: must be text or a list of text"),
     ],
 )

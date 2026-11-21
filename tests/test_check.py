@@ -401,3 +401,69 @@ class TestCommandLine:
         assert report.annotations() == [
             "::error file=a%2Cb%3Ac.toml,title=swerepo check::state: bad: 100%25%0Aline two%0D"
         ]
+
+
+class TestCopilotReviewOfPR3:
+    """Findings from Copilot's review of PR #3, each reproduced before the fix (docs/reviews/phase-2.md)."""
+
+    def test_a_newline_in_a_value_cant_start_a_workflow_command(self, repo: Path, monkeypatch):
+        (repo / FILE_NAME).write_text('standard = 1\nswerepo = "99.0.0"\nmode = "x\\n::error::injected"\n')
+        assert not [line for line in run_check(repo).render_text().splitlines() if line.startswith("::")]
+        monkeypatch.setenv("GITHUB_ACTIONS", "true")
+        runner = CliRunner()
+        out = runner.invoke(app, ["check", "--path", str(repo), "--ci"]).output
+        assert "mode: x\\n::error::injected" in out and "\n::error::injected" not in out
+        usage = runner.invoke(app, ["check", "--path", str(repo), "--only", "docs,x\n::error::y"])
+        assert usage.exit_code == 2 and "\n::error::y" not in usage.output
+
+    def test_an_explicit_empty_hosts_list_chooses_no_editor(self, repo: Path):
+        (repo / "CLAUDE.md").unlink()  # .claude/ is still there
+        (repo / FILE_NAME).write_text(
+            'standard = 1\nswerepo = "0.0.1"\ncomponents = ["agents"]\n[agents]\nhosts = []\n'
+        )
+        assert "agents.claude" not in by_item(run_check(repo))
+
+    def test_an_explicit_empty_component_list_chooses_nothing(self, repo: Path):
+        (repo / FILE_NAME).write_text('standard = 1\nswerepo = "0.0.1"\ncomponents = []\n')
+        report = run_check(repo)
+        assert report.components == [] and report.exit_code == 0
+        assert by_item(report)["docs.chosen"].status == NOT_CHOSEN
+
+    def test_a_tool_value_that_isnt_a_table(self, repo: Path):
+        make(repo, {
+            "pyproject.toml": 'tool = "oops"\n',
+            ".pre-commit-config.yaml": "repos:\n- repo: x\n  hooks:\n  - id: ruff\n",
+        })  # fmt: skip
+        assert by_item(run_check(repo, only=["ci"]))["ci.seamspec-excluded"].status == UNKNOWN
+
+    @pytest.mark.parametrize(
+        ("steps", "status"),
+        [
+            ("      - name: seamspec verify\n        run: pytest\n", MISSING),  # a step's name isn't a command
+            ("      - run: pytest\n        env:\n          NOTE: seamspec verify\n", MISSING),
+            ("      - run: |\n          pytest\n          # seamspec verify --all\n", MISSING),
+            ("      - run: echo hi # seamspec verify\n", MISSING),
+            ("      - run: uv run seamspec verify --all --ci\n", OK),
+            ("      - run: uvx seamspec==0.1.1 verify --all\n", OK),
+            ("      - name: rules\n        run: |\n          uv sync\n          uv run seamspec verify --all\n", OK),
+            ('      - run: "seamspec verify"\n', OK),
+        ],
+    )
+    def test_only_a_run_step_counts_as_running_the_locked_rules(self, repo: Path, steps: str, status: str):
+        make(repo, {".github/workflows/swerepo-ci.yml": f"jobs:\n  t:\n    steps:\n{steps}  ci-ok:\n    needs: [t]\n"})
+        assert by_item(run_check(repo, only=["seamspec"]))["seamspec.ci"].status == status
+
+    def test_a_rejected_path_in_the_state_file_isnt_repeated(self, repo: Path):
+        home = "/home/" + "alice/decisions"
+        (repo / FILE_NAME).write_text(f'standard = 1\nswerepo = "0.0.1"\n[adopted]\nadr_dir = "{home}"\n')
+        report = run_check(repo)
+        assert (
+            by_item(report)["state.read"].message
+            == ".swerepo.toml: adopted.adr_dir: a path must be relative and use '/'"
+        )
+        assert home not in report.render_text() and home not in json.dumps(report.to_dict())
+        (repo / FILE_NAME).write_text(
+            f'standard = 1\nswerepo = "0.0.1"\n[files."{home}"]\ntemplate = "docs/x@1"\nrendered = "x"\nwritten = "x"\n'
+        )
+        message = by_item(run_check(repo))["state.read"].message
+        assert message.startswith(".swerepo.toml: files: a path must be relative") and home not in message

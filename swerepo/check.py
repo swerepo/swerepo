@@ -100,7 +100,7 @@ class Report:
                 warning = " (warning)" if finding.status == MISSING and not finding.blocking else ""
                 lines.append(f"  {label:<9} {SYMBOL[finding.status]} {finding.message}{warning}")
         lines.append(self.summary())
-        return "\n".join(lines)
+        return "\n".join(one_line(line) for line in lines)
 
     def annotations(self) -> list[str]:
         """GitHub Actions annotation lines for missing items: errors when blocking, else warnings.
@@ -113,6 +113,12 @@ class Report:
             kind = "error" if f.blocking else "warning"
             out.append(f"::{kind} {','.join(params)}::{_escape(f'{f.component}: {f.message}')}")
         return out
+
+
+def one_line(text: str) -> str:
+    """Text with CR and LF shown as `\\r` and `\\n`, so a value from a file (a mode, a folder or file
+    name) can't start a new output line, which GitHub Actions would read as a workflow command."""
+    return text.replace("\r", "\\r").replace("\n", "\\n")
 
 
 def _escape(value: str, *, prop: bool = False) -> str:
@@ -281,7 +287,7 @@ def _block_finding(component: str, item: str, path: str, text: str) -> Finding:
 def _agents(ctx: Context) -> list[Finding]:
     c = "agents"
     found: list[Finding] = []
-    hosts = ctx.state.hosts if ctx.state and ctx.state.hosts else list(ctx.detection.hosts)
+    hosts = ctx.state.hosts if ctx.state and ctx.state.hosts_chosen else list(ctx.detection.hosts)
     text = ctx.read("AGENTS.md")
     if text is None:
         found.append(_missing(c, "agents.block", "AGENTS.md missing", "AGENTS.md"))
@@ -373,7 +379,8 @@ def _seamspec_excluded(ctx: Context, linters: set[str]) -> Finding:
             data = tomllib.loads(text)
         except tomllib.TOMLDecodeError:
             continue
-        config = data if source != "pyproject.toml" else data.get("tool", {}).get("ruff")
+        tool = data.get("tool", {})
+        config = data if source != "pyproject.toml" else (tool.get("ruff") if isinstance(tool, dict) else None)
         if not isinstance(config, dict):
             continue
         excluded = [entry for key in ("exclude", "extend-exclude") for entry in _strings(config.get(key))]
@@ -481,12 +488,43 @@ def _seamspec(ctx: Context) -> list[Finding]:
         message = f"mode: {mode or 'unknown'} (locked rules don't block)"
         found.append(_missing(c, "seamspec.mode", message, ".seamspec/config.toml"))
     found.append(_present(ctx, c, "seamspec.earned-spec", standard.EARNED_SPEC))
-    runners = [w.path for w in ctx.detection.workflows if "seamspec verify" in _without_comments(ctx.read(w.path))]
+    runners = [
+        w.path for w in ctx.detection.workflows if any(_SEAMSPEC_VERIFY.search(r) for r in _runs(ctx.read(w.path)))
+    ]
     if runners:
         found.append(_ok(c, "seamspec.ci", f"CI runs the locked rules ({', '.join(Path(p).name for p in runners)})"))
     else:
         found.append(_missing(c, "seamspec.ci", "no workflow runs `seamspec verify`"))
     return found
+
+
+_SEAMSPEC_VERIFY = re.compile(r"(?:^|[\s;&|(])seamspec(?:==\S+)?\s+verify\b")
+_RUN_KEY = re.compile(r"^(?P<indent>\s*)(?:-\s+)?run:\s*(?P<value>.*)$")
+
+
+def _runs(text: str | None) -> list[str]:
+    """The shell commands of a workflow's `run:` steps, one-line or block (`|`, `>`), with YAML and shell
+    comments removed. Step names, `env` values and comments aren't commands, so they never count."""
+    lines, runs, index = (text or "").splitlines(), [], 0
+    while index < len(lines):
+        match = _RUN_KEY.match(lines[index])
+        index += 1
+        if not match:
+            continue
+        value = _without_comments(match.group("value")).strip()
+        if not value.startswith(("|", ">")):
+            runs.append(value.strip("'\""))
+            continue
+        block, key_indent = [], len(match.group("indent"))
+        while index < len(lines) and (not lines[index].strip() or _indent(lines[index]) > key_indent):
+            block.append(lines[index])
+            index += 1
+        runs.append(_without_comments("\n".join(block)))
+    return runs
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
 
 
 def _without_comments(text: str | None) -> str:
@@ -575,7 +613,7 @@ def _without_repeats(findings: list[Finding], records: list[Finding]) -> list[Fi
 
 
 def chosen_components(state: State | None, detection: Detection) -> list[str]:
-    if state is not None and state.components:
+    if state is not None and state.components_chosen:  # an empty list chooses nothing (ADR-fc5a point 2)
         chosen = set(state.components)
     else:
         chosen = set(standard.DEFAULT_COMPONENTS)

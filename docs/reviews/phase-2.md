@@ -352,3 +352,20 @@ SeamSpec's reviewer (a separate agent that didn't write the tests) asked for cha
 
 **Review closed 2026-11-21:** all 11 findings resolved (P2-F01 to P2-F11), Gemini's readiness summary in round 3: ready to merge. Next: commit and pull request with the owner's go-ahead, then Copilot's review on the PR.
 
+### After merge: GitHub Copilot's review on PR #3
+
+PR #3 was merged at 08:10 UTC; Copilot's review, requested by the ruleset at 08:06, arrived at 08:12 with eight threads (1 high, 7 medium). All eight were reproduced on `main` and fixed on `phase-2/copilot-fixes`, each with a regression test that fails with its fix undone:
+
+1. **High: workflow-command injection through the text report.** A newer state file's `mode` holding a newline printed a line starting `::error::` on Actions. Every text line now shows CR and LF as `\r` and `\n` (`check.one_line`), wrong-usage messages too.
+2. **`[agents] hosts = []` fell back to detection.** Now an explicit empty list chooses no editor (`State.hosts_chosen`).
+3. **`tool = "oops"` crashed `check --only ci`.** Guarded.
+4. **A step named `seamspec verify` counted as running the locked rules.** Only `run:` commands count now, one-line or block, without comments; `uvx seamspec==X verify` counts. Partly different from the suggestion: when no step runs it, the finding stays `✗`, not `?`. A script a step calls isn't read, and `✗` names what to add (ADR-20261120-fc5a item 3).
+5. **`components = []` checked all six components.** Now it chooses nothing (`State.components_chosen`); only a missing key falls back to the default set.
+6. **A rejected absolute `[adopted] adr_dir` was repeated in the output.** `check_path` errors no longer repeat the value, and record-table errors name the table, not the rejected key.
+7. **`dependencies = "requests>=2"` read as no dependencies.** Now `? can't read dependencies: [project].dependencies isn't a list`.
+8. **An invalid dependency was printed verbatim** (a local wheel path, a URL with an address). Now named by position.
+
+Two `test_state.py` expectations that the rejected value is echoed (`projects.ignore: '.'`) now expect the key and the reason without it: that echo is finding 6.
+
+**Process gap:** the ruleset's `copilot_code_review` rule requests the review but doesn't make merging wait for it, so a PR can be merged before Copilot comments (ADR-20261120-2e50).
+

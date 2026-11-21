@@ -1,5 +1,6 @@
 """`swerepo check --base` pull-request rules on real git histories (spec §6.5, §15; ADR-20261120-5e21)."""
 
+import json
 import os
 from pathlib import Path
 
@@ -227,3 +228,20 @@ def test_untracking_a_binary_file_compares_bytes(repo: Path, same: bool):
     make(repo, {"docs/progress/20260102-x.md": "x\n"})
     findings = pr(repo)  # bytes that aren't UTF-8 don't crash
     assert ("pr.workflows" in findings) is not same  # untracked but unchanged is no change; changed is "M"
+
+
+class TestCopilotReviewOfPR3:
+    """Findings from Copilot's review of PR #3 on dependencies (docs/reviews/phase-2.md)."""
+
+    def test_dependencies_that_arent_a_list_are_unknown(self, repo: Path):
+        make(repo, {"pyproject.toml": '[project]\nname = "demo"\ndependencies = "requests>=2"\n'})
+        finding = pr(repo)["pr.dependencies"]
+        assert finding.status == UNKNOWN and "[project].dependencies isn't a list" in finding.message
+
+    def test_an_invalid_entry_is_named_by_position_not_value(self, repo: Path):
+        wheel = "/home/" + "alice/wheels/x.whl"
+        make(repo, {"pyproject.toml": f'[project]\nname = "demo"\ndependencies = ["typer", "{wheel}"]\n'})
+        report = run_check(repo, only=["docs"], base="main")
+        finding = {f.item: f for f in report.findings if f.component == "pr"}["pr.dependencies"]
+        assert finding.status == UNKNOWN and "entry 2 of [project].dependencies" in finding.message
+        assert wheel not in report.render_text() and wheel not in json.dumps(report.to_dict())

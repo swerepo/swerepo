@@ -4,7 +4,7 @@ What is being built now and next. The log of what each change did is in [progres
 
 ## Now
 
-**Phase 2: `swerepo check`.** The first real command: a read-only report per component of what the repository meets, misses, has changed or can't tell yet, with `--json`, `--ci`, `--only` and the pull-request rules (`--base`). Review closed after 3 rounds (docs/reviews/phase-2.md); 8 locked rules; pull request next.
+**Phase 2: `swerepo check`.** The first real command: a read-only report per component of what the repository meets, misses, has changed or can't tell yet, with `--json`, `--ci`, `--only` and the pull-request rules (`--base`). Review closed after 3 rounds (docs/reviews/phase-2.md); 8 locked rules; merged in PR #3. Copilot's review of PR #3 arrived after the merge; its 8 findings are fixed in a follow-up PR.
 
 ## Next
 
