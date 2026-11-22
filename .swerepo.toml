@@ -1,0 +1,42 @@
+# Written by SWERepo (SWEREPO-SPEC §9). Commit this file. Settings may be edited; fingerprints may not.
+standard = 1
+swerepo = "0.1.0.dev0"
+components = ["docs", "agents"]
+
+[values]
+project = "swerepo"
+adr_dir = "docs/adr"
+progress_dir = "docs/progress"
+commands = "- Install: `uv sync`\n- Test: `uv run pytest`\n- Lint: `uv run ruff check .` and `uv run ruff format --check .`\n- Check the standard: `swerepo check`"
+test_inline = "`uv run pytest`, `uv run ruff check .` and `uv run ruff format --check .`"
+
+[agents]
+hosts = ["claude", "antigravity"]
+
+[pr]
+enforce = true  # this repository has followed the PR rules from its first PR (ADR-20261121-d0f5)
+
+[blocks."AGENTS.md"]
+template = "agents/block@1"
+rendered = "79e7e026cd589a3328bd6d9d709dd1906f0a700221f2c108235035e12d89616f"
+written = "79e7e026cd589a3328bd6d9d709dd1906f0a700221f2c108235035e12d89616f"
+
+[blocks."GEMINI.md"]
+template = "agents/gemini@1"
+rendered = "43dca72e73e2b799d5a93075eef031b4279518e5d6336627e6d3fd95d35eabf1"
+written = "43dca72e73e2b799d5a93075eef031b4279518e5d6336627e6d3fd95d35eabf1"
+
+[files."docs/agents/prepare-pr.md"]
+template = "agents/prepare-pr@1"
+rendered = "ccc42d0b97064ad270cb457bb87e65dff002c13ca45b3bb116f2c5dc081f7fcb"
+written = "ccc42d0b97064ad270cb457bb87e65dff002c13ca45b3bb116f2c5dc081f7fcb"
+
+[files."docs/agents/address-review.md"]
+template = "agents/address-review@1"
+rendered = "5060e17d75880836b1e07cf0ae88d92aff69e534b7615615275c01ca972a35c8"
+written = "5060e17d75880836b1e07cf0ae88d92aff69e534b7615615275c01ca972a35c8"
+
+[files."docs/agents/record-adr.md"]
+template = "agents/record-adr@1"
+rendered = "ad040e9fa0090b65580cb4ef8eb115bc0b4ccd1b6e340bb5b319c5ab5ec537ed"
+written = "ad040e9fa0090b65580cb4ef8eb115bc0b4ccd1b6e340bb5b319c5ab5ec537ed"

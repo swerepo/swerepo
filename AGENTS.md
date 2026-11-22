@@ -1,25 +1,20 @@
 # Working on SWERepo
 
-SWERepo is built in phases from [SWEREPO-SPEC.md](SWEREPO-SPEC.md), the source of truth for behaviour. Each phase ends with a peer review (ADR-20261119-9f87).
+SWERepo is built in phases from [SWEREPO-SPEC.md](SWEREPO-SPEC.md), the source of truth for behaviour. Each phase ends with a peer review (ADR-20261119-9f87). The working rules for every change are in SWERepo's block at the end of this file, written by `swerepo init` (ADR-20261121-d0f5); these add what is particular to this repository.
 
-## Rules
+## Rules for this repository
 
-1. Start by reading `docs/PROGRESS.md` and the latest entries in `docs/progress/`.
-2. Never commit to `main` directly (the one exception was the bootstrap commit, ADR-20261119-75e6); one branch per phase or piece of work. Commit, push or merge only with the owner's go-ahead.
-3. Add one progress entry in `docs/progress/` in the same change as the work.
-4. Every decision in the table in `docs/adr/README.md` gets an ADR in the same change: design, process, CI, new dependencies, anything that changes or adds to the spec. A spec change updates `SWEREPO-SPEC.md` in the same change.
-5. Run the full test suite and both ruff checks before saying tests pass, even for docs-only changes.
-6. Before committing: no personal emails, home-folder paths, `file:///` links, keys or passwords in the change.
-7. When a test fails, fix the code; never weaken the test. Never edit a file in `.seamspec/`; request a supersede instead.
-8. Never publish a package, approve a SeamSpec rule, or create a GitHub repository or organisation unless the owner explicitly asks. Those are the owner's.
-9. A phase ends with `CODE_REVIEW.md` (format in ADR-20261119-9f87). Answer every reviewer finding: fix it, push back with reasons, or defer it to a named phase. On a pull request, reply in every Copilot thread with the fix commit or the reason; the owner resolves threads, never the agent (ADR-20261120-2e50).
+1. Never commit to `main` directly (the one exception was the bootstrap commit, ADR-20261119-75e6). Commit, push or merge only with the owner's go-ahead.
+2. The decisions that need an ADR are listed in the table in `docs/adr/README.md`. A change to behaviour also updates `SWEREPO-SPEC.md` in the same change.
+3. The privacy check before committing also covers `file:///` links.
+4. Never publish a package, approve a SeamSpec rule, or create a GitHub repository or organisation unless the owner explicitly asks. Those are the owner's. Never edit a file in `.seamspec/`; request a supersede instead.
+5. A phase ends with `CODE_REVIEW.md` (format in ADR-20261119-9f87). Answer every reviewer finding: fix it, push back with reasons, or defer it to a named phase. On a pull request, reply in every Copilot thread with the fix commit or the reason; the owner resolves threads, unless they ask the agent to (ADR-20261120-2e50).
 
-## Commands
+## Commands for this repository
 
-- Install: `uv sync` (and `uv tool install seamspec==0.1.2` for the commit hook)
-- Test: `uv run pytest`
-- Lint: `uv run ruff check .` and `uv run ruff format --check .`
+- SeamSpec for the commit hook: `uv tool install seamspec==0.1.2`
 - Locked rules: `uv run seamspec verify --all`
+- SWERepo itself, from this checkout: `uv run swerepo check` (and `uv run swerepo adr new`, `uv run swerepo progress`)
 
 <!-- seamspec:begin (managed by `seamspec init`; edit outside these markers) -->
 # SeamSpec Protocol
@@ -63,3 +58,30 @@ CI where the SeamSpec workflow is installed): failing them blocks you from finis
    a changed requirement for a LOCKED rule → supersede; "what applies here?" → context;
    "wrap up" → checkpoint.
 <!-- seamspec:end -->
+
+<!-- swerepo:begin -->
+## Working rules
+
+These rules apply to every agent and every person working on swerepo (the SWERepo standard).
+
+1. Start by reading `docs/PROGRESS.md` and the latest entries in `docs/progress/` (or run `swerepo progress`).
+2. Never push to the default branch: one branch and one pull request per piece of work.
+3. Add one progress entry in `docs/progress/` (`YYYYMMDD-<slug>.md`) in the same pull request as the work. Only trivial changes skip it, with the commit trailer `Progress: none`.
+4. Any change to the design, the process (CI workflows included) or the runtime dependencies gets an ADR in `docs/adr/` (`swerepo adr new "Title"`).
+5. Run the full test suite before saying tests pass, even for docs-only changes.
+6. Before committing: no personal emails, home-folder paths, keys or passwords in the change.
+7. Answer every review thread before asking for a merge: fix it and reply with the commit, or reply why not.
+8. Never publish a package, approve a deployment or merge without the person's explicit go-ahead.
+9. When a test fails, fix the code; never weaken the test. With SeamSpec, never edit a locked rule's test: request a supersede.
+
+## Commands
+
+- Install: `uv sync`
+- Test: `uv run pytest`
+- Lint: `uv run ruff check .` and `uv run ruff format --check .`
+- Check the standard: `swerepo check`
+
+## Runbooks
+
+Step-by-step guides in `docs/agents/`, read when needed: `prepare-pr.md`, `address-review.md`, `record-adr.md`.
+<!-- swerepo:end -->
