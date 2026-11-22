@@ -2,11 +2,11 @@
 
 # Spec: what this code guarantees
 
-8 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
+10 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
 
 ## Rules in force
 
-### `swerepo` (6 rules)
+### `swerepo` (8 rules)
 
 #### A fingerprint ignores only line endings, trailing whitespace, trailing blank lines and a BOM
 
@@ -68,6 +68,26 @@ In a repository where git's configured email and a commit use a personal address
 - **Test:** `.seamspec/tests/test_inv_5e3b5ef3.py` (pytest)
 - **Critical:** always shown to the agent in full
 - **Id:** `inv_5e3b5ef3`
+
+#### init never replaces or edits a file it didn't write, except adding its block at the end
+
+`swerepo init` keeps every existing file's text byte for byte: in a repository with its own README, AGENTS.md (CRLF, ending in two blank lines), CLAUDE.md (no final newline), CONTRIBUTING, CHANGELOG, PROGRESS and an ADR of its own, each file is either unchanged, or is its whole original text (blank lines at its end included) followed only by the line breaks that make one blank line and a single SWERepo marked block that ends the file, in the file's own line endings. AGENTS.md and CLAUDE.md both gain a block, and the ADR index init creates lists the person's ADR. After a person edits SWERepo's AGENTS.md block and a runbook it wrote, the next `init` leaves both as the person left them. A file or a SWERepo block that appears between the plan and applying it stops init with an error and nothing written: no file replaced, no block doubled, no other file or block added.
+
+- **Applies to:** `swerepo/init.py`, `swerepo/blocks.py`, `swerepo/adr.py`, `swerepo/cli.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-22, in the terminal
+- **Test:** `.seamspec/tests/test_inv_8314036c.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_8314036c`
+
+#### init --dry-run writes nothing, and a second init on a set-up repository writes nothing
+
+In a git repository with a pyproject.toml and its own CLAUDE.md, `swerepo init --dry-run` exits 0, prints a plan with something to create, and leaves every file and folder unchanged (names, sizes, modification times and contents, `.git` included). After `swerepo init --yes` has applied it, a second `swerepo init --yes` exits 0, says "Nothing to do." and again leaves everything unchanged.
+
+- **Applies to:** `swerepo/init.py`, `swerepo/blocks.py`, `swerepo/adr.py`, `swerepo/cli.py`, `swerepo/state.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-22, in the terminal
+- **Test:** `.seamspec/tests/test_inv_1002d669.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_1002d669`
 
 ### `(repository root)` (2 rules)
 

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from swerepo import __version__, standard
+from swerepo.blocks import file_fingerprint
 from swerepo.detect import Detection, detect
 from swerepo.fingerprint import HASH, HTML, BlockError, comment_style, find_block, fingerprint
 from swerepo.render import TemplateError, TemplateStore, parse_id
@@ -247,7 +248,7 @@ def _docs(ctx: Context) -> list[Finding]:
     if license_file:
         found.append(_ok(c, "docs.license", license_file, license_file))
     else:
-        found.append(Finding(c, "docs.license", NOT_CHOSEN, "no license chosen (init asks; never assumed)"))
+        found.append(Finding(c, "docs.license", NOT_CHOSEN, "no license chosen (SWERepo never picks one)"))
     return found
 
 
@@ -302,7 +303,7 @@ def _agents(ctx: Context) -> list[Finding]:
             found.append(_ok(c, "agents.claude", "CLAUDE.md imports AGENTS.md", "CLAUDE.md"))
         else:
             found.append(_missing(c, "agents.claude", "CLAUDE.md doesn't import AGENTS.md (@AGENTS.md)", "CLAUDE.md"))
-    if "antigravity" in hosts:
+    if "antigravity" in hosts or "gemini" in hosts:
         gemini = ctx.read("GEMINI.md")
         if gemini is not None and "AGENTS.md" in gemini:
             found.append(_ok(c, "agents.gemini", "GEMINI.md points to AGENTS.md", "GEMINI.md"))
@@ -653,7 +654,8 @@ def _record(ctx: Context, kind: str, path: str, record: Record, component: str, 
         if block is None:
             return _missing(component, item, f"{path}: SWERepo block removed", path)
         text = block.content
-    if fingerprint(text) != record.written:
+    seen = file_fingerprint(text, record.template) if kind == "file" else fingerprint(text)
+    if seen != record.written:
         return Finding(component, item, CHANGED, f"{label} changed by you (kept)", path)
     try:
         _, name, version = parse_id(record.template)
@@ -698,11 +700,13 @@ def run_check(
     author: str | None = None,
     skip: tuple[str, ...] = (),
     store: TemplateStore | None = None,
+    exclude: tuple[str, ...] = (),
 ) -> Report:
-    """Check the repository at `root`. Raises UsageError for wrong usage (exit 2)."""
+    """Check the repository at `root`. `exclude`: components to leave out (`--no-<component>`), from `only`
+    or, without it, from the chosen ones. Raises UsageError for wrong usage (exit 2)."""
     if only is not None and not only:
         raise UsageError(f"--only needs at least one component (known: {', '.join(COMPONENTS)})")
-    unknown = [c for c in (only or []) if c not in COMPONENTS]
+    unknown = [c for c in [*(only or []), *exclude] if c not in COMPONENTS]
     if unknown:
         raise UsageError(f"unknown component {', '.join(unknown)} (known: {', '.join(COMPONENTS)})")
     bad_skip = [s for s in skip if s != "progress"]
@@ -735,7 +739,7 @@ def run_check(
 
     chosen = chosen_components(state, detection)
     for component in COMPONENTS:
-        if only is not None and component not in only:
+        if component in exclude or (only is not None and component not in only):
             continue
         if component not in chosen and only is None:
             findings.append(Finding(component, f"{component}.chosen", NOT_CHOSEN, "not chosen"))
@@ -743,7 +747,7 @@ def run_check(
         findings.extend(CHECKERS[component](ctx))
         for item, what, phase in standard.LATER.get(component, ()):
             findings.append(Finding(component, item, UNKNOWN, f"{what}: checked from Phase {phase}"))
-    checked = [c for c in COMPONENTS if c in (chosen if only is None else only)]
+    checked = [c for c in COMPONENTS if c in (chosen if only is None else only) and c not in exclude]
     if state is not None and not newer:
         findings.extend(_without_repeats(findings, _record_findings(ctx, checked, store or TemplateStore())))
     if base is not None:

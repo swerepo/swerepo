@@ -12,6 +12,8 @@ All notable changes to this project are documented here. The format is based on 
 - Apache-2.0 license.
 - Foundations for `check`, `init` and `update` (no new commands yet): fingerprints of generated files and marked blocks, the template store and renderer, the `.swerepo.toml` state file, and read-only project detection.
 - `swerepo check`: a read-only report of what a repository meets, misses or has changed against standard 1, per component, as text or `--json`; `--only`, `--ci` (GitHub Actions annotations), and the pull-request rules with `--base`, `--author` and `--skip progress`. Exit 1 when something chosen is missing, 2 for wrong usage.
+- `swerepo init` for the `docs` and `agents` components: prints a plan, then creates missing files and adds SWERepo's marked blocks, never replacing a file; `--dry-run`, `--yes`, `--only` and shorthand flags (`--docs`, `--no-agents`; also on `check`).
+- `swerepo adr new` and `swerepo adr index`: ADR files named `ADR-YYYYMMDD-xxxx-title.md` and a generated index; `swerepo progress`: Now, Next and the latest progress entries.
 
 ### Fixed
 
