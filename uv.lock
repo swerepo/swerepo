@@ -863,7 +863,7 @@ wheels = [
 
 [[package]]
 name = "seamspec"
-version = "0.1.1"
+version = "0.1.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -876,9 +876,9 @@ dependencies = [
     { name = "typer" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/04/c5/6c5b2d44a9e619f91f7ae40e862dd0572d7aa1309a37961bf928eb94c18c/seamspec-0.1.1.tar.gz", hash = "sha256:4cf5dc91972bf3094c20b3c171d0e118d6b7aad9567148d518f2ff2ff0311d0a", size = 151976, upload-time = "2026-11-07T09:52:12.595Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/af/e4/6e677177a01a7ecdda55248103206a081bb87e1097b931ee16623c81b3d1/seamspec-0.1.2.tar.gz", hash = "sha256:211c2e971dd6f86c7a008e9c06387f7f564bcc1ab9a875521436d6d3a27c7e4f", size = 153679, upload-time = "2026-11-21T08:31:28.896Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c6/c2/6f89846b4f7a4d663998072d4f67a0f05ce04d7e8cb3f519e6861318a27a/seamspec-0.1.1-py3-none-any.whl", hash = "sha256:6f70f5873f0380c378ef47d93c191fb20d3b12f78e926aaf79b2d859b871bf6d", size = 190719, upload-time = "2026-11-07T09:52:11.566Z" },
+    { url = "https://files.pythonhosted.org/packages/04/68/1a6e0d2ada8252ee791373e39dc2d8d53c7ee3ada2cfe88a2f40652f3bd4/seamspec-0.1.2-py3-none-any.whl", hash = "sha256:ffe61f1c4790e1a72f9241021e76e8454d74aa68d226051fa21a8cbf54589ad8", size = 192453, upload-time = "2026-11-21T08:31:27.72Z" },
 ]
 
 [[package]]
@@ -953,7 +953,7 @@ requires-dist = [
 dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "ruff", specifier = ">=0.6" },
-    { name = "seamspec", specifier = "==0.1.1" },
+    { name = "seamspec", specifier = "==0.1.2" },
 ]
 
 [[package]]

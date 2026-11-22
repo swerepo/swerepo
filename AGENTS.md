@@ -16,7 +16,7 @@ SWERepo is built in phases from [SWEREPO-SPEC.md](SWEREPO-SPEC.md), the source o
 
 ## Commands
 
-- Install: `uv sync` (and `uv tool install seamspec==0.1.1` for the commit hook)
+- Install: `uv sync` (and `uv tool install seamspec==0.1.2` for the commit hook)
 - Test: `uv run pytest`
 - Lint: `uv run ruff check .` and `uv run ruff format --check .`
 - Locked rules: `uv run seamspec verify --all`

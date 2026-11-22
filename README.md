@@ -20,7 +20,7 @@ uv run swerepo --version
 [SeamSpec](https://github.com/seamspec/seamspec) governs this repository. `uv sync` installs it for `uv run seamspec` and CI, but the git pre-commit hook and the Claude Code plugin run the `seamspec` on your PATH, so install the same version as a tool too:
 
 ```bash
-uv tool install seamspec==0.1.1
+uv tool install seamspec==0.1.2
 ```
 
 ## Test

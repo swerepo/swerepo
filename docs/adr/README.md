@@ -46,4 +46,5 @@ Kept by hand until `swerepo adr index` exists (Phase 3); then it is generated be
 | [ADR-20261120-fc5a](ADR-20261120-fc5a-check-report.md) | How swerepo check reports: findings per component, honest "?" for what this version can't check, exit codes, and no personal data in output | ACCEPTED |
 | [ADR-20261120-5e21](ADR-20261120-5e21-pull-request-rules.md) | How check --base computes the pull-request rules, and who it skips | ACCEPTED |
 | [ADR-20261121-8259](ADR-20261121-8259-seamspec-for-antigravity.md) | SeamSpec is also set up for Antigravity, where the Gemini reviewer works | ACCEPTED |
+| [ADR-20261121-eda1](ADR-20261121-eda1-seamspec-0-1-2.md) | Upgrade SeamSpec to 0.1.2 | ACCEPTED |
 <!-- swerepo:adr-index:end -->

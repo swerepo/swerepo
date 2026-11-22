@@ -41,7 +41,7 @@ swerepo = "swerepo.cli:main"
 dev = [
     "pytest>=8",
     "ruff>=0.6",
-    "seamspec==0.1.1",  # governs this repository (ADR-20261119-6b94); upgrade on purpose
+    "seamspec==0.1.2",  # governs this repository (ADR-20261119-6b94); upgrade on purpose
 ]
 
 [build-system]
