@@ -49,3 +49,12 @@ def test_command_line_follows_an_adopted_progress_folder(tmp_path: Path):
 def test_p3_f06_headings_in_code_blocks_and_lone_cr():
     text = "## Now\r- a\n```md\n## Not a section\n```\n~~~\n## Nor this\n~~~\n- b\n## Next\n- c"
     assert sections(text) == [("Now", "- a\n```md\n## Not a section\n```\n~~~\n## Nor this\n~~~\n- b"), ("Next", "- c")]
+
+
+def test_copilot_pr6_inline_code_and_closing_fences_follow_commonmark():
+    assert sections("## Now\n```example``` is inline code\n## Next\n- work\n") == [
+        ("Now", "```example``` is inline code"),
+        ("Next", "- work"),
+    ]
+    text = "## Now\n```md\n## no\n``` not a close\n## still no\n```\n## Next\n- w\n"
+    assert [name for name, _ in sections(text)] == ["Now", "Next"]

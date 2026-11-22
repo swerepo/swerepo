@@ -457,3 +457,18 @@ No new findings in Round 5.
 
 **Review closed 2026-11-21:** all 10 findings resolved (P3-F01 to P3-F10) in five rounds, plus two gaps from SeamSpec's reviewer. Gemini's readiness summary in round 5: ready to merge. Next: commit and pull request with the owner's go-ahead; wait for Copilot's review before merging.
 
+### GitHub Copilot's review on PR #6
+
+Copilot's review arrived before the merge this time, with nine threads. All nine were reproduced on the PR branch and fixed, each with a regression test (`TestCopilotReviewOfPR6` in `tests/test_init.py` and `tests/test_adr.py`, plus `tests/test_progress.py`). Breaking each of the six main fixes again makes its test fail.
+
+1. **(high) Writing through a link out of the repository:** an `AGENTS.md` link, a `docs/agents` folder link, or a `docs/adr` folder or README link sent writes outside the checkout. `blocks.inside` follows every link, the file's own and its folders'. The plan keeps such files; the preflight, each write, and the `adr` commands refuse them.
+2. **A folder that became a file after the plan** let earlier writes happen before `mkdir` failed. The preflight now checks every new file's folders.
+3. **`.swerepo.toml` edited while init waits at `Apply?`** was overwritten with the stale plan. The plan keeps the file's text (or its absence), and the preflight and the save both require it unchanged.
+4. **A non-UTF-8 ADR title** was indexed as garbled text. ADR files are decoded strictly, so the index stops with "not UTF-8 text" and writes nothing.
+5. **YAML escapes** such as `\u2014` lost their backslash. Double-quoted values now decode YAML 1.2's escapes, including the hexadecimal forms; an unknown escape is kept as written.
+6. **A block appended inside an unclosed fence** couldn't be found, so every run added another copy. Planning, the preflight and the write all check that the block will be findable; otherwise the file is kept with a note to close the fence.
+7. **`progress` fences:** inline code (```` ```x``` text ````) opened a fence, and text after a closing fence closed it. Both now follow CommonMark, as `find_block` does.
+8. **Operator precedence in a test** (`a and b or c`): parenthesised, so exit code 1 is always required.
+
+Item 1 answers two threads (the ADR commands, and init), so the eight items cover all nine.
+

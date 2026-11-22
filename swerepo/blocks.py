@@ -20,6 +20,17 @@ def read_exact(path: Path, *, errors: str = "strict") -> str:
         return handle.read()
 
 
+def inside(root: Path, path: Path) -> bool:
+    """Whether `path` stays inside `root` (already resolved) after following every symbolic link: its own, and
+    its folders'. For a path that doesn't exist yet, its nearest existing folder decides. SWERepo never writes
+    through a link that leads out of the repository (review: Copilot on PR #6)."""
+    probe = path
+    while not probe.exists() and not probe.is_symlink() and probe != probe.parent:
+        probe = probe.parent
+    resolved = probe.resolve()
+    return resolved == root or root in resolved.parents
+
+
 def markers(style: str, marker: str = "swerepo") -> tuple[str, str]:
     if style == HTML:
         return f"<!-- {marker}:begin -->", f"<!-- {marker}:end -->"

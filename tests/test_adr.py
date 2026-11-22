@@ -179,3 +179,45 @@ def test_p3_f08_a_crlf_readme_keeps_crlf_and_settles(tmp_path: Path):
     raw = (tmp_path / "README.md").read_bytes()
     assert b"\n" not in raw.replace(b"\r\n", b"") and b"| X | ACCEPTED |\r\n" in raw
     assert write_index(tmp_path) is False  # a second run finds it current
+
+
+class TestCopilotReviewOfPR6:
+    def test_a_title_that_isnt_utf8_stops_the_index(self, tmp_path: Path):
+        make(tmp_path, {"README.md": README})
+        (tmp_path / "ADR-20260101-abcd-x.md").write_bytes(b"---\ntitle: Caf\xe9\n---\n")
+        with pytest.raises(AdrError, match="not UTF-8"):
+            write_index(tmp_path)
+        assert (tmp_path / "README.md").read_text() == README
+
+    @pytest.mark.parametrize(
+        ("value", "title"),
+        [
+            (r'"Use — for separators"', "Use — for separators"),
+            (r'"Caf\xe9 \U0001F600"', "Caf\xe9 \U0001f600"),
+            (r'"a\_b\Lc"', "a b c"),  # a no-break space and a line separator: a table cell folds both to spaces
+            (r'"keep \q as written"', "keep \\q as written"),
+        ],
+    )
+    def test_yaml_double_quoted_escapes(self, tmp_path: Path, value: str, title: str):
+        make(tmp_path, {"ADR-20260101-abcd-x.md": f"---\ntitle: {value}\n---\n"})
+        assert list_adrs(tmp_path)[0].title == title
+
+    def test_adr_commands_never_write_through_a_link_out_of_the_repository(self, tmp_path: Path, tmp_path_factory):
+        outside = tmp_path_factory.mktemp("outside")
+        make(outside, {"adr/README.md": README})
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "docs/adr").symlink_to(outside / "adr", target_is_directory=True)
+        runner = CliRunner()
+        for args in (["adr", "new", "X"], ["adr", "index"]):
+            result = runner.invoke(app, [*args, "--path", str(tmp_path)])
+            assert result.exit_code == 1 and "leads out of the repository" in result.output
+        assert sorted(p.name for p in (outside / "adr").iterdir()) == ["README.md"]
+        assert (outside / "adr/README.md").read_text() == README
+
+    def test_a_readme_link_out_of_the_repository_is_refused(self, tmp_path: Path, tmp_path_factory):
+        outside = tmp_path_factory.mktemp("outside")
+        make(outside, {"README.md": README})
+        (tmp_path / "docs/adr").mkdir(parents=True)
+        (tmp_path / "docs/adr/README.md").symlink_to(outside / "README.md")
+        result = CliRunner().invoke(app, ["adr", "index", "--path", str(tmp_path)])
+        assert result.exit_code == 1 and (outside / "README.md").read_text() == README

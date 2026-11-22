@@ -15,6 +15,7 @@ import typer
 
 from swerepo import __version__, standard
 from swerepo.adr import AdrError, new_adr, write_index
+from swerepo.blocks import inside
 from swerepo.check import UsageError, in_github_actions, one_line, run_check
 from swerepo.init import HOSTS, InitError, apply, make_plan, noreply_warning
 from swerepo.progress import report
@@ -180,9 +181,13 @@ def _repository(path: Path, command: str) -> tuple[Path, State | None]:
 
 
 def _adr_folder(path: Path, command: str) -> tuple[Path, str]:
-    """The ADR folder, and its repository-relative name for messages."""
+    """The ADR folder, and its repository-relative name for messages. A folder or README that is a link out of
+    the repository is refused: the ADR commands never write outside it (review: Copilot on PR #6)."""
     root, state = _repository(path, command)
     folder = str((state.adopted.get("adr_dir") if state else None) or standard.ADR_DIR)
+    for target in (root / folder, root / folder / "README.md"):
+        if not inside(root, target):
+            raise _fail(AdrError(f"{target.relative_to(root).as_posix()} leads out of the repository"), 1, command)
     return root / folder, folder
 
 

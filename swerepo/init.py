@@ -24,7 +24,7 @@ from typing import Any
 
 from swerepo import __version__, standard
 from swerepo.adr import AdrError, list_adrs, with_index
-from swerepo.blocks import ADR_INDEX, append_block, file_fingerprint, read_exact, wrap
+from swerepo.blocks import ADR_INDEX, append_block, file_fingerprint, inside, read_exact, wrap
 from swerepo.check import _UNRELEASED, UsageError, one_line
 from swerepo.detect import Detection, detect
 from swerepo.fingerprint import HTML, BlockError, comment_style, find_block, fingerprint
@@ -76,6 +76,7 @@ class Plan:
     hosts_recorded: bool
     actions: list[Action] = field(default_factory=list)
     state_text: str | None = None  # the new .swerepo.toml, or None if it doesn't change
+    state_before: str | None = None  # .swerepo.toml as the plan read it (None: there was none)
 
     @property
     def changes(self) -> list[Action]:
@@ -211,6 +212,8 @@ class _Context:
 
 
 def _managed_file(ctx: _Context, component: str, path: str, template: str) -> Action:
+    if not inside(ctx.root, ctx.root / path):
+        return Action(component, KEEP, path, _OUTSIDE)
     latest = ctx.store.latest(*template.split("/"))
     text = latest.render(ctx.values)
     rendered = file_fingerprint(text, latest.id)
@@ -231,7 +234,12 @@ def _managed_file(ctx: _Context, component: str, path: str, template: str) -> Ac
     return Action(component, OUTDATED, path, f"{latest.id} is newer: swerepo update (Phase 6)")
 
 
+_OUTSIDE = "a link out of the repository: SWERepo doesn't write there"
+
+
 def _managed_block(ctx: _Context, component: str, path: str, template: str, heading: str = "") -> Action:
+    if not inside(ctx.root, ctx.root / path):
+        return Action(component, KEEP, path, _OUTSIDE)
     latest = ctx.store.latest(*template.split("/"))
     content = latest.render(ctx.values)
     rendered = fingerprint(content)
@@ -250,6 +258,8 @@ def _managed_block(ctx: _Context, component: str, path: str, template: str, head
             return Action(component, KEEP, path, "already imports AGENTS.md")
         if path == "GEMINI.md" and "AGENTS.md" in text:  # what check accepts (spec §6.6: points to AGENTS.md)
             return Action(component, KEEP, path, "already points to AGENTS.md")
+        if not _block_findable(text, content, path):
+            return Action(component, KEEP, path, "ends inside an unclosed code fence: close it, then run init again")
         return Action(component, ADD_BLOCK, path, content=content, record=new_record, kind="block")
     if record is None:
         return Action(component, KEEP, path, "has a SWERepo block SWERepo didn't record: kept")
@@ -260,7 +270,18 @@ def _managed_block(ctx: _Context, component: str, path: str, template: str, head
     return Action(component, OUTDATED, path, f"{latest.id} is newer: swerepo update (Phase 6)")
 
 
+def _block_findable(text: str, content: str, path: str) -> bool:
+    """Whether the block, once appended, can be found again: not if the text ends inside an unclosed Markdown
+    fence, where every later run would append another copy (review: Copilot on PR #6)."""
+    try:
+        return find_block(append_block(text, content, path), style=comment_style(path)) is not None
+    except BlockError:
+        return False
+
+
 def _starter(ctx: _Context, component: str, path: str, template: str, values: dict[str, str]) -> Action:
+    if not inside(ctx.root, ctx.root / path):
+        return Action(component, KEEP, path, _OUTSIDE)
     if ctx.exists(path):
         return Action(component, KEEP, path, "yours")
     text = ctx.store.latest(*template.split("/")).render(values)
@@ -399,6 +420,7 @@ def make_plan(
     hosts_recorded = bool(state and state.hosts_chosen)
     chosen_hosts = hosts if hosts is not None else (state.hosts if hosts_recorded else list(detection.hosts))
     plan = Plan(root.name, components, chosen_hosts, hosts_recorded or hosts is not None)
+    plan.state_before = _state_text(root)
 
     if not detection.git.is_work_tree:
         plan.actions.append(Action("repository", GIT_INIT, None, "not a git repository yet: git init"))
@@ -467,26 +489,53 @@ def _new_state(ctx: _Context, plan: Plan, applied: list[str], adopted_adr_dir: s
 # --- applying -----------------------------------------------------------------------------------------
 
 
+def _state_text(root: Path) -> str | None:
+    """`.swerepo.toml` as it is now, or None when there is none."""
+    path = root / FILE_NAME
+    if not path.exists() and not path.is_symlink():
+        return None
+    try:
+        return read_exact(path, errors="surrogateescape")
+    except OSError as error:
+        raise InitError(f"{FILE_NAME}: can't read it ({error.strerror or type(error).__name__})") from error
+
+
+def _check_target(action: Action, root: Path) -> None:
+    """One target, as it is now: inside the repository, its folders still folders, still missing (create) or
+    still without a block, and with a block that can be found once added (add block)."""
+    path = action.path or ""
+    target = root / path
+    if not inside(root, target):
+        raise InitError(f"{path} leads out of the repository: nothing written")
+    if action.verb == CREATE:
+        for folder in target.relative_to(root).parents:
+            if folder != Path(".") and (root / folder).exists() and not (root / folder).is_dir():
+                raise InitError(f"{folder.as_posix()} isn't a folder any more: nothing written; run init again")
+        if target.exists() or target.is_symlink():
+            raise InitError(f"{path} appeared since the plan was made: nothing written; run init again")
+        return
+    try:
+        text = read_exact(target, errors="surrogateescape")
+        found = find_block(text, style=comment_style(path))
+    except OSError as error:
+        raise InitError(f"{path}: can't read it ({error.strerror or type(error).__name__})") from error
+    except BlockError as error:
+        raise InitError(f"{path}: SWERepo block markers are broken ({error}); nothing written") from error
+    if found is not None:
+        raise InitError(f"{path} got a SWERepo block since the plan was made: nothing written; run init again")
+    if not _block_findable(text, action.content or "", path):
+        raise InitError(f"{path} ends inside an unclosed code fence: nothing written; close it, then run init again")
+
+
 def _check_targets(plan: Plan, root: Path) -> None:
-    """Before anything is written: every file to create is still missing, and every file to gain a block still
-    has none. A conflict stops the run with nothing written, so no SWERepo content is left behind unrecorded."""
+    """Before anything is written: every target as `_check_target` wants it, and `.swerepo.toml` exactly as the
+    plan read it (a person may edit it while init waits at `Apply?`). A conflict stops the run with nothing
+    written, so no SWERepo content is left behind unrecorded and no one's edit is lost."""
     for action in plan.actions:
-        if action.path is None or action.verb not in (CREATE, ADD_BLOCK):
-            continue
-        target = root / action.path
-        if action.verb == CREATE:
-            if target.exists() or target.is_symlink():
-                raise InitError(f"{action.path} appeared since the plan was made: nothing written; run init again")
-            continue
-        try:
-            found = find_block(read_exact(target, errors="surrogateescape"), style=comment_style(action.path))
-        except OSError as error:
-            raise InitError(f"{action.path}: can't read it ({error.strerror or type(error).__name__})") from error
-        except BlockError as error:
-            raise InitError(f"{action.path}: SWERepo block markers are broken ({error}); nothing written") from error
-        if found is not None:
-            message = f"{action.path} got a SWERepo block since the plan was made: nothing written; run init again"
-            raise InitError(message)
+        if action.path is not None and action.verb in (CREATE, ADD_BLOCK):
+            _check_target(action, root)
+    if _state_text(root) != plan.state_before:
+        raise InitError(f"{FILE_NAME} changed since the plan was made: nothing written; run init again")
 
 
 def apply(plan: Plan, root: Path) -> None:
@@ -507,6 +556,8 @@ def apply(plan: Plan, root: Path) -> None:
         if action.verb not in (CREATE, ADD_BLOCK) or action.path is None or action.content is None:
             continue
         target = root / action.path
+        if not inside(root, target):
+            raise InitError(f"{action.path} leads out of the repository: run init again")
         try:
             if action.verb == CREATE:
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -520,6 +571,8 @@ def apply(plan: Plan, root: Path) -> None:
                     raise InitError(f"{action.path}: SWERepo block markers are broken ({error})") from error
                 if found is not None:
                     raise InitError(f"{action.path} got a SWERepo block since the plan was made: run init again")
+                if not _block_findable(text, action.content, action.path):
+                    raise InitError(f"{action.path} ends inside an unclosed code fence: close it, then run init again")
                 updated = append_block(text, action.content, action.path)
                 target.write_text(updated, encoding="utf-8", newline="", errors="surrogateescape")
         except FileExistsError as error:
@@ -527,6 +580,8 @@ def apply(plan: Plan, root: Path) -> None:
         except OSError as error:
             raise InitError(f"{action.path}: can't write it ({error.strerror or type(error).__name__})") from error
     if plan.state_text is not None:
+        if _state_text(root) != plan.state_before:
+            raise InitError(f"{FILE_NAME} changed while init was writing: not saved; run init again")
         try:
             State.parse(plan.state_text).save(root)
         except StateError as error:

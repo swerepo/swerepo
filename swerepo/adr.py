@@ -52,8 +52,8 @@ def read_adr(path: Path) -> Adr:
     if match is None:
         raise AdrError(f"{path.name}: not an ADR file name (ADR-YYYYMMDD-xxxx-title.md)")
     try:
-        text = path.read_text(encoding="utf-8", errors="replace").removeprefix("\ufeff")
-    except OSError as error:
+        text = path.read_text(encoding="utf-8").removeprefix("\ufeff")  # strict: never index a garbled title
+    except (OSError, UnicodeError) as error:
         raise AdrError(f"{path.name}: can't read it ({_why(error)})") from error
     lines = text.replace("\r\n", "\n").split("\n")
     fields: dict[str, str] = {}
@@ -73,7 +73,20 @@ def read_adr(path: Path) -> Adr:
 
 _DOUBLE = re.compile(r'"((?:[^"\\]|\\.)*)"')
 _SINGLE = re.compile(r"'((?:[^']|'')*)'")
-_ESCAPES = {"n": "\n", "t": "\t", '"': '"', "\\": "\\", "/": "/"}
+# YAML 1.2 double-quoted escapes (spec 5.7), so a title reads as YAML reads it
+_ESCAPES = {
+    "0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v": "\v", "f": "\f", "r": "\r",
+    "e": "\x1b", " ": " ", '"': '"', "/": "/", "\\": "\\", "N": "\x85", "_": "\xa0", "L": "\u2028",
+    "P": "\u2029",
+}  # fmt: skip
+_ESCAPE = re.compile(r"\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|.)")
+
+
+def _unescape(match: re.Match[str]) -> str:
+    code = match[1]
+    if len(code) > 1:  # \xHH, \uHHHH, \UHHHHHHHH
+        return chr(int(code[1:], 16))
+    return _ESCAPES.get(code, "\\" + code)  # an unknown escape is kept as written, never silently changed
 
 
 def _without_comment(value: str) -> str:
@@ -81,7 +94,7 @@ def _without_comment(value: str) -> str:
     before a ` #` comment."""
     value = value.strip()
     if quoted := _DOUBLE.match(value):
-        return re.sub(r"\\(.)", lambda m: _ESCAPES.get(m[1], m[1]), quoted[1])
+        return _ESCAPE.sub(_unescape, quoted[1])
     if quoted := _SINGLE.match(value):
         return quoted[1].replace("''", "'")
     return re.split(r"\s+#", value, maxsplit=1)[0].strip()

@@ -23,9 +23,15 @@ def sections(text: str, names: tuple[str, ...] = ("Now", "Next")) -> list[tuple[
     fence: str | None = None
     for line in re.split(r"\r\n|\r|\n", text):
         opening = _FENCE.match(line)
-        if opening and (fence is None or opening[1][0] == fence[0] and len(opening[1]) >= len(fence)):
-            fence = opening[1] if fence is None else None  # a `## ` inside a code block isn't a section
-        heading = None if fence is not None or opening else _SECTION.match(line)
+        rest = line[opening.end() :] if opening else ""
+        was_fenced = fence is not None
+        if opening and fence is None and not (opening[1][0] == "`" and "`" in rest):
+            fence = opening[1]  # CommonMark, as fingerprint.find_block: a backtick fence's info has no backticks
+        elif (
+            opening and fence and opening[1][0] == fence[0] and len(opening[1]) >= len(fence) and not rest.strip(" \t")
+        ):
+            fence = None  # a closing fence: the same character, at least as long, then only spaces or tabs
+        heading = None if was_fenced or fence is not None else _SECTION.match(line)
         if heading is None:
             if current is not None:
                 lines.append(line)

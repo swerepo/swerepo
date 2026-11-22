@@ -334,7 +334,7 @@ class TestGeminiReviewRound1:
         readme.write_text(readme.read_text().replace("<!-- swerepo:adr-index:end -->\n", ""))
         assert verbs(make_plan(new_project))["docs/adr/README.md"] == CHANGED
         result = CliRunner().invoke(app, ["check", "--path", str(new_project), "--only", "docs"])
-        assert result.exit_code == 1 and result.exception is None or isinstance(result.exception, SystemExit)
+        assert result.exit_code == 1 and (result.exception is None or isinstance(result.exception, SystemExit))
         assert "markers are broken" in result.output
 
     def test_p3_f02_broken_markers_appearing_before_apply_are_an_init_error(self, new_project: Path):
@@ -487,3 +487,59 @@ class TestSeamSpecReviewOfInv8314036c:
             "docs/agents/record-adr.md",
         }
         assert (new_project / "AGENTS.md").read_text() == "# Ours\n" and not (new_project / FILE_NAME).exists()
+
+
+class TestCopilotReviewOfPR6:
+    """Copilot's review of PR #6 (docs/reviews/phase-3.md), each reproduced before the fix."""
+
+    def test_a_link_out_of_the_repository_is_never_written_through(self, new_project: Path, tmp_path_factory):
+        outside = tmp_path_factory.mktemp("outside")
+        (outside / "theirs.md").write_text("# Theirs\n")
+        (new_project / "AGENTS.md").symlink_to(outside / "theirs.md")
+        (outside / "agents").mkdir()
+        (new_project / "docs").mkdir()
+        (new_project / "docs/agents").symlink_to(outside / "agents", target_is_directory=True)
+        plan = init(new_project, hosts=[])
+        assert verbs(plan)["AGENTS.md"] == KEEP and verbs(plan)["docs/agents/prepare-pr.md"] == KEEP
+        assert (outside / "theirs.md").read_text() == "# Theirs\n" and list((outside / "agents").iterdir()) == []
+
+    def test_a_link_that_appears_after_the_plan_stops_init(self, new_project: Path, tmp_path_factory):
+        outside = tmp_path_factory.mktemp("outside")
+        (outside / "theirs.md").write_text("# Theirs\n")
+        make(new_project, {"AGENTS.md": "# Ours\n"})
+        plan = make_plan(new_project, hosts=[], today=TODAY)
+        (new_project / "AGENTS.md").unlink()
+        (new_project / "AGENTS.md").symlink_to(outside / "theirs.md")
+        with pytest.raises(InitError, match="out of the repository"):
+            apply(plan, new_project)
+        assert (outside / "theirs.md").read_text() == "# Theirs\n"
+
+    def test_a_folder_that_became_a_file_stops_init_with_nothing_written(self, new_project: Path):
+        make(new_project, {"AGENTS.md": "# Ours\n"})
+        plan = make_plan(new_project, hosts=[], today=TODAY)
+        make(new_project, {"docs/agents": "now a file\n"})
+        with pytest.raises(InitError, match="isn't a folder any more"):
+            apply(plan, new_project)
+        assert (new_project / "AGENTS.md").read_text() == "# Ours\n" and not (new_project / FILE_NAME).exists()
+
+    @pytest.mark.parametrize("meanwhile", ['# mine\nstandard = 1\nswerepo = "0.0.1"\ncomponents = ["docs"]\n', None])
+    def test_a_state_file_changed_after_the_plan_is_never_overwritten(self, new_project: Path, meanwhile):
+        if meanwhile is None:  # the other way round: there was one, and it was deleted
+            make(new_project, {FILE_NAME: 'standard = 1\nswerepo = "0.0.1"\ncomponents = ["docs"]\n'})
+        plan = make_plan(new_project, hosts=[], today=TODAY)
+        if meanwhile is None:
+            (new_project / FILE_NAME).unlink()
+        else:
+            make(new_project, {FILE_NAME: meanwhile})
+        before = snapshot(new_project)
+        with pytest.raises(InitError, match="changed since the plan"):
+            apply(plan, new_project)
+        assert snapshot(new_project) == before
+
+    def test_a_block_that_would_land_in_an_unclosed_fence_is_not_added(self, new_project: Path):
+        make(new_project, {"AGENTS.md": "# Ours\n~~~md\n"})
+        for _ in range(2):
+            plan = init(new_project, hosts=[])
+            action = next(a for a in plan.actions if a.path == "AGENTS.md")
+            assert action.verb == KEEP and "unclosed code fence" in action.note
+        assert (new_project / "AGENTS.md").read_text() == "# Ours\n~~~md\n"
