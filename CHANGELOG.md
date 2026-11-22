@@ -12,3 +12,7 @@ All notable changes to this project are documented here. The format is based on 
 - Apache-2.0 license.
 - Foundations for `check`, `init` and `update` (no new commands yet): fingerprints of generated files and marked blocks, the template store and renderer, the `.swerepo.toml` state file, and read-only project detection.
 - `swerepo check`: a read-only report of what a repository meets, misses or has changed against standard 1, per component, as text or `--json`; `--only`, `--ci` (GitHub Actions annotations), and the pull-request rules with `--base`, `--author` and `--skip progress`. Exit 1 when something chosen is missing, 2 for wrong usage.
+
+### Fixed
+
+- `swerepo check` (Copilot's review of PR #3): values from files can no longer start a GitHub Actions workflow command in the text report; an explicit empty `components` or `[agents] hosts` chooses nothing; a `tool` value that isn't a table no longer crashes; only `run:` commands count as running `seamspec verify`; errors and dependency findings no longer repeat paths or values from files.

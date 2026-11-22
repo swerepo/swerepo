@@ -48,12 +48,14 @@ class Record:
 def check_path(path: object, *, key: str) -> str:
     """A repository-relative POSIX path, written one way only: not empty or `.`, not absolute, no `.` or
     `..` parts, no empty parts (`a//b`), no trailing `/`, no backslashes or control characters."""
+    # The rejected value is never repeated: it may be an absolute path naming a home folder, and the
+    # message reaches `check` output and CI logs (ADR-20261120-fc5a point 7).
     if not isinstance(path, str) or not path or path.strip() != path or any(ord(c) < 32 for c in path):
-        raise StateError(f"{key}: {path!r} is not a repository path")
+        raise StateError(f"{key}: a path is not a repository path")
     if "\\" in path or path.startswith("/") or re.match(r"^[A-Za-z]:", path):
-        raise StateError(f"{key}: {path!r} must be relative and use '/'")
+        raise StateError(f"{key}: a path must be relative and use '/'")
     if any(part in ("", ".", "..") for part in path.split("/")):
-        raise StateError(f"{key}: {path!r} must not have empty, '.' or '..' parts, or end with '/'")
+        raise StateError(f"{key}: a path must not have empty, '.' or '..' parts, or end with '/'")
     return PurePosixPath(path).as_posix()
 
 
@@ -163,6 +165,17 @@ class State:
     def project_ignore(self) -> list[str]:
         projects = self.doc.get("projects")
         return [] if projects is None else [str(p) for p in projects.get("ignore", [])]
+
+    @property
+    def components_chosen(self) -> bool:
+        """Whether the file records `components`, even as an empty list (then nothing is chosen)."""
+        return "components" in self.doc
+
+    @property
+    def hosts_chosen(self) -> bool:
+        """Whether the file records `[agents] hosts`, even as an empty list (then no editor is chosen)."""
+        agents = self.doc.get("agents")
+        return agents is not None and "hosts" in agents
 
     @property
     def hosts(self) -> list[str]:
@@ -347,8 +360,8 @@ def _validate(doc: TOMLDocument, running: str = __version__) -> None:
         if not isinstance(table, dict):
             raise StateError(f"{kind}: must be a table of paths")
         for path, entry in table.items():
+            check_path(path, key=kind)  # the key names the table, not the path it rejects
             key = f"{kind}.{path}"
-            check_path(path, key=key)
             if not isinstance(entry, dict):
                 raise StateError(f"{key}: must be a table with template, rendered and written")
             _check_record(entry.get("template"), entry.get("rendered"), entry.get("written"), key=key)

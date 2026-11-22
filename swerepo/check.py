@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
 import tomllib
 from dataclasses import asdict, dataclass, field
@@ -100,7 +101,7 @@ class Report:
                 warning = " (warning)" if finding.status == MISSING and not finding.blocking else ""
                 lines.append(f"  {label:<9} {SYMBOL[finding.status]} {finding.message}{warning}")
         lines.append(self.summary())
-        return "\n".join(lines)
+        return "\n".join(one_line(line) for line in lines)
 
     def annotations(self) -> list[str]:
         """GitHub Actions annotation lines for missing items: errors when blocking, else warnings.
@@ -113,6 +114,12 @@ class Report:
             kind = "error" if f.blocking else "warning"
             out.append(f"::{kind} {','.join(params)}::{_escape(f'{f.component}: {f.message}')}")
         return out
+
+
+def one_line(text: str) -> str:
+    """Text with CR and LF shown as `\\r` and `\\n`, so a value from a file (a mode, a folder or file
+    name) can't start a new output line, which GitHub Actions would read as a workflow command."""
+    return text.replace("\r", "\\r").replace("\n", "\\n")
 
 
 def _escape(value: str, *, prop: bool = False) -> str:
@@ -281,7 +288,7 @@ def _block_finding(component: str, item: str, path: str, text: str) -> Finding:
 def _agents(ctx: Context) -> list[Finding]:
     c = "agents"
     found: list[Finding] = []
-    hosts = ctx.state.hosts if ctx.state and ctx.state.hosts else list(ctx.detection.hosts)
+    hosts = ctx.state.hosts if ctx.state and ctx.state.hosts_chosen else list(ctx.detection.hosts)
     text = ctx.read("AGENTS.md")
     if text is None:
         found.append(_missing(c, "agents.block", "AGENTS.md missing", "AGENTS.md"))
@@ -373,7 +380,8 @@ def _seamspec_excluded(ctx: Context, linters: set[str]) -> Finding:
             data = tomllib.loads(text)
         except tomllib.TOMLDecodeError:
             continue
-        config = data if source != "pyproject.toml" else data.get("tool", {}).get("ruff")
+        tool = data.get("tool", {})
+        config = data if source != "pyproject.toml" else (tool.get("ruff") if isinstance(tool, dict) else None)
         if not isinstance(config, dict):
             continue
         excluded = [entry for key in ("exclude", "extend-exclude") for entry in _strings(config.get(key))]
@@ -481,12 +489,108 @@ def _seamspec(ctx: Context) -> list[Finding]:
         message = f"mode: {mode or 'unknown'} (locked rules don't block)"
         found.append(_missing(c, "seamspec.mode", message, ".seamspec/config.toml"))
     found.append(_present(ctx, c, "seamspec.earned-spec", standard.EARNED_SPEC))
-    runners = [w.path for w in ctx.detection.workflows if "seamspec verify" in _without_comments(ctx.read(w.path))]
+    runners = [
+        w.path for w in ctx.detection.workflows if any(_runs_seamspec_verify(r) for r in _runs(ctx.read(w.path)))
+    ]
     if runners:
         found.append(_ok(c, "seamspec.ci", f"CI runs the locked rules ({', '.join(Path(p).name for p in runners)})"))
     else:
         found.append(_missing(c, "seamspec.ci", "no workflow runs `seamspec verify`"))
     return found
+
+
+_STEPS_KEY = re.compile(r"^ *steps:\s*(?:#.*)?$")
+_ITEM = re.compile(r"^(?P<dash> *-\s+)(?P<rest>.*)$")
+_KEY = re.compile(r"^(?P<key>[A-Za-z_][\w-]*):(?:\s+(?P<value>.*?))?\s*$")
+# uv and uvx options that take a value, so the value isn't read as the command
+_OPTIONS_WITH_VALUES = frozenset({
+    "--from", "--with", "--with-requirements", "--with-editable", "--python", "-p", "--project", "--directory",
+    "--extra", "--group", "--env-file", "--package",
+})  # fmt: skip
+
+
+def _runs(text: str | None) -> list[str]:
+    """The shell commands of a workflow's steps: the `run` key of each item of a `steps:` list, one line or
+    a block (`|`, `>`). Step names, other keys, `env` values (even one named `run`) and comments never
+    count (Copilot's review of PR #3 and #4)."""
+    lines, runs, index = (text or "").splitlines(), [], 0
+    steps_indent: int | None = None  # column of the current `steps:` key
+    step_dash: int | None = None  # column of the dash that starts each step
+    step_col: int | None = None  # column of the current step's keys
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        indent = _indent(line)
+        # a line at or left of `steps:` ends the list, except a dash at its column (a list YAML doesn't indent)
+        dash_at_steps = indent == steps_indent and line.lstrip().startswith("-")
+        if steps_indent is not None and indent <= steps_indent and not dash_at_steps:
+            steps_indent = step_dash = step_col = None
+        if steps_indent is None and _STEPS_KEY.match(line):  # a `steps:` inside a step is an argument
+            steps_indent, step_dash, step_col = indent, None, None
+            continue
+        if steps_indent is None:
+            continue
+        body, col = line[indent:], indent
+        item = _ITEM.match(line)
+        if item:
+            if step_dash is None:
+                step_dash = indent
+            if indent != step_dash:
+                continue  # a list inside a step (`with:` arguments), not a step
+            body, col = item.group("rest"), len(item.group("dash"))
+            step_col = col
+        key = _KEY.match(body)
+        if key is None or key.group("key") != "run" or col != step_col:
+            continue
+        value = _without_comments(key.group("value") or "").strip()
+        if value[:1] in ("|", ">"):
+            block = []
+            while index < len(lines) and (not lines[index].strip() or _indent(lines[index]) > col):
+                block.append(lines[index].strip())
+                index += 1
+            runs.append((" " if value.startswith(">") else "\n").join(b for b in block if b))
+        else:
+            runs.append(value.strip("'\""))
+    return runs
+
+
+def _runs_seamspec_verify(command: str) -> bool:
+    """Whether a shell command runs `seamspec verify` as a command, directly or through `uv run`, `uvx`,
+    `uv tool run` or `python -m`; not as an argument (`echo seamspec verify`) or in a comment."""
+    script = command.replace("\\\n", " ")
+    for segment in re.split(r"&&|\|\||[;|&\n]", script):
+        try:
+            words = shlex.split(segment, comments=True)
+        except ValueError:
+            continue
+        while words and re.fullmatch(r"[A-Za-z_]\w*=.*", words[0]):
+            words = words[1:]  # VAR=value before the command
+        while True:
+            if words[:2] == ["uv", "run"]:
+                words = _skip_options(words[2:])
+            elif words[:3] == ["uv", "tool", "run"]:
+                words = _skip_options(words[3:])
+            elif words[:1] == ["uvx"]:
+                words = _skip_options(words[1:])
+            elif len(words) > 2 and re.fullmatch(r"python[\d.]*", words[0]) and words[1] == "-m":
+                words = words[2:]
+            else:
+                break
+        if words and re.fullmatch(r"seamspec(?:==\S+)?", words[0]) and words[1:2] == ["verify"]:
+            return True
+    return False
+
+
+def _skip_options(words: list[str]) -> list[str]:
+    while words and words[0].startswith("-"):
+        words = words[2:] if words[0] in _OPTIONS_WITH_VALUES else words[1:]
+    return words
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
 
 
 def _without_comments(text: str | None) -> str:
@@ -575,7 +679,7 @@ def _without_repeats(findings: list[Finding], records: list[Finding]) -> list[Fi
 
 
 def chosen_components(state: State | None, detection: Detection) -> list[str]:
-    if state is not None and state.components:
+    if state is not None and state.components_chosen:  # an empty list chooses nothing (ADR-fc5a point 2)
         chosen = set(state.components)
     else:
         chosen = set(standard.DEFAULT_COMPONENTS)

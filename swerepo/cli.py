@@ -12,7 +12,7 @@ from typing import Annotated
 import typer
 
 from swerepo import __version__
-from swerepo.check import UsageError, in_github_actions, run_check
+from swerepo.check import UsageError, in_github_actions, one_line, run_check
 
 app = typer.Typer(
     name="swerepo",
@@ -52,7 +52,7 @@ def check(
     try:
         report = run_check(path, only=components, base=base, author=author, skip=tuple(skip or ()))
     except UsageError as error:
-        typer.echo(f"swerepo check: {error}", err=True)
+        typer.echo(one_line(f"swerepo check: {error}"), err=True)
         raise typer.Exit(2) from error
     if as_json:
         typer.echo(json.dumps(report.to_dict(), indent=2, ensure_ascii=False))
