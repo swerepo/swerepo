@@ -1,6 +1,6 @@
 # SWERepo — Specification
 
-**Status:** draft for the owner's review · **Version:** 0.8 (design) · **Date:** 2026-11-20
+**Status:** draft for the owner's review · **Version:** 0.9 (design) · **Date:** 2026-11-21
 **Name:** SWERepo, command `swerepo`, at `github.com/swerepo/swerepo` (renamed from Golden Repo in v0.6, ADR-20261120-1a27)
 **What changed:** Appendix A. **How the BLUEPRINT's ideas were handled:** Appendix B.
 
@@ -193,7 +193,7 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
 
 Designed so that parallel branches don't collide: each PR adds its own files, and shared indexes are generated.
 
-- `README.md` sections (only added where missing): what it is, install, develop, test, contributing.
+- `README.md` when there is none: what it is, install, test, contributing. An existing README is never edited (principle 3; ADR-20261121-6c3d).
 - `docs/adr/`: `README.md` (format, naming, and an index between `<!-- swerepo:adr-index:begin -->` markers, **generated** by `swerepo adr index`) and `TEMPLATE.md`. Naming follows SeamSpec's convention: `ADR-YYYYMMDD-xxxx-short-title.md` (the random `xxxx` keeps two branches from picking the same name), statuses `PROPOSED | ACCEPTED | SUPERSEDED | REJECTED`. `swerepo adr new "title"` creates one from the template. When two branches both add an ADR, the index conflict is fixed by rerunning `swerepo adr index`. An existing ADR folder is adopted instead (§10); its index is generated only if the person agrees.
 - **Progress:**
   - `docs/PROGRESS.md`: **Now** and **Next**, short, edited only when priorities change.
@@ -201,7 +201,7 @@ Designed so that parallel branches don't collide: each PR adds its own files, an
   - `swerepo progress` prints Now, Next and the latest entries, for people and agents.
 - `CHANGELOG.md` in the Keep a Changelog format, with an `[Unreleased]` section (fragments instead: §19).
 - `CONTRIBUTING.md`: branches and PRs only, branch naming, the PR template, ADR and progress rules, how reviews are answered, which mode the repository uses and what it means (§17).
-- `LICENSE` only when the person chooses one (asked; never assumed).
+- `LICENSE` only when the person adds one: SWERepo never picks a license, and the plan notes when there is none (ADR-20261121-6c3d).
 - **PR rules checked in CI** (`check --base`, §15):
   - every PR adds a progress entry, unless one of its commits carries the trailer `Progress: none` (for typo fixes and other small changes; it works in a local `check` as well as in CI);
   - a PR that adds a runtime dependency (a new name under `[project].dependencies`, not a version change) adds or changes an ADR in the same PR;
@@ -220,7 +220,7 @@ Designed so that parallel branches don't collide: each PR adds its own files, an
   4. Any change to the design, the process (CI workflows included), or the runtime dependencies gets an ADR (`swerepo adr new`).
   5. Run the full test suite before saying tests pass, even for docs-only changes.
   6. Before committing: no personal emails, home paths, keys or passwords in the change.
-  7. Answer every review thread (fix it and reply with the commit, or reply why not) before asking for a merge; `swerepo threads <pr>` lists the open ones.
+  7. Answer every review thread (fix it and reply with the commit, or reply why not) before asking for a merge; `swerepo threads <pr>` lists the open ones. (The block names `swerepo threads` from the template version that ships with it, Phase 5.)
   8. Never publish a package, approve a deployment or merge without the person's explicit go-ahead.
   9. When a test fails, fix the code; never weaken the test to make it pass (and, with SeamSpec, never edit a locked rule's test: request a supersede).
 - **Commands** are listed in the block, so agents never guess them: install (`uv sync`), test (`uv run pytest`), lint (`uv run ruff check` and `uv run ruff format --check`), check (`swerepo check`). They are rendered from what the project uses; an existing Makefile or task runner is listed instead when one is detected.
@@ -269,8 +269,9 @@ swerepo threads PR                   open review threads of a PR, compact (read-
 swerepo --version
 ```
 
-- **Components** (`C`): `docs`, `agents`, `ci`, `security`, `github`, `seamspec`, `openspec`, `release`. `--only` selects; `--no-<component>` skips. `--seamspec` alone is shorthand for `--only seamspec` (and so for each component).
+- **Components** (`C`): `docs`, `agents`, `ci`, `security`, `github`, `seamspec`, `openspec`, `release`. `--only` selects; `--no-<component>` skips. `--seamspec` alone is shorthand for `--only seamspec` (and so for each component), on `init` and `check`.
 - **`--mode`**: `solo` or `team` (§12). Default: `solo` for a repository owned by a user, `team` for one owned by an organisation; always shown in the plan.
+- **Without a terminal**, `init` applies only with `--yes`; otherwise it prints the plan and exits `2` without writing (ADR-20261121-6c3d).
 - **`--yes`** answers yes to SWERepo's own questions in scripts. It never answers another tool's consent (SeamSpec's consent to run tests stays a person's answer; §13).
 - **`--json`** prints one machine-readable result (plan, changes, findings) for scripts.
 - **`--projects`**: in a monorepo, the Python project folders that get their own CI jobs and settings (§11).
@@ -305,7 +306,7 @@ Each component has the same four parts: what it **writes**, what it **runs**, wh
 
 | Component | Writes | Runs | Asks | Check looks for |
 |---|---|---|---|---|
-| `docs` | ADR folder (README with index, template), PROGRESS, `docs/progress/`, CHANGELOG, CONTRIBUTING, README sections | — | a license, if none | each file present; ADR index matches the ADR files; CHANGELOG has `[Unreleased]`; with `--base`: progress entry added, ADR for new dependencies |
+| `docs` | ADR folder (README with index, template), PROGRESS, `docs/progress/`, CHANGELOG, CONTRIBUTING, README (when missing) | — | — (a missing license is noted, never picked) | each file present; ADR index matches the ADR files; CHANGELOG has `[Unreleased]`; with `--base`: progress entry added, ADR for new dependencies |
 | `agents` | AGENTS.md block, CLAUDE.md import, GEMINI.md (each only for the editors chosen), `docs/agents/` runbooks | — | which agents and editors are in use | block and runbooks present and current; CLAUDE.md imports AGENTS.md; listed commands still exist |
 | `ci` | `swerepo-ci.yml`; ruff and pytest settings (per project in a monorepo) | — | the type checker (§19); keep existing linters or move to ruff gradually | workflow present, current or merged; `ci-ok` aggregates every job; Python versions match `requires-python`; every project root covered by a required check or recorded as not covered |
 | `security` | SECURITY.md, privacy workflow, `.gitignore` block | the privacy scan once, to report findings before committing | the security contact | files present; privacy scan clean; secret scanning on (if readable) |
@@ -386,6 +387,7 @@ not_covered = []                  # project roots knowingly outside every requir
 ```
 
 - **Hashes are of normalised content** (SHA-256, 64 hex characters, ADR-20261120-9495): UTF-8, no byte-order mark, LF line endings, trailing whitespace removed from each line, exactly one final newline. Line-ending conversion and end-of-file fixers don't make a file look edited. A formatter that changes more than that (reflowing Markdown, reformatting YAML) does, and `check` reports it as `~`; the generated files are written to pass ruff and common formatters unchanged.
+- **What is recorded:** files SWERepo keeps current (the ADR README and TEMPLATE, the `docs/agents/` runbooks, workflows, settings) and its blocks. Starter files it writes once (README, PROGRESS, CHANGELOG, CONTRIBUTING, the first progress entry) are the person's from then on and not recorded. The ADR README's generated index is left out of its hash (ADR-20261121-6c3d).
 - **Edited or not:** a file whose current hash equals `written` was not edited since SWERepo last wrote it. Otherwise a person changed it, and `update` merges (§16).
 - **Read and written with tomlkit**, so comments and unknown keys survive; validated on load; an older SWERepo never overwrites a file a newer one wrote (ADR-20261120-ecf7).
 - **No secrets, no personal data** ever go in this file. `[values]` holds only what is already in the repository's own files.
@@ -645,6 +647,13 @@ TypeScript (npm/pnpm, vitest/jest, eslint/prettier), matching SeamSpec's presets
 ---
 
 ## Appendix A: Revision history
+
+### 0.8 → 0.9
+
+Decisions from building Phase 3 (`init` for `docs` and `agents`; `adr`; `progress`):
+
+1. **How `init` applies** (ADR-20261121-6c3d): a plan first; managed files recorded, starter files not (§9); existing files only gain a marked block at the end; without a terminal, `--yes` or exit 2 (§7); an existing README is never edited and no license is picked (§6.5, §8); shorthand component flags on `init` and `check` (§7).
+2. **`adr new`, `adr index`, `progress`** (ADR-20261121-0b7e): SeamSpec's ADR names, the index generated in file-name order with `SUPERSEDED by <id>`, progress read-only.
 
 ### 0.7 → 0.8
 

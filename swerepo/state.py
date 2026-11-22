@@ -6,6 +6,7 @@ Validated on load; never saved over a file that a newer SWERepo wrote.
 
 from __future__ import annotations
 
+import datetime
 import os
 import re
 import tempfile
@@ -224,6 +225,26 @@ class State:
     def set_value(self, name: str, value: str | list[str]) -> None:
         _check_value(name, value)
         self._table("values")[name] = value
+
+    def set_hosts(self, hosts: list[str]) -> None:
+        """Record the editors chosen for the `agents` component (`[agents] hosts`)."""
+        _text_list(hosts, key="agents.hosts")
+        array = tomlkit.array()
+        array.extend(hosts)
+        self._table("agents")["hosts"] = array
+
+    def set_adopted(self, name: str, value: str) -> None:
+        """Record an existing convention SWERepo follows (`[adopted] adr_dir` or `progress_dir`)."""
+        if name not in ("adr_dir", "progress_dir"):
+            raise StateError(f"adopted.{name}: not a folder setting")
+        self._table("adopted")[name] = check_path(value, key=f"adopted.{name}")
+
+    def set_pr_rules(self, *, enforce: bool, warn_since: datetime.date | None = None) -> None:
+        """`[pr] enforce` (and, when warn-only, `warn_since`), spec §10. Other `[pr]` keys stay."""
+        table = self._table("pr")
+        table["enforce"] = enforce
+        if warn_since is not None:
+            table["warn_since"] = warn_since
 
     def set_file(self, path: str, record: Record) -> None:
         self._set_record("files", path, record)

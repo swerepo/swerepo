@@ -1,0 +1,35 @@
+{
+  "schema_version": "1",
+  "id": "inv_8314036c",
+  "title": "init never replaces or edits a file it didn't write, except adding its block at the end",
+  "assertion": "`swerepo init` keeps every existing file's text byte for byte: in a repository with its own README, AGENTS.md (CRLF, ending in two blank lines), CLAUDE.md (no final newline), CONTRIBUTING, CHANGELOG, PROGRESS and an ADR of its own, each file is either unchanged, or is its whole original text (blank lines at its end included) followed only by the line breaks that make one blank line and a single SWERepo marked block that ends the file, in the file's own line endings. AGENTS.md and CLAUDE.md both gain a block, and the ADR index init creates lists the person's ADR. After a person edits SWERepo's AGENTS.md block and a runbook it wrote, the next `init` leaves both as the person left them. A file or a SWERepo block that appears between the plan and applying it stops init with an error and nothing written: no file replaced, no block doubled, no other file or block added.",
+  "scope": {
+    "paths": [
+      "swerepo/init.py",
+      "swerepo/blocks.py",
+      "swerepo/adr.py",
+      "swerepo/cli.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "Phase 3 behaviour (SWEREPO-SPEC §5 principles 2 and 3). Strengthened after Gemini's review (P3-F02, P3-F07) and again after SeamSpec's reviewer found that init removed blank lines at the end of a person's file, that the no-final-newline and ADR cases weren't really exercised, and that a failed apply left unrecorded blocks behind; the code now keeps the text exactly and checks every target before writing. Checked to fail when blank lines are stripped, the pre-check is skipped, CRLF is lost on reading, an LF block goes into a CRLF file, or the created ADR index misses existing ADRs. Proposed for the owner to approve.",
+    "ref": "ADR-20261121-6c3d"
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_8314036c.py",
+    "harness_sha256": "5644290d282bce41519d72e0b662e1a1bf8dc6c96ab2971b2d4edac51f1061a1",
+    "assertion_sha256": "fe1b505b0ef1604756916adc865ebc499f2a24cfbcbf8800f8e64799574150c2"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-22T05:23:59.690215Z",
+  "approved_at": "2026-11-22T06:59:40.227636Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

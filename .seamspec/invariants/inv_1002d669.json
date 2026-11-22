@@ -1,0 +1,36 @@
+{
+  "schema_version": "1",
+  "id": "inv_1002d669",
+  "title": "init --dry-run writes nothing, and a second init on a set-up repository writes nothing",
+  "assertion": "In a git repository with a pyproject.toml and its own CLAUDE.md, `swerepo init --dry-run` exits 0, prints a plan with something to create, and leaves every file and folder unchanged (names, sizes, modification times and contents, `.git` included). After `swerepo init --yes` has applied it, a second `swerepo init --yes` exits 0, says \"Nothing to do.\" and again leaves everything unchanged.",
+  "scope": {
+    "paths": [
+      "swerepo/init.py",
+      "swerepo/blocks.py",
+      "swerepo/adr.py",
+      "swerepo/cli.py",
+      "swerepo/state.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "Phase 3 behaviour (SWEREPO-SPEC §5 principles 1 and 6). Marked critical and swerepo/adr.py added to its scope on Gemini's recommendation (Phase 3 review, Q5 and P3-F07): a dry run that writes is as trust-breaking as check writing. Checked to fail when the dry run applies, or when init rewrites .swerepo.toml on every run. Proposed for the owner to approve.",
+    "ref": "ADR-20261121-6c3d"
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_1002d669.py",
+    "harness_sha256": "4b76116657ce580f260656ffdcd4c1519df5c9511fa08542a2ed90b018c12ff5",
+    "assertion_sha256": "b76e4a028a1f55628056490cd3113f80e8f7d454e36ba25d0bee2a08ac66ded6"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-22T05:23:59.710590Z",
+  "approved_at": "2026-11-22T06:59:59.754693Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}
