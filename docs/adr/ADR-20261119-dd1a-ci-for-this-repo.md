@@ -1,12 +1,12 @@
 ---
 id: ADR-20261119-dd1a
 title: CI for this repository, with a single required check
-status: ACCEPTED
+status: SUPERSEDED
 date: 2026-11-19
 scopes: [".github/workflows/ci.yml"]
 invariants: []
 supersedes: null
-superseded_by: null
+superseded_by: ADR-20261123-d27b
 ---
 
 # ADR-20261119-dd1a: CI for this repository, with a single required check
