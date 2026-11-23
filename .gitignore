@@ -29,3 +29,15 @@ htmlcov/
 
 # SeamSpec: your personal scratchpad (remove this line to share it)
 BRAINDUMP.md
+
+# swerepo:begin
+# Local secrets and machine-specific files (SWEREPO-SPEC §6.4)
+.env
+.env.*
+!.env.example
+*.pem
+.DS_Store
+Thumbs.db
+.idea/
+.claude/settings.local.json
+# swerepo:end

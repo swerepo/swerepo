@@ -343,4 +343,5 @@ def test_this_repository():
     assert [a.path for a in found.adr_dirs] == ["docs/adr"] and found.adr_dirs[0].count >= 13
     assert found.seamspec and found.pytest_configured
     assert [linter.name for linter in found.linters] == ["ruff"]
-    assert any(w.path == ".github/workflows/ci.yml" and w.runs_pytest for w in found.workflows)
+    # set up by swerepo init since ADR-20261123-d27b (the hand-written ci.yml before it)
+    assert any(w.path == ".github/workflows/swerepo-ci.yml" and w.runs_pytest for w in found.workflows)

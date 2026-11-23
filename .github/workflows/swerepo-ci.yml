@@ -1,0 +1,190 @@
+# Written by SWERepo (SWEREPO-SPEC §6.2, ADR-20261122-4a06). `swerepo update` keeps it current and merges
+# your edits. A ruleset requires only `ci-ok`, which passes when every other job passed or was skipped by design.
+name: swerepo-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the run still going for its previous commit; runs on pushes always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.9.28"
+          python-version: "3.14"
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.9.28"
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked
+      - run: uv run pytest
+
+  # macOS minutes cost about ten times more on private repositories: pushes only (spec §6.2).
+  test-macos:
+    if: github.event_name == 'push'
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.9.28"
+          python-version: "3.14"
+      - run: uv sync --locked
+      - run: uv run pytest
+
+  # A static security audit of every workflow in .github/workflows/.
+  workflow-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.9.28"
+      - run: uvx zizmor==1.32.0 --offline .github/workflows
+
+  # Locked SeamSpec rules, inside ci-ok so a failing rule blocks the merge (ADR-20261122-4a06). Without SeamSpec
+  # set up, the job says so and passes.
+  seamspec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # doctor --ci compares the ledger with the base branch
+          persist-credentials: false
+      - name: is SeamSpec set up?
+        id: setup
+        run: |
+          if [ -f .seamspec/config.toml ]; then
+            echo "on=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "SeamSpec isn't set up here: no locked rules to run."
+          fi
+      - if: steps.setup.outputs.on == 'true'
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.9.28"
+          python-version: "3.14"
+      - if: steps.setup.outputs.on == 'true'
+        run: uv sync --locked
+      # doctor --ci compares the ledger with a base: the pull request's base branch, or on a push every commit the
+      # push brought (its own default, HEAD~1, misses earlier commits of a multi-commit push).
+      - name: seamspec doctor
+        if: steps.setup.outputs.on == 'true'
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -eu
+          if [ "$EVENT" = "pull_request" ]; then
+            uvx seamspec==0.1.2 doctor --ci
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+              && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            uvx seamspec==0.1.2 doctor --ci --base "$BEFORE"
+          elif git rev-parse -q --verify "HEAD~1^{commit}" >/dev/null; then
+            uvx seamspec==0.1.2 doctor --ci --base HEAD~1
+          else
+            uvx seamspec==0.1.2 doctor --ci --base HEAD  # a root commit: nothing earlier to compare with
+          fi
+      - if: steps.setup.outputs.on == 'true'
+        run: uvx seamspec==0.1.2 verify --all --ci
+      # The earned spec must match the approved rules (spec §6.8).
+      - if: steps.setup.outputs.on == 'true' && hashFiles('docs/EARNED_SPEC.md') != ''
+        run: uvx seamspec==0.1.2 spec --check docs/EARNED_SPEC.md
+
+  # New dependencies with known vulnerabilities fail the pull request. Needs a paid plan on private
+  # repositories, so it runs on pull requests to public ones only (spec §6.2).
+  dependency-review:
+    if: github.event_name == 'pull_request' && !github.event.repository.private
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294  # v5.0.0
+
+  # The pull-request rules and the standard (spec §15): a progress entry, ADRs for new dependencies and
+  # workflow changes, and every chosen component in place.
+  governance:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # check --base compares with the base branch
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.9.28"
+          python-version: "3.14"
+      - name: swerepo check
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: uv run --locked swerepo check --ci --base "origin/$BASE_REF" --author "$AUTHOR"
+
+  # The one check a ruleset requires. Every job must succeed, except one skipped by design, which must be
+  # skipped: test-macos off pushes, governance off pull requests, dependency-review off pull requests to
+  # public repositories. A failed, cancelled or unexpectedly skipped job fails it.
+  ci-ok:
+    if: always()
+    needs: [lint, test, test-macos, workflow-audit, seamspec, dependency-review, governance]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: every job passed, or was skipped by design
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+          PRIVATE: ${{ github.event.repository.private }}
+        run: |
+          set -eu
+          wrong=$(printf '%s' "$NEEDS" | jq -r --arg event "$EVENT" --arg private "$PRIVATE" '
+            to_entries[]
+            | (if .key == "test-macos" then (if $event == "push" then "success" else "skipped" end)
+               elif .key == "governance" then (if $event == "pull_request" then "success" else "skipped" end)
+               elif .key == "dependency-review" then
+                 (if $event == "pull_request" and $private == "false" then "success" else "skipped" end)
+               else "success" end) as $expected
+            | select(.value.result != $expected)
+            | "\(.key): \(.value.result) (expected \($expected))"')
+          if [ -n "$wrong" ]; then
+            printf '%s\n' "$wrong"
+            exit 1
+          fi
+          echo "Every job passed or was skipped by design."
