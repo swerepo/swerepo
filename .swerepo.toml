@@ -33,8 +33,8 @@ written = "ccc42d0b97064ad270cb457bb87e65dff002c13ca45b3bb116f2c5dc081f7fcb"
 
 [files."docs/agents/address-review.md"]
 template = "agents/address-review@1"
-rendered = "5060e17d75880836b1e07cf0ae88d92aff69e534b7615615275c01ca972a35c8"
-written = "5060e17d75880836b1e07cf0ae88d92aff69e534b7615615275c01ca972a35c8"
+rendered = "1d7d96153c661c11a75a3b5012abdc70477d123bfc5f6eac3efa3eda832a409d"
+written = "1d7d96153c661c11a75a3b5012abdc70477d123bfc5f6eac3efa3eda832a409d"
 
 [files."docs/agents/record-adr.md"]
 template = "agents/record-adr@1"
