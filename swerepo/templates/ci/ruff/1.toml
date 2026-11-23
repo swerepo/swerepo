@@ -1,0 +1,4 @@
+[tool.ruff]
+# Locked SeamSpec tests are never linted or reformatted: any edit counts as tampering (SWEREPO-SPEC §6.3).
+extend-exclude = [".seamspec"]
+@@ruff_line_length@@

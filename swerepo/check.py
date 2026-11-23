@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from swerepo import __version__, standard
+from swerepo import __version__, ci, privacy, standard
 from swerepo.blocks import file_fingerprint
 from swerepo.detect import Detection, detect
 from swerepo.fingerprint import HASH, HTML, BlockError, comment_style, find_block, fingerprint
@@ -328,10 +328,8 @@ def _ci(ctx: Context) -> list[Finding]:
         found.append(_missing(c, "ci.workflow", f"swerepo-ci.yml missing{note}", standard.CI_WORKFLOW))
     else:
         found.append(_ok(c, "ci.workflow", "swerepo-ci.yml", standard.CI_WORKFLOW))
-        if re.search(r"^  ci-ok:\s*(#.*)?$", text, re.MULTILINE):
-            found.append(_ok(c, "ci.ci-ok", "swerepo-ci.yml has a ci-ok job", standard.CI_WORKFLOW))
-        else:
-            found.append(_missing(c, "ci.ci-ok", "swerepo-ci.yml has no ci-ok job", standard.CI_WORKFLOW))
+        found.append(_ci_ok(text))
+        found.extend(_python_matrix(ctx, text))
 
     detected = {linter.name for linter in d.linters}
     kept = [str(name) for name in ctx.adopted.get("linters", [])]
@@ -347,9 +345,142 @@ def _ci(ctx: Context) -> list[Finding]:
         found.append(_missing(c, "ci.linter", "no linter or formatter configured (ruff, or the project's own)"))
     if d.seamspec:
         found.append(_seamspec_excluded(ctx, detected))
-    if d.is_monorepo:
-        message = "every project covered by a required check: checked from Phase 4"
-        found.append(Finding(c, "ci.projects", UNKNOWN, message))
+    if d.is_monorepo or (ctx.state is not None and ctx.state.projects_listed):
+        found.extend(_projects_covered(ctx, text or ""))
+    return found
+
+
+_JOB = re.compile(r"^  (?P<job>[A-Za-z_][\w-]*):\s*(?:#.*)?$")
+_NEEDS_INLINE = re.compile(r"^    needs:\s*(?P<value>[^#]*?)\s*(?:#.*)?$")
+_LIST_ITEM = re.compile(r"^      -\s*(?P<item>[\w-]+)\s*(?:#.*)?$")
+_MATRIX = re.compile(r"^ +python:\s*\[(?P<items>[^\]]*)\]\s*(?:#.*)?$")
+
+
+def workflow_jobs(text: str) -> dict[str, list[str]]:
+    """The jobs of a workflow SWERepo wrote, each with its `needs:`, read from the text (two-space indents)."""
+    jobs: dict[str, list[str]] = {}
+    current: str | None = None
+    in_jobs = in_needs_list = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue  # a comment, even at column 0, doesn't end `jobs:` (review: Copilot on PR #8)
+        if not line.startswith(" ") and line.strip():
+            in_jobs, current = line.split("#", 1)[0].strip() == "jobs:", None
+            continue
+        if not in_jobs:
+            continue
+        if job := _JOB.match(line):
+            current, in_needs_list = job["job"], False
+            jobs[current] = []
+            continue
+        if current is None:
+            continue
+        if needs := _NEEDS_INLINE.match(line):
+            value = needs["value"].strip()
+            in_needs_list = not value
+            jobs[current] = [n.strip() for n in value.strip("[]").split(",") if n.strip()] if value else []
+        elif in_needs_list and (item := _LIST_ITEM.match(line)):
+            jobs[current].append(item["item"])
+        elif line.strip() and not line.startswith("      "):
+            in_needs_list = False
+    return jobs
+
+
+def _ci_ok(text: str) -> Finding:
+    """`ci-ok` waits for every other job (spec §6.2): the ruleset requires only it."""
+    c, item = "ci", "ci.ci-ok"
+    jobs = workflow_jobs(text)
+    if "ci-ok" not in jobs:
+        return _missing(c, item, "swerepo-ci.yml has no ci-ok job", standard.CI_WORKFLOW)
+    left_out = [job for job in jobs if job != "ci-ok" and job not in jobs["ci-ok"]]
+    if left_out:
+        message = f"ci-ok doesn't wait for {', '.join(left_out)}: a failure there wouldn't block a merge"
+        return _missing(c, item, message, standard.CI_WORKFLOW)
+    return _ok(c, item, "ci-ok waits for every job", standard.CI_WORKFLOW)
+
+
+def _versions(items: list[str]) -> str:
+    return f"{items[0]}–{items[-1]}" if len(items) > 1 else (items[0] if items else "none")
+
+
+def job_blocks(text: str) -> dict[str, str]:
+    """Each job's lines (two-space indents), by job name; comment lines left out."""
+    blocks: dict[str, list[str]] = {}
+    current: str | None = None
+    in_jobs = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if not line.startswith(" ") and line.strip():
+            in_jobs, current = line.split("#", 1)[0].strip() == "jobs:", None
+            continue
+        if in_jobs and (job := _JOB.match(line)):
+            current = job["job"]
+            blocks[current] = []
+        elif in_jobs and current is not None:
+            blocks[current].append(line)
+    return {name: "\n".join(lines) for name, lines in blocks.items()}
+
+
+def _python_matrix(ctx: Context, text: str) -> list[Finding]:
+    """Each test job's matrix matches what its project declares (spec §6.2): the root's `test` job, and each listed
+    project's `test-<name>` job against that project's own `requires-python` (review: Copilot on PR #8)."""
+    c = "ci"
+    blocks = job_blocks(text)
+    listed = ctx.state.projects_listed if ctx.state else []
+    found: list[Finding] = []
+    for folder, job in ((".", "test"), *((f, "test-" + ci.Project(f, "", []).job) for f in listed)):
+        item = "ci.python-matrix" if folder == "." else f"ci.python-matrix:{folder}"
+        where = "" if folder == "." else f"{folder}/: "
+        match = next((m for line in blocks.get(job, "").splitlines() if (m := _MATRIX.match(line))), None)
+        if match is None:
+            message = f"{where}can't find the Python versions of the {job} job in swerepo-ci.yml"
+            found.append(Finding(c, item, UNKNOWN, message, standard.CI_WORKFLOW))
+            continue
+        tested = [v.strip().strip("'\"") for v in match["items"].split(",") if v.strip()]
+        detection = ctx.detection if folder == "." else detect(ctx.root / folder)
+        declared, _ = ci.python_versions(detection)
+        if not declared:
+            message = f"{where}requires-python allows no Python version standard 1 knows"
+            found.append(Finding(c, item, UNKNOWN, message))
+        elif tested == declared:
+            message = f"{where}tests Python {_versions(tested)}, as the project declares"
+            found.append(_ok(c, item, message, standard.CI_WORKFLOW))
+        else:
+            message = (
+                f"{where}tests Python {_versions(tested)}; the project declares {_versions(declared)}: swerepo update"
+            )
+            found.append(Finding(c, item, OUTDATED, message, standard.CI_WORKFLOW))
+    return found
+
+
+def _projects_covered(ctx: Context, text: str) -> list[Finding]:
+    """Every project root covered by a SWERepo job or recorded as not covered (spec §11)."""
+    c = "ci"
+    listed = ctx.state.projects_listed if ctx.state else []
+    skipped = ctx.state.projects_not_covered if ctx.state else []
+    github = ctx.state.doc.get("github") if ctx.state else None
+    extra = list(github.get("extra_required_checks", [])) if github is not None else []
+    jobs = workflow_jobs(text)
+    found: list[Finding] = []
+    # every project root detection found, and every listed folder, also those it skips (`tools/`; P4-F06)
+    folders = dict.fromkeys([*(p.path for p in ctx.detection.projects if p.path != "."), *listed])
+    for folder in folders:
+        item = f"ci.projects:{folder}"
+        job = ci.Project(folder, "", []).job
+        if folder in listed and f"lint-{job}" in jobs and f"test-{job}" in jobs:
+            found.append(_ok(c, item, f"{folder}/ has its own jobs in swerepo-ci.yml", folder))
+        elif folder in listed:
+            message = (f"{folder}/ is listed, but swerepo-ci.yml lacks its lint or test job: "
+                       f"swerepo init --only ci --projects {','.join(listed)}")  # fmt: skip
+            found.append(_missing(c, item, message, folder))
+        elif folder in skipped:
+            found.append(_ok(c, item, f"{folder}/ recorded as not covered", folder))
+        elif extra:
+            message = f"{folder}/: whether [github] extra_required_checks cover it can't be told from files"
+            found.append(Finding(c, item, UNKNOWN, message, folder))
+        else:
+            found.append(_missing(c, item, f"{folder}/ not covered by any required check", folder))
     return found
 
 
@@ -371,8 +502,15 @@ def _seamspec_excluded(ctx: Context, linters: set[str]) -> Finding:
     """Locked SeamSpec tests must never be reformatted (SeamSpec ADR-20261013-c3f7, spec §6.3)."""
     c, item = "ci", "ci.seamspec-excluded"
     if "ruff" not in linters:
-        others = ", ".join(sorted(linters)) or "the project's linters"
-        return Finding(c, item, UNKNOWN, f"whether {others} skip .seamspec: checked from Phase 4")
+        if not linters:
+            return Finding(c, item, UNKNOWN, "no linter found to check for .seamspec")
+        touching = [name for name in sorted(linters) if not _settings_mention_seamspec(ctx, name)]
+        if not touching:
+            verb = "skips" if len(linters) == 1 else "skip"
+            return _ok(c, item, f"{', '.join(sorted(linters))} {verb} .seamspec (their own settings)")
+        message = (f"{', '.join(touching)} would touch locked SeamSpec tests when run locally: exclude .seamspec in "
+                   "their settings (swerepo-ci.yml's lint job already does)")  # fmt: skip
+        return Finding(c, item, CHANGED, message)
     for source in ("ruff.toml", ".ruff.toml", "pyproject.toml"):
         text = ctx.read(source)
         if text is None:
@@ -393,17 +531,60 @@ def _seamspec_excluded(ctx: Context, linters: set[str]) -> Finding:
     return Finding(c, item, UNKNOWN, "can't find ruff's configuration to see whether it skips .seamspec")
 
 
+def _settings_mention_seamspec(ctx: Context, linter: str) -> bool:
+    """Whether a kept linter's own settings name `.seamspec` (spec §6.3), in every place it is configured."""
+    places = next((found.configured_in for found in ctx.detection.linters if found.name == linter), ())
+    for place in places:
+        name, _, section = place.partition(" ")
+        text = ctx.read(name) or ""
+        if name == "pyproject.toml":
+            try:
+                tool = tomllib.loads(text).get("tool", {})
+            except tomllib.TOMLDecodeError:
+                return False
+            text = repr(tool.get(linter, {})) if isinstance(tool, dict) else ""
+        elif section:
+            wanted = section.strip("[]")
+            text = "\n".join(_ini_section(text, wanted))
+        if ".seamspec" not in text:  # pre-commit too: its hooks take an `exclude:` (review P4-F06)
+            return False
+    return bool(places)
+
+
+def _ini_section(text: str, wanted: str) -> list[str]:
+    lines, inside_section = [], False
+    for line in text.splitlines():
+        if heading := re.match(r"^\[(?P<name>[^\]]+)\]", line.strip()):
+            inside_section = heading["name"].split(".")[0] == wanted
+        elif inside_section:
+            lines.append(line)
+    return lines
+
+
 def _security(ctx: Context) -> list[Finding]:
     c = "security"
-    found = [
-        _present(ctx, c, "security.policy", "SECURITY.md"),
-        _present(ctx, c, "security.workflow", standard.PRIVACY_WORKFLOW, "privacy workflow"),
-    ]
+    policy = ctx.detection.documents.get("security") or ("SECURITY.md" if ctx.exists("SECURITY.md") else None)
+    if policy:
+        found = [_ok(c, "security.policy", policy, policy)]
+    else:
+        found = [_missing(c, "security.policy", "SECURITY.md missing", "SECURITY.md")]
+    if ctx.exists(standard.PRIVACY_WORKFLOW):
+        message = f"privacy workflow ({standard.PRIVACY_WORKFLOW})"
+        found.append(_ok(c, "security.workflow", message, standard.PRIVACY_WORKFLOW))
+    else:
+        how = "" if ci.released() else ": needs a released SWERepo, or swerepo init --with-governance"
+        message = f"privacy workflow missing ({standard.PRIVACY_WORKFLOW}){how}"
+        found.append(_missing(c, "security.workflow", message, standard.PRIVACY_WORKFLOW))
     text = ctx.read(".gitignore")
     if text is None:
         found.append(_missing(c, "security.gitignore", ".gitignore missing", ".gitignore"))
     else:
         found.append(_block_finding(c, "security.gitignore", ".gitignore", text))
+    hits = privacy.scan(ctx.root, ctx.state.privacy_allow_paths if ctx.state else [])
+    if hits:
+        found.append(_missing(c, "security.privacy-scan", privacy.summary(hits), hits[0].path))
+    else:
+        found.append(_ok(c, "security.privacy-scan", "privacy scan: nothing found"))
     return found
 
 

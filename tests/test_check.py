@@ -35,7 +35,8 @@ STANDARD_FILES = {
     "docs/agents/address-review.md": "x\n",
     "docs/agents/record-adr.md": "x\n",
     ".github/workflows/swerepo-ci.yml": (
-        "jobs:\n  test:\n    steps:\n      - run: pytest\n      - run: seamspec verify --all\n"
+        'jobs:\n  test:\n    strategy:\n      matrix:\n        python: ["3.11", "3.12", "3.13", "3.14"]\n'
+        "    steps:\n      - run: pytest\n      - run: seamspec verify --all\n"
         "  ci-ok:\n    needs: [test]\n"
     ),
     "pyproject.toml": (
@@ -181,10 +182,22 @@ def test_kept_linters_and_editors_from_the_state_file(repo: Path):
     report = run_check(repo)
     findings = by_item(report)
     assert findings["ci.linter"].message == "linting: black (kept)"
-    assert findings["ci.seamspec-excluded"].status == UNKNOWN  # checked from Phase 4 for other linters
+    excluded = findings["ci.seamspec-excluded"]  # black's own settings don't skip locked SeamSpec tests (spec §6.3)
+    assert excluded.status == CHANGED and excluded.message.startswith("black would touch locked SeamSpec tests")
     assert findings["agents.gemini"].status == MISSING  # Antigravity is in use, so GEMINI.md is needed
     assert by_item(report)["docs.chosen"].status == NOT_CHOSEN
     assert report.components == ["agents", "ci"]
+    (repo / "pyproject.toml").write_text('[project]\nname = "demo"\n[tool.black]\nextend-exclude = "\\\\.seamspec"\n')
+    assert by_item(run_check(repo))["ci.seamspec-excluded"].status == OK
+
+
+def test_kept_linters_in_ini_files_and_their_seamspec_settings(repo: Path):
+    make(repo, {"pyproject.toml": '[project]\nname = "demo"\n', "setup.cfg": "[flake8]\nmax-line-length = 100\n"})
+    finding = by_item(run_check(repo, only=["ci"]))["ci.seamspec-excluded"]
+    assert finding.status == CHANGED and "flake8" in finding.message
+    make(repo, {"setup.cfg": "[flake8]\nextend-exclude = .seamspec\n[isort]\nprofile = black\n"})
+    finding = by_item(run_check(repo, only=["ci"]))["ci.seamspec-excluded"]
+    assert finding.status == CHANGED and finding.message.startswith("isort would touch")  # flake8 now skips it
 
 
 def test_only_checks_the_named_components(repo: Path):
@@ -224,7 +237,11 @@ def test_ruff_must_skip_all_of_seamspec(repo: Path, entries: str, status: str):
 def test_yaml_comments_dont_count(repo: Path):
     workflow = ".github/workflows/swerepo-ci.yml"
     make(
-        repo, {workflow: "jobs:\n  test:\n    steps:\n      - run: pytest  # seamspec verify --all\n  ci-ok:  # gate\n"}
+        repo,
+        {
+            workflow: "jobs:\n  test:\n    steps:\n      - run: pytest  # seamspec verify --all\n"
+            "  ci-ok:  # gate\n    needs: [test]  # every job\n"
+        },
     )
     findings = by_item(run_check(repo))
     assert findings["ci.ci-ok"].status == OK  # a comment after the job name is fine
@@ -257,10 +274,45 @@ def test_a_subfolder_of_a_repository_is_noted(repo: Path):
     assert finding.status == UNKNOWN and "inside a git repository" in finding.message
 
 
-def test_monorepo_coverage_is_a_later_check(repo: Path):
-    make(repo, {"services/api/pyproject.toml": '[project]\nname = "api"\n'})
-    finding = by_item(run_check(repo, only=["ci"]))["ci.projects"]
-    assert finding.status == UNKNOWN and "Phase 4" in finding.message
+def test_every_monorepo_project_is_covered_or_recorded(repo: Path):
+    make(repo, {"services/api/pyproject.toml": '[project]\nname = "api"\n', "web/package.json": "{}\n"})
+    findings = by_item(run_check(repo, only=["ci"]))
+    assert findings["ci.projects:services/api"].message == "services/api/ not covered by any required check"
+    assert findings["ci.projects:web"].status == MISSING
+    state = 'standard = 1\nswerepo = "0.0.1"\ncomponents = ["ci"]\n'
+    make(repo, {FILE_NAME: state + '[projects]\nlisted = ["services/api"]\nnot_covered = ["web"]\n'})
+    findings = by_item(run_check(repo, only=["ci"]))
+    assert findings["ci.projects:services/api"].status == MISSING  # listed, but the workflow has no jobs for it
+    assert findings["ci.projects:web"].status == OK and "recorded as not covered" in findings["ci.projects:web"].message
+    workflow = STANDARD_FILES[".github/workflows/swerepo-ci.yml"].replace(
+        "  ci-ok:\n    needs: [test]",
+        "  lint-services-api:\n    steps: []\n  test-services-api:\n    steps: []\n"
+        "  ci-ok:\n    needs: [test, lint-services-api, test-services-api]",
+    )
+    make(repo, {".github/workflows/swerepo-ci.yml": workflow})
+    findings = by_item(run_check(repo, only=["ci"]))
+    assert findings["ci.projects:services/api"].status == OK and findings["ci.ci-ok"].status == OK
+    make(repo, {FILE_NAME: state + '[github]\nextra_required_checks = ["web-tests"]\n'})
+    assert by_item(run_check(repo, only=["ci"]))["ci.projects:web"].status == UNKNOWN
+
+
+def test_ci_ok_must_wait_for_every_job(repo: Path):
+    workflow = ".github/workflows/swerepo-ci.yml"
+    make(repo, {workflow: "jobs:\n  lint:\n    steps: []\n  test:\n    steps: []\n  ci-ok:\n    needs: [test]\n"})
+    finding = by_item(run_check(repo, only=["ci"]))["ci.ci-ok"]
+    assert finding.status == MISSING and finding.message.startswith("ci-ok doesn't wait for lint")
+    make(repo, {workflow: "jobs:\n  lint:\n    steps: []\n  ci-ok:\n    needs:\n      - lint\n    steps: []\n"})
+    assert by_item(run_check(repo, only=["ci"]))["ci.ci-ok"].status == OK  # a block list counts too
+
+
+@pytest.mark.parametrize(
+    ("requires", "status"),
+    [(">=3.11", OK), (">=3.12", OUTDATED), (None, OK), (">=3.99", UNKNOWN)],
+)
+def test_the_python_matrix_follows_requires_python(repo: Path, requires: str | None, status: str):
+    declared = f'requires-python = "{requires}"\n' if requires else ""
+    make(repo, {"pyproject.toml": f'[project]\nname = "demo"\n{declared}[tool.ruff]\nextend-exclude = [".seamspec"]\n'})
+    assert by_item(run_check(repo, only=["ci"]))["ci.python-matrix"].status == status  # none declared: 3.11–3.14
 
 
 def test_a_component_named_with_only_is_checked_even_if_not_chosen(repo: Path):

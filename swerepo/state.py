@@ -168,6 +168,38 @@ class State:
         return [] if projects is None else [str(p) for p in projects.get("ignore", [])]
 
     @property
+    def projects_listed(self) -> list[str]:
+        """Python projects with their own CI jobs (`[projects] listed`, spec §11)."""
+        projects = self.doc.get("projects")
+        return [] if projects is None else [str(p) for p in projects.get("listed", [])]
+
+    @property
+    def project_inputs(self) -> dict[str, dict[str, Any]]:
+        """What each listed project's CI jobs were rendered from (`[projects.inputs."<folder>"]`: python, install,
+        lint, linters), so `update` can rebuild them (review: Copilot on PR #8)."""
+        projects = self.doc.get("projects")
+        inputs = projects.get("inputs") if projects is not None else None
+        return {} if inputs is None else {str(k): dict(v) for k, v in inputs.unwrap().items()}
+
+    @property
+    def projects_not_covered(self) -> list[str]:
+        """Project roots knowingly outside every required check (`[projects] not_covered`, spec §11)."""
+        projects = self.doc.get("projects")
+        return [] if projects is None else [str(p) for p in projects.get("not_covered", [])]
+
+    @property
+    def privacy_allow_paths(self) -> list[str]:
+        """Files or globs the privacy scan skips (`[privacy] allow_paths`, spec §6.4)."""
+        privacy = self.doc.get("privacy")
+        return [] if privacy is None else [str(p) for p in privacy.get("allow_paths", [])]
+
+    @property
+    def tools(self) -> dict[str, str]:
+        """Versions of other tools the workflows pin (`[tools]`), e.g. `seamspec`."""
+        table = self.doc.get("tools")
+        return {} if table is None else {str(k): str(v) for k, v in table.unwrap().items()}
+
+    @property
     def components_chosen(self) -> bool:
         """Whether the file records `components`, even as an empty list (then nothing is chosen)."""
         return "components" in self.doc
@@ -238,6 +270,42 @@ class State:
         if name not in ("adr_dir", "progress_dir"):
             raise StateError(f"adopted.{name}: not a folder setting")
         self._table("adopted")[name] = check_path(value, key=f"adopted.{name}")
+
+    def set_adopted_linters(self, linters: list[str]) -> None:
+        """Record the linters kept instead of ruff (`[adopted] linters`, spec §6.3)."""
+        _text_list(linters, key="adopted.linters")
+        array = tomlkit.array()
+        array.extend(linters)
+        self._table("adopted")["linters"] = array
+
+    def set_projects_listed(self, folders: list[str]) -> None:
+        """Record the Python projects that have their own CI jobs (`[projects] listed`, spec §11)."""
+        _text_list(folders, key="projects.listed")
+        array = tomlkit.array()
+        array.extend(check_path(folder, key="projects.listed") for folder in folders)
+        self._table("projects")["listed"] = array
+
+    def set_project_inputs(self, inputs: dict[str, dict[str, Any]]) -> None:
+        """Record each listed project's rendering inputs, replacing those of projects no longer listed."""
+        table = tomlkit.table(is_super_table=True)
+        for folder, values in inputs.items():
+            check_path(folder, key="projects.inputs")
+            _check_project_inputs(folder, values)
+            entry = tomlkit.table()
+            for name, value in values.items():
+                if isinstance(value, list):
+                    array = tomlkit.array()
+                    array.extend(value)
+                    entry.add(name, array)
+                else:
+                    entry.add(name, value)
+            table.add(folder, entry)
+        self._table("projects")["inputs"] = table
+
+    def set_tool(self, name: str, version: str) -> None:
+        """Record the version of another tool a workflow pins (`[tools] seamspec`)."""
+        _check_tool(name, version)
+        self._table("tools")[name] = version
 
     def set_pr_rules(self, *, enforce: bool, warn_since: datetime.date | None = None) -> None:
         """`[pr] enforce` (and, when warn-only, `warn_since`), spec §10. Other `[pr]` keys stay."""
@@ -390,11 +458,46 @@ def _validate(doc: TOMLDocument, running: str = __version__) -> None:
     projects = data.get("projects", {})
     if not isinstance(projects, dict):
         raise StateError("projects: must be a table")
-    ignore = projects.get("ignore", [])
-    if not isinstance(ignore, list):
-        raise StateError("projects.ignore: must be a list of folders")
-    for folder in ignore:
-        check_path(folder, key="projects.ignore")
+    inputs = projects.get("inputs", {})
+    if not isinstance(inputs, dict):
+        raise StateError("projects.inputs: must be a table of folders")
+    for folder, values in inputs.items():
+        check_path(folder, key="projects.inputs")
+        _check_project_inputs(folder, values)
+    for key in ("ignore", "listed", "not_covered"):
+        folders = projects.get(key, [])
+        if not isinstance(folders, list):
+            raise StateError(f"projects.{key}: must be a list of folders")
+        for folder in folders:
+            check_path(folder, key=f"projects.{key}")
+    privacy = data.get("privacy", {})
+    if not isinstance(privacy, dict):
+        raise StateError("privacy: must be a table")
+    if "allow_paths" in privacy:
+        _text_list(privacy["allow_paths"], key="privacy.allow_paths")
+    tools = data.get("tools", {})
+    if not isinstance(tools, dict):
+        raise StateError("tools: must be a table of versions")
+    for name, version in tools.items():
+        _check_tool(name, version)
+
+
+# A tool's version (or a word such as "absent"): written into workflow commands, so one plain word only (P4-F03).
+_TOOL_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+!_-]*$")
+
+
+def _check_tool(name: str, version: Any) -> None:
+    if not isinstance(version, str) or not _TOOL_VERSION.fullmatch(version):
+        raise StateError(f"tools.{name}: must be a version")
+
+
+def _check_project_inputs(folder: str, values: Any) -> None:
+    """A listed project's recorded inputs: text and lists of text only (their meaning is checked where used)."""
+    if not isinstance(values, dict):
+        raise StateError(f"projects.inputs.{folder}: must be a table")
+    for name, value in values.items():
+        if not (isinstance(value, str) or (isinstance(value, list) and all(isinstance(v, str) for v in value))):
+            raise StateError(f"projects.inputs.{folder}.{name}: must be text or a list of text")
 
 
 def _text_list(value: Any, *, key: str) -> None:

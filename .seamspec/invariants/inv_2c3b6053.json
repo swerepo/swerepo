@@ -1,0 +1,35 @@
+{
+  "schema_version": "1",
+  "id": "inv_2c3b6053",
+  "title": "swerepo-ci.yml tests exactly the Python versions each project declares",
+  "assertion": "In the `.github/workflows/swerepo-ci.yml` that `swerepo init` writes, the `test` job's matrix is exactly the Python versions the root project's `requires-python` allows (3.11 to 3.14 when it declares none), each listed project's `test-<name>` job uses its own project's versions, and `test-macos` runs on the newest declared version. Tried with `>=3.12`, `>=3.11,<3.14`, no declaration, and a listed project declaring `>=3.13`.",
+  "scope": {
+    "paths": [
+      "swerepo/ci.py",
+      "swerepo/init.py",
+      "swerepo/detect.py",
+      "swerepo/templates/ci/"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261122-4a06 point 7 and SWEREPO-SPEC §6.2: CI tests every Python version the project supports, from requires-python, and never changes the declared range. Split from inv_09cc1c20 after SeamSpec's reviewer asked for each test job and more than one range to be checked.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_2c3b6053.py",
+    "harness_sha256": "48c1c37576f706e58a3ff8ab64aab38f42e17c08181e15adb41f8f5b1dbf2fd7",
+    "assertion_sha256": "182f86593f87cf0e5070d5323540e6913f08d492db8605ec580c41e1f0bd7b86"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-23T07:35:19.952887Z",
+  "approved_at": "2026-11-23T07:46:39.048553Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": false
+}
