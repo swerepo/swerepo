@@ -415,3 +415,22 @@ Round 3 found nothing new and accepted P4-F10 and P4-F11, so all 11 findings are
 - **Since Gemini's round 3 run:** the owner approved the three rules (Gemini's run saw 10 locked rules and 2 proposed). Now 13 rules are locked and all pass. `seamspec spec --check` is clean after regenerating `docs/EARNED_SPEC.md`, and `seamspec doctor` reports 0 errors and 0 warnings.
 - **Final results:** pytest 496 passed; ruff clean; `swerepo check --base main` finds nothing missing.
 - **Next:** the pull request for Phase 4, then a separate pull request that applies `ci` and `security` to this repository.
+
+---
+
+## Copilot's review of PR #8
+
+Copilot left 8 inline comments. Each was reproduced on the PR's code before any change, and each is fixed, with a regression test in `TestCopilotReviewPR8` (`tests/test_init_ci.py`, `tests/test_security.py`). For four of the fixes I put the bug back and saw its test fail. pytest: 510 passed; ruff clean; 13 locked rules pass.
+
+| Thread | Finding | Response |
+|---|---|---|
+| `swerepo/check.py` `workflow_jobs` | A comment at column 0 inside `jobs:` ended the jobs section, so later jobs were invisible to the `ci-ok` check | **Fix:** comment lines are skipped before the section is tracked (`test_a_comment_at_column_0_doesnt_end_jobs`) |
+| `swerepo/init.py` `_listed_projects` | `--projects macos` made a second `test-macos` job | **Fix:** a folder whose jobs would take a fixed job's name is refused (`ci.FIXED_JOBS`) |
+| `swerepo/check.py` `_python_matrix` | The first `python:` matrix anywhere counted as the root's, and listed projects' matrices were never compared | **Fix:** `check.job_blocks` reads the `test` job's matrix, and each listed project's `test-<name>` matrix is compared with that project's own `requires-python` (`ci.python-matrix:<folder>`) |
+| `swerepo/ci.py` dependencies | Tools in an extra or a non-default group counted as installed | **Fix:** `ci.installed_dependencies` counts what `uv sync` installs: dependencies, default groups (`[tool.uv] default-groups`, else `dev`, with `dev-dependencies`), `include-group` followed |
+| `swerepo/init.py` `_workflows` | A security-only run's recorded `python` decided the first CI workflow's versions | **Fix:** each workflow keeps its own snapshot; the privacy workflow records `privacy_python`, and the CI workflow's recorded inputs are read only while it is recorded |
+| `swerepo/init.py` `_project_inputs` (tools) | A listed project missing pytest or ruff got no warning | **Fix:** each new project's jobs are checked against what `uv sync` installs in its folder, and the note names that folder |
+| `swerepo/init.py` `_new_state` | Only folder names were recorded, so a project's jobs couldn't be rebuilt | **Fix:** each project's inputs are recorded under `[projects.inputs."<folder>"]` and used while the workflow is recorded; invalid recorded inputs are never used |
+| `swerepo/privacy.py` Google key | `\b` at the end missed a key ending in `-` | **Fix:** a negative lookahead for another key character (Slack's pattern too) |
+
+ADR-20261122-4a06 and spec §9 updated for the new recorded values.

@@ -90,7 +90,7 @@ class TestWorkflow:
         assert "- run: uv sync\n" in text and 'python: ["3.11", "3.12", "3.13", "3.14"]' in text
         found = notes(plan)
         assert any(n.startswith("no requires-python declared") for n in found)
-        assert "not among the project's dependencies: pytest, ruff (CI runs them: uv add --dev pytest ruff)" in found
+        assert "not among the project's installed dependencies: pytest, ruff (uv add --dev pytest ruff)" in found
 
     @pytest.mark.parametrize(
         ("files", "reason"),
@@ -370,3 +370,77 @@ class TestGeminiReviewRound2:
         make(project, {"pyproject.toml": PYPROJECT + f"\n[tool.uv.workspace]\nmembers = {members}\n",
                        "services/api/pyproject.toml": '[project]\nname = "api"\n'})  # fmt: skip
         assert ci.install_command(project, "services/api") == (install, "")
+
+
+class TestCopilotReviewPR8:
+    """Copilot's review of PR #8, each reproduced before the fix."""
+
+    def test_a_comment_at_column_0_doesnt_end_jobs(self):
+        text = "jobs:\n  a:\n    steps: []\n# more jobs\n  b:\n    steps: []\n  ci-ok:\n    needs: [a]\n"
+        assert list(workflow_jobs(text)) == ["a", "b", "ci-ok"]  # so ci-ok's missing `b` is seen
+
+    def test_a_project_named_like_a_fixed_job_is_refused(self, project: Path):
+        make(project, {"macos/pyproject.toml": '[project]\nname = "m"\n'})
+        with pytest.raises(UsageError, match="test-macos, which swerepo-ci.yml already uses"):
+            make_plan(project, only=["ci"], hosts=[], projects=["macos"])
+
+    def test_each_projects_matrix_is_checked_against_its_own_declaration(self, project: Path):
+        make(project, {"services/api/pyproject.toml": '[project]\nname = "api"\nrequires-python = ">=3.13"\n'})
+        init(project, only=["ci"], projects=["services/api"])
+        assert ci_findings(project)["ci.python-matrix:services/api"].status == OK
+        make(project, {"services/api/pyproject.toml": '[project]\nname = "api"\nrequires-python = ">=3.12"\n'})
+        finding = ci_findings(project)["ci.python-matrix:services/api"]
+        assert finding.status == "outdated" and "declares 3.12–3.14" in finding.message
+        workflow = project / WORKFLOW  # the root's matrix is read from the test job, not the first one anywhere
+        workflow.write_text(workflow.read_text().replace("  lint:\n", '  lint:\n    strategy:\n      matrix:\n'
+                                                         '        python: ["3.12", "3.13", "3.14"]\n', 1))  # fmt: skip
+        make(project, {"pyproject.toml": PYPROJECT.replace(">=3.12", ">=3.11")})
+        assert ci_findings(project)["ci.python-matrix"].status == "outdated"
+
+    @pytest.mark.parametrize(
+        ("tables", "missing"),
+        [
+            ('[project.optional-dependencies]\ndev = ["pytest", "ruff"]\n', True),  # extras: not installed
+            ('[dependency-groups]\ntest = ["pytest", "ruff"]\n', True),  # not a default group
+            ('[dependency-groups]\ntest = ["pytest", "ruff"]\n[tool.uv]\ndefault-groups = ["test"]\n', False),
+            ('[dependency-groups]\ntest = ["pytest", "ruff"]\ndev = [{include-group = "test"}]\n', False),
+            ('[tool.uv]\ndev-dependencies = ["pytest", "ruff"]\n', False),
+        ],
+    )
+    def test_tools_count_only_when_uv_sync_installs_them(self, tmp_path: Path, tables: str, missing: bool):
+        git_init(tmp_path)
+        make(tmp_path, {"pyproject.toml": '[project]\nname = "x"\nrequires-python = ">=3.12"\n' + tables})
+        found = notes(make_plan(tmp_path, only=["ci"], hosts=[]))
+        assert any("not among the project's installed dependencies" in n for n in found) is missing
+
+    def test_a_security_snapshot_doesnt_decide_cis_first_python_versions(self, project: Path):
+        init(project, only=["security"], with_governance=True)
+        privacy_before = (project / ".github/workflows/swerepo-privacy.yml").read_text()
+        make(project, {"pyproject.toml": PYPROJECT.replace(">=3.12", ">=3.11")})
+        plan = init(project, only=["ci", "security"])
+        assert 'python: ["3.11", "3.12", "3.13", "3.14"]' in (project / WORKFLOW).read_text()
+        assert action(plan, ".github/workflows/swerepo-privacy.yml").verb == CURRENT  # its own snapshot kept
+        assert (project / ".github/workflows/swerepo-privacy.yml").read_text() == privacy_before
+        values = State.load(project).values
+        assert values["python"] == ["3.11", "3.12", "3.13", "3.14"] and values["privacy_python"] == "3.14"
+
+    def test_a_projects_missing_tools_are_named_with_its_folder(self, project: Path):
+        make(project, {"services/api/pyproject.toml": '[project]\nname = "api"\n'})
+        found = notes(make_plan(project, only=["ci"], hosts=[], projects=["services/api"]))
+        assert (
+            "not among services/api/'s installed dependencies: pytest, ruff (uv add --dev pytest ruff in services/api)"
+            in found
+        )
+
+    def test_a_projects_inputs_are_recorded_and_rebuild_its_jobs(self, project: Path):
+        make(project, {"services/api/pyproject.toml": '[project]\nname = "api"\nrequires-python = ">=3.13"\n'})
+        init(project, only=["ci"], projects=["services/api"])
+        recorded = State.load(project).project_inputs["services/api"]
+        assert recorded == {"python": ["3.13", "3.14"], "install": "uv sync", "lint": "ruff", "linters": []}
+        api = project / "services/api/pyproject.toml"
+        api.write_text(api.read_text().replace(">=3.13", ">=3.12"))  # only the declaration changes
+        plan = init(project, only=["ci"])
+        assert action(plan, WORKFLOW).verb == CURRENT and not plan.changes  # rebuilt from what was recorded
+        bad = (project / ".swerepo.toml").read_text().replace('install = "uv sync"\nlint', 'install = "x"\nlint')
+        make(project, {".swerepo.toml": bad})  # an invalid recording is never used: detection decides again
+        assert ci.Project.from_inputs("services/api", State.load(project).project_inputs["services/api"]) is None

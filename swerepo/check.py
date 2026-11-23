@@ -329,7 +329,7 @@ def _ci(ctx: Context) -> list[Finding]:
     else:
         found.append(_ok(c, "ci.workflow", "swerepo-ci.yml", standard.CI_WORKFLOW))
         found.append(_ci_ok(text))
-        found.append(_python_matrix(ctx, text))
+        found.extend(_python_matrix(ctx, text))
 
     detected = {linter.name for linter in d.linters}
     kept = [str(name) for name in ctx.adopted.get("linters", [])]
@@ -362,6 +362,8 @@ def workflow_jobs(text: str) -> dict[str, list[str]]:
     current: str | None = None
     in_jobs = in_needs_list = False
     for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue  # a comment, even at column 0, doesn't end `jobs:` (review: Copilot on PR #8)
         if not line.startswith(" ") and line.strip():
             in_jobs, current = line.split("#", 1)[0].strip() == "jobs:", None
             continue
@@ -401,20 +403,55 @@ def _versions(items: list[str]) -> str:
     return f"{items[0]}–{items[-1]}" if len(items) > 1 else (items[0] if items else "none")
 
 
-def _python_matrix(ctx: Context, text: str) -> Finding:
-    """The test matrix matches what the project declares (spec §6.2): `requires-python`, or 3.11–3.14."""
-    c, item = "ci", "ci.python-matrix"
-    match = next((m for line in text.splitlines() if (m := _MATRIX.match(line))), None)
-    if match is None:
-        return Finding(c, item, UNKNOWN, "can't find the Python versions in swerepo-ci.yml", standard.CI_WORKFLOW)
-    tested = [v.strip().strip("'\"") for v in match["items"].split(",") if v.strip()]
-    declared, _ = ci.python_versions(ctx.detection)
-    if not declared:
-        return Finding(c, item, UNKNOWN, "requires-python allows no Python version standard 1 knows")
-    if tested == declared:
-        return _ok(c, item, f"tests Python {_versions(tested)}, as the project declares", standard.CI_WORKFLOW)
-    message = f"tests Python {_versions(tested)}; the project declares {_versions(declared)}: swerepo update"
-    return Finding(c, item, OUTDATED, message, standard.CI_WORKFLOW)
+def job_blocks(text: str) -> dict[str, str]:
+    """Each job's lines (two-space indents), by job name; comment lines left out."""
+    blocks: dict[str, list[str]] = {}
+    current: str | None = None
+    in_jobs = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if not line.startswith(" ") and line.strip():
+            in_jobs, current = line.split("#", 1)[0].strip() == "jobs:", None
+            continue
+        if in_jobs and (job := _JOB.match(line)):
+            current = job["job"]
+            blocks[current] = []
+        elif in_jobs and current is not None:
+            blocks[current].append(line)
+    return {name: "\n".join(lines) for name, lines in blocks.items()}
+
+
+def _python_matrix(ctx: Context, text: str) -> list[Finding]:
+    """Each test job's matrix matches what its project declares (spec §6.2): the root's `test` job, and each listed
+    project's `test-<name>` job against that project's own `requires-python` (review: Copilot on PR #8)."""
+    c = "ci"
+    blocks = job_blocks(text)
+    listed = ctx.state.projects_listed if ctx.state else []
+    found: list[Finding] = []
+    for folder, job in ((".", "test"), *((f, "test-" + ci.Project(f, "", []).job) for f in listed)):
+        item = "ci.python-matrix" if folder == "." else f"ci.python-matrix:{folder}"
+        where = "" if folder == "." else f"{folder}/: "
+        match = next((m for line in blocks.get(job, "").splitlines() if (m := _MATRIX.match(line))), None)
+        if match is None:
+            message = f"{where}can't find the Python versions of the {job} job in swerepo-ci.yml"
+            found.append(Finding(c, item, UNKNOWN, message, standard.CI_WORKFLOW))
+            continue
+        tested = [v.strip().strip("'\"") for v in match["items"].split(",") if v.strip()]
+        detection = ctx.detection if folder == "." else detect(ctx.root / folder)
+        declared, _ = ci.python_versions(detection)
+        if not declared:
+            message = f"{where}requires-python allows no Python version standard 1 knows"
+            found.append(Finding(c, item, UNKNOWN, message))
+        elif tested == declared:
+            message = f"{where}tests Python {_versions(tested)}, as the project declares"
+            found.append(_ok(c, item, message, standard.CI_WORKFLOW))
+        else:
+            message = (
+                f"{where}tests Python {_versions(tested)}; the project declares {_versions(declared)}: swerepo update"
+            )
+            found.append(Finding(c, item, OUTDATED, message, standard.CI_WORKFLOW))
+    return found
 
 
 def _projects_covered(ctx: Context, text: str) -> list[Finding]:
@@ -430,7 +467,7 @@ def _projects_covered(ctx: Context, text: str) -> list[Finding]:
     folders = dict.fromkeys([*(p.path for p in ctx.detection.projects if p.path != "."), *listed])
     for folder in folders:
         item = f"ci.projects:{folder}"
-        job = ci.Project(folder, "", [], []).job
+        job = ci.Project(folder, "", []).job
         if folder in listed and f"lint-{job}" in jobs and f"test-{job}" in jobs:
             found.append(_ok(c, item, f"{folder}/ has its own jobs in swerepo-ci.yml", folder))
         elif folder in listed:

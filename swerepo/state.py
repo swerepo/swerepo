@@ -174,6 +174,14 @@ class State:
         return [] if projects is None else [str(p) for p in projects.get("listed", [])]
 
     @property
+    def project_inputs(self) -> dict[str, dict[str, Any]]:
+        """What each listed project's CI jobs were rendered from (`[projects.inputs."<folder>"]`: python, install,
+        lint, linters), so `update` can rebuild them (review: Copilot on PR #8)."""
+        projects = self.doc.get("projects")
+        inputs = projects.get("inputs") if projects is not None else None
+        return {} if inputs is None else {str(k): dict(v) for k, v in inputs.unwrap().items()}
+
+    @property
     def projects_not_covered(self) -> list[str]:
         """Project roots knowingly outside every required check (`[projects] not_covered`, spec §11)."""
         projects = self.doc.get("projects")
@@ -276,6 +284,23 @@ class State:
         array = tomlkit.array()
         array.extend(check_path(folder, key="projects.listed") for folder in folders)
         self._table("projects")["listed"] = array
+
+    def set_project_inputs(self, inputs: dict[str, dict[str, Any]]) -> None:
+        """Record each listed project's rendering inputs, replacing those of projects no longer listed."""
+        table = tomlkit.table(is_super_table=True)
+        for folder, values in inputs.items():
+            check_path(folder, key="projects.inputs")
+            _check_project_inputs(folder, values)
+            entry = tomlkit.table()
+            for name, value in values.items():
+                if isinstance(value, list):
+                    array = tomlkit.array()
+                    array.extend(value)
+                    entry.add(name, array)
+                else:
+                    entry.add(name, value)
+            table.add(folder, entry)
+        self._table("projects")["inputs"] = table
 
     def set_tool(self, name: str, version: str) -> None:
         """Record the version of another tool a workflow pins (`[tools] seamspec`)."""
@@ -433,6 +458,12 @@ def _validate(doc: TOMLDocument, running: str = __version__) -> None:
     projects = data.get("projects", {})
     if not isinstance(projects, dict):
         raise StateError("projects: must be a table")
+    inputs = projects.get("inputs", {})
+    if not isinstance(inputs, dict):
+        raise StateError("projects.inputs: must be a table of folders")
+    for folder, values in inputs.items():
+        check_path(folder, key="projects.inputs")
+        _check_project_inputs(folder, values)
     for key in ("ignore", "listed", "not_covered"):
         folders = projects.get(key, [])
         if not isinstance(folders, list):
@@ -458,6 +489,15 @@ _TOOL_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+!_-]*$")
 def _check_tool(name: str, version: Any) -> None:
     if not isinstance(version, str) or not _TOOL_VERSION.fullmatch(version):
         raise StateError(f"tools.{name}: must be a version")
+
+
+def _check_project_inputs(folder: str, values: Any) -> None:
+    """A listed project's recorded inputs: text and lists of text only (their meaning is checked where used)."""
+    if not isinstance(values, dict):
+        raise StateError(f"projects.inputs.{folder}: must be a table")
+    for name, value in values.items():
+        if not (isinstance(value, str) or (isinstance(value, list) and all(isinstance(v, str) for v in value))):
+            raise StateError(f"projects.inputs.{folder}.{name}: must be text or a list of text")
 
 
 def _text_list(value: Any, *, key: str) -> None:

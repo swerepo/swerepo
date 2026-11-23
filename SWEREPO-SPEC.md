@@ -340,6 +340,7 @@ ci_install = "uv sync --locked"   # how CI installs the project (§6.2)
 lint = "ruff"                     # ruff | kept | gradual (§6.3)
 governance_command = ""           # how swerepo-ci.yml runs SWERepo; "" until a released one can be pinned (§15)
 privacy_command = ""              # the same for swerepo-privacy.yml (§6.4)
+privacy_python = "3.14"           # the Python swerepo-privacy.yml runs on (each workflow keeps its own snapshot)
 code_owner = "@me"
 
 [files."docs/adr/TEMPLATE.md"]
@@ -391,6 +392,12 @@ extra_required_checks = []        # monorepo: other workflows' checks required b
 ignore = []                       # folders that are not projects, besides tests/, docs/, tools/ … (§11)
 listed = []                       # Python projects with their own SWERepo jobs
 not_covered = []                  # project roots knowingly outside every required check
+
+[projects.inputs."services/api"]  # what a listed project's jobs were rendered from (§11)
+python = ["3.12", "3.13", "3.14"]
+install = "uv sync --locked"
+lint = "ruff"                     # ruff | kept
+linters = []
 ```
 
 - **Hashes are of normalised content** (SHA-256, 64 hex characters, ADR-20261120-9495): UTF-8, no byte-order mark, LF line endings, trailing whitespace removed from each line, exactly one final newline. Line-ending conversion and end-of-file fixers don't make a file look edited. A formatter that changes more than that (reflowing Markdown, reformatting YAML) does, and `check` reports it as `~`; the generated files are written to pass ruff and common formatters unchanged.

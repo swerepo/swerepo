@@ -411,7 +411,7 @@ class _Workflows:
     would run SWERepo with now (each workflow records its own, P4-F02)."""
 
     default_branch: str
-    python: list[str]
+    python: list[str]  # what the project declares now; each workflow keeps its own recorded snapshot
     python_note: str
     swerepo: str  # the command CI would run SWERepo with; "" for none
     swerepo_note: str
@@ -423,13 +423,21 @@ def _workflows(ctx: _Context, *, with_governance: bool) -> _Workflows:
     branch = recorded.get("default_branch")
     if not isinstance(branch, str) or not ci.valid_folder(branch):
         branch = ci.default_branch(ctx.root)
-    python = recorded.get("python")
-    if isinstance(python, list) and python and all(isinstance(v, str) and v in KNOWN_PYTHONS for v in python):
-        python_note = ""
-    else:
-        python, python_note = ci.python_versions(ctx.detection)
+    python, python_note = ci.python_versions(ctx.detection)
     command, note = ci.swerepo_command(ctx.root, with_governance=with_governance)
     return _Workflows(str(branch), [str(v) for v in python], python_note, command, note, with_governance)
+
+
+def _recorded(ctx: _Context, path: str, name: str) -> object:
+    """A workflow's own recorded input: only while that workflow is recorded, so one workflow's snapshot never
+    decides another's first render (review: Copilot on PR #8)."""
+    if ctx.state is None or path not in ctx.state.files():
+        return None
+    return ctx.state.values.get(name)
+
+
+def _valid_python(value: object) -> bool:
+    return isinstance(value, list) and bool(value) and all(isinstance(v, str) and v in KNOWN_PYTHONS for v in value)
 
 
 def _command(ctx: _Context, shared: _Workflows, name: str) -> tuple[str, str]:
@@ -526,24 +534,43 @@ def _settings(ctx: _Context, folder: str, lint: str) -> Action:
     return action
 
 
+def _missing_tools(ctx: _Context, folder: str, lint: str, linters: list[str]) -> str:
+    """A note naming the tools a project's jobs run that `uv sync` there won't install, or ""."""
+    needed = ["pytest", *(["ruff"] if lint in ("ruff", "gradual") else linters)]
+    missing = [name for name in needed if name not in ci.installed_dependencies(ctx.root, folder)]
+    if not missing:
+        return ""
+    where = "the project's" if folder == "." else f"{folder}/'s"
+    run = "" if folder == "." else f" in {folder}"
+    return f"not among {where} installed dependencies: {', '.join(missing)} (uv add --dev {' '.join(missing)}{run})"
+
+
 def _project_inputs(ctx: _Context, folders: list[str]) -> tuple[list[Action], list[ci.Project]]:
-    """Jobs and settings for the Python projects listed with `--projects` (spec §11)."""
+    """Jobs and settings for the Python projects listed with `--projects` (spec §11). A project's recorded inputs
+    are used while the workflow is recorded, so its jobs rebuild as written (review: Copilot on PR #8)."""
     actions: list[Action] = []
     projects: list[ci.Project] = []
+    recorded = ctx.state.project_inputs if ctx.state and standard.CI_WORKFLOW in ctx.state.files() else {}
     for folder in folders:
-        install, note = ci.install_command(ctx.root, folder)
-        found = detect(ctx.root / folder)
-        python, python_note = ci.python_versions(found)
-        if install is None or not python:
-            actions.append(Action("ci", NOTE, None, f"{folder}/ gets no jobs: {note or python_note}"))
-            continue
-        names = {linter.name for linter in found.linters}
-        others = sorted(name for name in names if name in ci.KEPT_LINT)
-        # the project's own choice: a root [tool.ruff] doesn't make a black project a ruff one (P4-F04)
-        own_ruff = "ruff" in names or ci.ruff_configured(ctx.root, folder, inherit=False)
-        lint = "ruff" if own_ruff or not others else "kept"
-        projects.append(ci.Project(folder, install, python, ci.lint_runs(lint, others)))
-        actions.append(_settings(ctx, folder, lint))
+        project = ci.Project.from_inputs(folder, recorded[folder]) if folder in recorded else None
+        if project is None:
+            install, note = ci.install_command(ctx.root, folder)
+            found = detect(ctx.root / folder)
+            python, python_note = ci.python_versions(found)
+            if install is None or not python:
+                actions.append(Action("ci", NOTE, None, f"{folder}/ gets no jobs: {note or python_note}"))
+                continue
+            names = {linter.name for linter in found.linters}
+            others = sorted(name for name in names if name in ci.KEPT_LINT)
+            # the project's own choice: a root [tool.ruff] doesn't make a black project a ruff one (P4-F04)
+            own_ruff = "ruff" in names or ci.ruff_configured(ctx.root, folder, inherit=False)
+            lint = "ruff" if own_ruff or not others else "kept"
+            project = ci.Project(folder, install, python, lint, others if lint == "kept" else [])
+            note = _missing_tools(ctx, folder, project.lint, project.linters)  # each project installs on its own
+            if note:
+                actions.append(Action("ci", NOTE, None, note))
+        projects.append(project)
+        actions.append(_settings(ctx, folder, project.lint))
     return actions, projects
 
 
@@ -559,9 +586,14 @@ def _listed_projects(ctx: _Context, projects: list[str] | None) -> list[str]:
             raise UsageError(f"--projects: {folder} has no pyproject.toml")
         if folder not in checked:
             checked.append(folder)
-    jobs = [ci.Project(f, "", [], []).job for f in checked]
+    jobs = [ci.Project(f, "", []).job for f in checked]
     if len(set(jobs)) != len(jobs):
         raise UsageError("--projects: two folders would give jobs the same name")
+    for folder, job in zip(checked, jobs, strict=True):
+        taken = {f"lint-{job}", f"test-{job}"} & ci.FIXED_JOBS  # `macos` would make a second test-macos
+        if taken:
+            raise UsageError(f"--projects: {folder} would give a job the name {', '.join(sorted(taken))}, "
+                             "which swerepo-ci.yml already uses")  # fmt: skip
     return checked
 
 
@@ -585,11 +617,14 @@ def _ci(ctx: _Context, shared: _Workflows, lint_mode: tuple[str, list[str]], pro
     c = "ci"
     actions: list[Action] = []
     install, install_note = ci.install_command(ctx.root)
-    if install is None or not shared.python:
-        reason = install_note or shared.python_note
+    recorded_python = _recorded(ctx, standard.CI_WORKFLOW, "python")
+    python = [str(v) for v in recorded_python] if _valid_python(recorded_python) else shared.python  # type: ignore[union-attr]
+    python_note = "" if python is not shared.python else shared.python_note
+    if install is None or not python:
+        reason = install_note or python_note
         actions.append(Action(c, NOTE, None, f"{standard.CI_WORKFLOW} not written: {reason}"))
         return _CiResult(actions, None, False)
-    recorded_install = ctx.state.values.get("ci_install") if ctx.state else None
+    recorded_install = _recorded(ctx, standard.CI_WORKFLOW, "ci_install")
     if recorded_install in ci.INSTALLS:  # only the commands standard 1 writes (P4-F03)
         install = str(recorded_install)
     lint, linters = lint_mode
@@ -597,9 +632,9 @@ def _ci(ctx: _Context, shared: _Workflows, lint_mode: tuple[str, list[str]], pro
     project_actions, project_inputs = _project_inputs(ctx, listed)
     seamspec = ci.seamspec_pin(ctx.state.tools.get("seamspec") if ctx.state else None)
     governance, governance_note = _command(ctx, shared, "governance_command")
-    inputs = ci.Inputs(shared.default_branch, install, shared.python, lint, linters, governance, seamspec,
+    inputs = ci.Inputs(shared.default_branch, install, python, lint, linters, governance, seamspec,
                        project_inputs)  # fmt: skip
-    versions = f"{shared.python[0]}–{shared.python[-1]}" if len(shared.python) > 1 else shared.python[0]
+    versions = f"{python[0]}–{python[-1]}" if len(python) > 1 else python[0]
     render = ci.render_workflow(ctx.store, inputs)
     workflow = _managed_file(ctx, c, standard.CI_WORKFLOW, ci.WORKFLOW, render=render)
     workflow = _rewrite_if_asked(ctx, workflow, render, projects is not None or shared.with_governance)
@@ -611,15 +646,12 @@ def _ci(ctx: _Context, shared: _Workflows, lint_mode: tuple[str, list[str]], pro
     actions.append(workflow)
     actions.append(_settings(ctx, ".", lint))
     actions += project_actions
-    for note in (shared.python_note, f"governance job: {governance_note}" if governance_note else ""):
+    for note in (python_note, f"governance job: {governance_note}" if governance_note else ""):
         if note:
             actions.append(Action(c, NOTE, None, note))
-    needed = ["pytest", *(["ruff"] if lint in ("ruff", "gradual") else linters)]
-    missing = [name for name in needed if name not in ci.declared_dependencies(ctx.root)]
+    missing = _missing_tools(ctx, ".", lint, linters)
     if missing and workflow.verb == CREATE:
-        add = "uv add --dev " + " ".join(missing)
-        note = f"not among the project's dependencies: {', '.join(missing)} (CI runs them: {add})"
-        actions.append(Action(c, NOTE, None, note))
+        actions.append(Action(c, NOTE, None, missing))
     others = [w.path for w in ctx.detection.workflows if w.path != standard.CI_WORKFLOW]
     if others and workflow.verb == CREATE:
         audit = "uvx zizmor==1.32.0 --offline .github/workflows"
@@ -653,9 +685,9 @@ def contact_text(contact: str) -> str:
     )
 
 
-def _security(ctx: _Context, shared: _Workflows, contact: str | None) -> tuple[list[Action], str | None]:
-    """The component's actions, and the privacy workflow's SWERepo command when it is created, rewritten or
-    current (to record), else None."""
+def _security(ctx: _Context, shared: _Workflows, contact: str | None) -> tuple[list[Action], tuple[str, str] | None]:
+    """The component's actions, and the privacy workflow's SWERepo command and Python version when it is created,
+    rewritten or current (to record), else None."""
     c = "security"
     actions: list[Action] = []
     policy = ctx.detection.documents.get("security")
@@ -669,16 +701,17 @@ def _security(ctx: _Context, shared: _Workflows, contact: str | None) -> tuple[l
             note = "turn on GitHub's private vulnerability reporting in the repository's security settings"
             actions.append(Action(c, NOTE, None, note))
     command, note = _command(ctx, shared, "privacy_command")
-    written: str | None = None
+    written: tuple[str, str] | None = None
     if command:
         template = ctx.store.latest("security", "privacy-workflow")
-        values = {"default_branch": shared.default_branch, "python_main": (shared.python or ci.DEFAULT_PYTHONS)[-1],
-                  "swerepo": command}  # fmt: skip
+        recorded_python = _recorded(ctx, standard.PRIVACY_WORKFLOW, "privacy_python")
+        main = str(recorded_python) if recorded_python in KNOWN_PYTHONS else (shared.python or ci.DEFAULT_PYTHONS)[-1]
+        values = {"default_branch": shared.default_branch, "python_main": main, "swerepo": command}
         render = (template.id, template.render(values))
         workflow = _managed_file(ctx, c, standard.PRIVACY_WORKFLOW, "security/privacy-workflow", render=render)
         workflow = _rewrite_if_asked(ctx, workflow, render, shared.with_governance)
         actions.append(workflow)
-        written = command if workflow.verb in WRITTEN else None
+        written = (command, main) if workflow.verb in WRITTEN else None
     else:
         actions.append(Action(c, NOTE, None, f"{standard.PRIVACY_WORKFLOW} not written: {note}"))
     actions.append(_managed_block(ctx, c, ".gitignore", "security/gitignore"))
@@ -760,14 +793,14 @@ def make_plan(
         plan.actions.append(Action("repository", GIT_INIT, None, "not a git repository yet: git init"))
     shared = _workflows(ctx, with_governance=with_governance) if {"ci", "security"} & set(components) else None
     ci_result: _CiResult | None = None
-    privacy_command: str | None = None
+    privacy: tuple[str, str] | None = None  # the privacy workflow's command and Python version, when written
     for component in components:
         if component == "ci" and shared is not None:
             ci_result = _ci(ctx, shared, (mode, kept), projects)
             plan.actions += ci_result.actions
             plan.lint_question = lint_question and ci_result.inputs is not None
         elif component == "security" and shared is not None:
-            security_actions, privacy_command = _security(ctx, shared, contact)
+            security_actions, privacy = _security(ctx, shared, contact)
             plan.actions += security_actions
             plan.contact_question = any(a.path == "SECURITY.md" and a.verb == CREATE for a in plan.actions)
         elif component == "docs":
@@ -784,7 +817,7 @@ def make_plan(
     applied = [
         c for c in components if c in AVAILABLE and not (c == "ci" and (ci_result is None or not ci_result.inputs))
     ]
-    plan.state_text = _new_state(ctx, plan, applied, adr_dir if adopted else None, shared, ci_result, privacy_command)
+    plan.state_text = _new_state(ctx, plan, applied, adr_dir if adopted else None, shared, ci_result, privacy)
     if "docs" in applied and any(a.changes for a in plan.actions):  # writing .swerepo.toml counts
         _progress_entry(ctx, plan, applied, progress_dir)
     return plan
@@ -812,7 +845,7 @@ def _new_state(
     adopted_adr_dir: str | None,
     shared: _Workflows | None = None,
     ci_result: _CiResult | None = None,
-    privacy_command: str | None = None,
+    privacy: tuple[str, str] | None = None,
 ) -> str | None:
     """The `.swerepo.toml` after this run, or None when it wouldn't change. A workflow's inputs are recorded only
     when it is created, rewritten or current, so they always rebuild what was written (P4-F02)."""
@@ -830,14 +863,13 @@ def _new_state(
         state.set_adopted("adr_dir", adopted_adr_dir)
     inputs = ci_result.inputs if ci_result and ci_result.written else None
     values: dict[str, str | list[str]] = {}
-    if shared is not None and (inputs is not None or privacy_command is not None):
+    if shared is not None and (inputs is not None or privacy is not None):
         values["default_branch"] = shared.default_branch
-        if shared.python:
-            values["python"] = shared.python
-    if privacy_command is not None:
-        values["privacy_command"] = privacy_command
-    if inputs is not None:
-        values.update(ci_install=inputs.install, lint=inputs.lint, governance_command=inputs.swerepo)
+    if privacy is not None:
+        values.update(privacy_command=privacy[0], privacy_python=privacy[1])
+    if inputs is not None:  # each workflow's own snapshot (review: Copilot on PR #8)
+        values.update(python=inputs.python, ci_install=inputs.install, lint=inputs.lint,
+                      governance_command=inputs.swerepo)  # fmt: skip
     for name, value in values.items():
         if state.values.get(name) != value:
             state.set_value(name, value)
@@ -847,6 +879,9 @@ def _new_state(
         listed = [project.folder for project in inputs.projects]
         if listed != state.projects_listed and (listed or state.projects_listed):
             state.set_projects_listed(listed)
+        project_inputs = {project.folder: project.inputs for project in inputs.projects}
+        if project_inputs != state.project_inputs and (project_inputs or state.project_inputs):
+            state.set_project_inputs(project_inputs)
         if state.tools.get("seamspec") != inputs.seamspec:
             state.set_tool("seamspec", inputs.seamspec)
     if ctx.state is None:  # spec §10: an existing repository starts with warn-only pull-request rules

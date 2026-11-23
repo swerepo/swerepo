@@ -236,3 +236,12 @@ class TestGeminiReviewRound2:
     @pytest.mark.parametrize("glob", ["", ".", "/", "./"])
     def test_p4_f11_an_empty_glob_allows_nothing(self, glob: str):
         assert not privacy.allowed_path("docs/x.md", [glob])
+
+
+class TestCopilotReviewPR8:
+    """Copilot's review of PR #8."""
+
+    @pytest.mark.parametrize("end", ["-", "_", "A"])
+    def test_a_google_key_may_end_in_any_key_character(self, end: str):
+        assert privacy.line_kinds("x.py", '"AI' + "za" + "A" * 34 + end + '"', set()) == ["Google API key"]
+        assert privacy.line_kinds("x.py", '"AI' + "za" + "A" * 36 + '"', set()) == []  # too long: not this format

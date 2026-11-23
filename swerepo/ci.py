@@ -38,6 +38,7 @@ SWEREPO_FROM_GITHUB = "uvx --from git+https://github.com/swerepo/swerepo@main sw
 SWEREPO_OWN_CHECKOUT = "uv run --locked swerepo"
 # The jobs `ci-ok` waits for, before the optional ones (governance, then one lint and one test job per project).
 BASE_JOBS = ("lint", "test", "test-macos", "workflow-audit", "seamspec", "dependency-review")
+FIXED_JOBS = frozenset({*BASE_JOBS, "governance", "ci-ok"})  # names a project's jobs may never take
 # Kept linters in CI, each told to skip locked SeamSpec tests on its command line (spec §6.3).
 KEPT_LINT = {
     "black": "black --check --extend-exclude '\\.seamspec' .",
@@ -277,20 +278,34 @@ def line_length(root: Path, folder: str = ".") -> str | None:
     return None
 
 
-def declared_dependencies(root: Path, folder: str = ".") -> set[str]:
-    """Every package the project in `folder` names: dependencies, optional ones, dependency groups and uv's
-    dev-dependencies (normalised names)."""
+def installed_dependencies(root: Path, folder: str = ".") -> set[str]:
+    """The packages `uv sync` installs for the project in `folder` (normalised names): its dependencies and its
+    default dependency groups (`[tool.uv] default-groups`, else `dev`, which also holds uv's older
+    `dev-dependencies`), with `include-group` followed. Extras (`[project.optional-dependencies]`) and other
+    groups aren't installed by `uv sync`, so they don't count (review: Copilot on PR #8)."""
     data = _own_pyproject(root / folder)
-    found: list[Any] = []
     project = data.get("project") if isinstance(data.get("project"), dict) else {}
-    found += project.get("dependencies", []) if isinstance(project.get("dependencies"), list) else []
-    for table in (project.get("optional-dependencies"), data.get("dependency-groups")):
-        if isinstance(table, dict):
-            for entries in table.values():
-                found += entries if isinstance(entries, list) else []
-    uv = _tool(data, "uv")
-    if isinstance(uv, dict) and isinstance(uv.get("dev-dependencies"), list):
+    groups = data.get("dependency-groups") if isinstance(data.get("dependency-groups"), dict) else {}
+    uv = _tool(data, "uv") if isinstance(_tool(data, "uv"), dict) else {}
+    defaults = uv.get("default-groups", ["dev"])
+    if defaults == "all":
+        chosen = list(groups)
+    else:
+        chosen = [g for g in defaults if isinstance(g, str)] if isinstance(defaults, list) else []
+    found: list[Any] = list(project.get("dependencies", [])) if isinstance(project.get("dependencies"), list) else []
+    if "dev" in chosen and isinstance(uv.get("dev-dependencies"), list):
         found += uv["dev-dependencies"]
+    seen: set[str] = set()
+    while chosen:
+        group = chosen.pop()
+        if group in seen:
+            continue
+        seen.add(group)
+        for entry in groups.get(group, []) if isinstance(groups.get(group), list) else []:
+            if isinstance(entry, dict) and isinstance(entry.get("include-group"), str):
+                chosen.append(entry["include-group"])
+            else:
+                found.append(entry)
     names = set()
     for entry in found:
         if isinstance(entry, str):
@@ -309,7 +324,32 @@ class Project:
     folder: str
     install: str
     python: list[str]
-    lint_runs: list[str]
+    lint: str = "ruff"  # "ruff" or "kept"
+    linters: list[str] = field(default_factory=list)  # kept ones
+
+    @property
+    def lint_runs(self) -> list[str]:
+        return lint_runs(self.lint, self.linters)
+
+    @property
+    def inputs(self) -> dict[str, str | list[str]]:
+        """What `.swerepo.toml` records for this project (`[projects.inputs."<folder>"]`)."""
+        return {"python": self.python, "install": self.install, "lint": self.lint, "linters": self.linters}
+
+    @classmethod
+    def from_inputs(cls, folder: str, values: dict[str, Any]) -> Project | None:
+        """A project from its recorded inputs, or None if they aren't ones standard 1 writes (P4-F03)."""
+        python, install = values.get("python"), values.get("install")
+        lint, linters = values.get("lint"), values.get("linters", [])
+        if not (isinstance(python, list) and python and all(v in KNOWN_PYTHONS for v in python)):
+            return None
+        if install not in INSTALLS or lint not in ("ruff", "kept"):
+            return None
+        if not isinstance(linters, list) or not all(name in KEPT_LINT for name in linters):
+            return None
+        if lint == "kept" and not linters:
+            return None
+        return cls(folder, str(install), [str(v) for v in python], str(lint), [str(n) for n in linters])
 
     @property
     def job(self) -> str:

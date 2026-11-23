@@ -12,7 +12,8 @@
 - Gemini's round 1 (3 blockers, 4 should-fix, 2 suggestions), all reproduced and fixed: installs in uv workspaces, workflows rewritten when asked for later with their inputs kept in step (each workflow records its own SWERepo command), recorded values checked before they reach a workflow, per-project linters, git-style globs and every policy place in the privacy scan, three `check` fixes, matching lint commands for `gradual`, current token formats, and `--` in the gradual lint step. Both proposed rules marked critical.
 - Gemini's round 2: all nine accepted; two new findings fixed with one shared glob matcher (`swerepo/globs.py`): uv workspace globs that crashed `Path.glob`, and `allow_paths` globs that backtracked exponentially.
 - Gemini's round 3: nothing new; all 11 findings accepted; the review closed.
-- 496 tests (107 new); the generated workflows pass zizmor.
+- Copilot's review of PR #8 (8 threads), all reproduced and fixed: comment lines in `jobs:`, reserved job names, each project's test matrix checked, tools counted only when `uv sync` installs them, a Python snapshot per workflow, missing tools named per project, each project's inputs recorded, and a Google key ending in `-`.
+- 510 tests (121 new); the generated workflows pass zizmor.
 
 ## Next
 
