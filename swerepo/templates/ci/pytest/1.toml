@@ -1,0 +1,3 @@
+[tool.pytest.ini_options]
+# A summary line for every test that didn't pass.
+addopts = ["-ra"]

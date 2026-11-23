@@ -2,11 +2,11 @@
 
 # Spec: what this code guarantees
 
-10 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
+13 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
 
 ## Rules in force
 
-### `swerepo` (8 rules)
+### `swerepo` (11 rules)
 
 #### A fingerprint ignores only line endings, trailing whitespace, trailing blank lines and a BOM
 
@@ -88,6 +88,35 @@ In a git repository with a pyproject.toml and its own CLAUDE.md, `swerepo init -
 - **Test:** `.seamspec/tests/test_inv_1002d669.py` (pytest)
 - **Critical:** always shown to the agent in full
 - **Id:** `inv_1002d669`
+
+#### The privacy scan reports where, never what
+
+In a repository holding personal email addresses, a home-folder path and an AWS access key in tracked and untracked (not ignored) files, `swerepo check --only security` fails, and its privacy finding is exactly a count of each kind, then the first ten places by file and line, in file and line order, then how many more there are: in the text report, in `--json`, and in the finding's own `--ci` annotation on GitHub Actions. `swerepo init --dry-run` gives the same finding in its plan. None of these outputs contains an address, the path, the user name, the key, or a fragment of any of them.
+
+- **Applies to:** `swerepo/privacy.py`, `swerepo/check.py`, `swerepo/init.py`, `swerepo/cli.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-23, in the terminal
+- **Test:** `.seamspec/tests/test_inv_ab57c6ff.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_ab57c6ff`
+
+#### ci-ok waits for every job and fails when one didn't do what was expected
+
+In every `.github/workflows/swerepo-ci.yml` that `swerepo init` writes (with ruff, kept linters, a gradual move to ruff, the governance job, per-project jobs, and jobs asked for on a later run), `ci-ok` runs `if: always()` and its `needs:` names every other job. Run with GitHub's results for those jobs, its step passes only when every job succeeded or was skipped by design (test-macos off pushes, governance off pull requests, dependency-review off pull requests to public repositories), and exits non-zero when any job failed, was cancelled, was skipped unexpectedly, or ran when it should have been skipped.
+
+- **Applies to:** `swerepo/ci.py`, `swerepo/init.py`, `swerepo/templates/ci/`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-23, in the terminal
+- **Test:** `.seamspec/tests/test_inv_09cc1c20.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_09cc1c20`
+
+#### swerepo-ci.yml tests exactly the Python versions each project declares
+
+In the `.github/workflows/swerepo-ci.yml` that `swerepo init` writes, the `test` job's matrix is exactly the Python versions the root project's `requires-python` allows (3.11 to 3.14 when it declares none), each listed project's `test-<name>` job uses its own project's versions, and `test-macos` runs on the newest declared version. Tried with `>=3.12`, `>=3.11,<3.14`, no declaration, and a listed project declaring `>=3.13`.
+
+- **Applies to:** `swerepo/ci.py`, `swerepo/init.py`, `swerepo/detect.py`, `swerepo/templates/ci/`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-23, in the terminal
+- **Test:** `.seamspec/tests/test_inv_2c3b6053.py` (pytest)
+- **Id:** `inv_2c3b6053`
 
 ### `(repository root)` (2 rules)
 

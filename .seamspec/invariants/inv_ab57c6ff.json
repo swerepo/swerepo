@@ -1,0 +1,35 @@
+{
+  "schema_version": "1",
+  "id": "inv_ab57c6ff",
+  "title": "The privacy scan reports where, never what",
+  "assertion": "In a repository holding personal email addresses, a home-folder path and an AWS access key in tracked and untracked (not ignored) files, `swerepo check --only security` fails, and its privacy finding is exactly a count of each kind, then the first ten places by file and line, in file and line order, then how many more there are: in the text report, in `--json`, and in the finding's own `--ci` annotation on GitHub Actions. `swerepo init --dry-run` gives the same finding in its plan. None of these outputs contains an address, the path, the user name, the key, or a fragment of any of them.",
+  "scope": {
+    "paths": [
+      "swerepo/privacy.py",
+      "swerepo/check.py",
+      "swerepo/init.py",
+      "swerepo/cli.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261122-a48e (Phase 4): the privacy scan's findings name the kind, file and line, never the matched text, because check output reaches CI logs and pull-request annotations. Strengthened after SeamSpec's reviewer: the finding's own annotation is checked, the ten-place limit is part of the rule and tested, and the message is pinned exactly so no fragment of a value can slip in.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_ab57c6ff.py",
+    "harness_sha256": "6060895fce77736dba39e1f1bbefecb3c12214d589be7ebbcdf081111549287d",
+    "assertion_sha256": "f8025ed0a43b62689ca3ef19dee39c9035c254161667c2b5ca2992f5f921dc2e"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-23T05:03:30.988134Z",
+  "approved_at": "2026-11-23T07:46:20.332303Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

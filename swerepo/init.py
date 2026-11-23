@@ -22,17 +22,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from swerepo import __version__, standard
+from swerepo import __version__, ci, privacy, standard
 from swerepo.adr import AdrError, list_adrs, with_index
 from swerepo.blocks import ADR_INDEX, append_block, file_fingerprint, inside, read_exact, wrap
 from swerepo.check import _UNRELEASED, UsageError, one_line
-from swerepo.detect import Detection, detect
+from swerepo.detect import KNOWN_PYTHONS, Detection, detect
 from swerepo.fingerprint import HTML, BlockError, comment_style, find_block, fingerprint
 from swerepo.render import TemplateStore
 from swerepo.state import COMPONENTS, FILE_NAME, Record, State, StateError
 
-AVAILABLE = ("docs", "agents")  # components this version of init applies
-LATER = {"ci": 4, "security": 4, "github": 5, "seamspec": 7, "openspec": 8, "release": 8}
+AVAILABLE = ("docs", "agents", "ci", "security")  # components this version of init applies
+LATER = {"github": 5, "seamspec": 7, "openspec": 8, "release": 8}
 HOSTS = ("claude", "cursor", "vscode", "antigravity", "gemini")
 HOST_NAMES = {
     "claude": "Claude Code", "cursor": "Cursor", "vscode": "VS Code Copilot", "antigravity": "Antigravity",
@@ -40,10 +40,10 @@ HOST_NAMES = {
 }  # fmt: skip
 RECORDED_VALUES = ("project", "adr_dir", "progress_dir", "commands", "test_inline")  # managed templates use these
 
-CREATE, ADD_BLOCK, GIT_INIT, WRITE_STATE = "create", "add block", "git init", "write"
+CREATE, ADD_BLOCK, GIT_INIT, WRITE_STATE, REWRITE = "create", "add block", "git init", "write", "rewrite"
 KEEP, CURRENT, CHANGED, OUTDATED = "keep", "current", "changed", "outdated"
 ADOPT, NOTE, LATER_VERB = "adopt", "note", "later"
-CHANGING = (CREATE, ADD_BLOCK, GIT_INIT, WRITE_STATE)
+CHANGING = (CREATE, ADD_BLOCK, GIT_INIT, WRITE_STATE, REWRITE)
 
 
 class InitError(RuntimeError):
@@ -59,6 +59,7 @@ class Action:
     content: str | None = None  # the whole file (create) or the block's content (add block)
     record: Record | None = None  # what `.swerepo.toml` records; None for starter files
     kind: str | None = None  # "file" or "block" when recorded
+    expect: str | None = None  # rewrite: the fingerprint the file must still have (SWERepo's, unchanged)
 
     @property
     def changes(self) -> bool:
@@ -77,6 +78,8 @@ class Plan:
     actions: list[Action] = field(default_factory=list)
     state_text: str | None = None  # the new .swerepo.toml, or None if it doesn't change
     state_before: str | None = None  # .swerepo.toml as the plan read it (None: there was none)
+    lint_question: bool = False  # other linters found and nothing recorded: keep them, or move to ruff gradually
+    contact_question: bool = False  # SECURITY.md to create: who to report vulnerabilities to
 
     @property
     def changes(self) -> list[Action]:
@@ -132,14 +135,20 @@ def _make_targets(root: Path) -> set[str]:
 _KEPT_LINT = {"black": "black --check .", "isort": "isort --check-only .", "flake8": "flake8", "pylint": "pylint ."}
 
 
-def commands(root: Path, detection: Detection, adopted_linters: list[str] | None = None) -> dict[str, list[str]]:
+def commands(
+    root: Path, detection: Detection, adopted_linters: list[str] | None = None, lint_mode: str | None = None
+) -> dict[str, list[str]]:
     """The commands agents and people run, from what the project uses (spec §6.6): uv by default, poetry
     when it has a poetry.lock, a Makefile's `install`, `test` and `lint` targets when it has them, and the
-    linters recorded under `[adopted] linters` (as `check` reads them) before the detected ones."""
+    linters recorded under `[adopted] linters` (as `check` reads them) before the detected ones. `lint_mode`
+    (the `ci` component's choice) decides between ruff and kept linters, the same on every run (P4-F07)."""
     poetry = (root / "poetry.lock").is_file() and not (root / "uv.lock").is_file()
     runner, install = ("poetry run", "poetry install") if poetry else ("uv run", "uv sync")
     linters = set(adopted_linters) if adopted_linters else {linter.name for linter in detection.linters}
-    if "ruff" in linters or not linters:
+    if lint_mode == "gradual":
+        files = "--force-exclude <changed .py files>"
+        lint = [f"{runner} ruff check {files}", f"{runner} ruff format --check {files}"]
+    elif lint_mode == "ruff" or (lint_mode is None and ("ruff" in linters or not linters)):
         lint = [f"{runner} ruff check .", f"{runner} ruff format --check ."]
     else:
         lint = [f"{runner} {_KEPT_LINT[name]}" for name in sorted(linters) if name in _KEPT_LINT]
@@ -158,9 +167,14 @@ def _code(items: list[str]) -> str:
 
 
 def compute_values(
-    root: Path, detection: Detection, adr_dir: str, progress_dir: str, adopted_linters: list[str] | None = None
+    root: Path,
+    detection: Detection,
+    adr_dir: str,
+    progress_dir: str,
+    adopted_linters: list[str] | None = None,
+    lint_mode: str | None = None,
 ) -> dict[str, str]:
-    found = commands(root, detection, adopted_linters)
+    found = commands(root, detection, adopted_linters, lint_mode)
     listed = [
         f"- Install: {_code(found['install'])}",
         f"- Test: {_code(found['test'])}",
@@ -211,40 +225,60 @@ class _Context:
             raise InitError(f"{path}: can't read it ({error.strerror or type(error).__name__})") from error
 
 
-def _managed_file(ctx: _Context, component: str, path: str, template: str) -> Action:
+def _managed_file(
+    ctx: _Context, component: str, path: str, template: str, render: tuple[str, str] | None = None
+) -> Action:
+    """A file SWERepo keeps current: created when missing, otherwise compared with its record. `render`:
+    (template id, text) rendered by the component itself, for files built from several templates."""
     if not inside(ctx.root, ctx.root / path):
         return Action(component, KEEP, path, _OUTSIDE)
-    latest = ctx.store.latest(*template.split("/"))
-    text = latest.render(ctx.values)
-    rendered = file_fingerprint(text, latest.id)
+    if render is None:
+        latest = ctx.store.latest(*template.split("/"))
+        template_id, text = latest.id, latest.render(ctx.values)
+    else:
+        template_id, text = render
+    rendered = file_fingerprint(text, template_id)
     record = ctx.state.files().get(path) if ctx.state else None
     if not ctx.exists(path):
-        if latest.id.startswith("docs/adr-readme@"):
+        if template_id.startswith("docs/adr-readme@"):
             try:
                 text = with_index(text, list_adrs(ctx.root / path.rsplit("/", 1)[0]))
             except AdrError as error:
                 raise InitError(f"{path.rsplit('/', 1)[0]}/{error}") from error
-        return Action(component, CREATE, path, content=text, record=Record(latest.id, rendered, rendered), kind="file")
+        record = Record(template_id, rendered, rendered)
+        return Action(component, CREATE, path, content=text, record=record, kind="file")
     if record is None:
         return Action(component, KEEP, path, "yours: SWERepo didn't write it")
     if file_fingerprint(ctx.read(path), record.template) != record.written:
         return Action(component, CHANGED, path, "changed by you: kept")
-    if record.template == latest.id and record.rendered == rendered:
+    if record.template == template_id and record.rendered == rendered:
         return Action(component, CURRENT, path)
-    return Action(component, OUTDATED, path, f"{latest.id} is newer: swerepo update (Phase 6)")
+    return Action(component, OUTDATED, path, f"{template_id} renders differently now: swerepo update (Phase 6)")
 
 
 _OUTSIDE = "a link out of the repository: SWERepo doesn't write there"
 
 
-def _managed_block(ctx: _Context, component: str, path: str, template: str, heading: str = "") -> Action:
+def _managed_block(
+    ctx: _Context,
+    component: str,
+    path: str,
+    template: str,
+    heading: str = "",
+    render: tuple[str, str] | None = None,
+) -> Action:
+    """SWERepo's marked block in a file: added when missing, otherwise compared with its record. `render`:
+    (template id, block content) rendered by the component itself."""
     if not inside(ctx.root, ctx.root / path):
         return Action(component, KEEP, path, _OUTSIDE)
-    latest = ctx.store.latest(*template.split("/"))
-    content = latest.render(ctx.values)
+    if render is None:
+        latest = ctx.store.latest(*template.split("/"))
+        template_id, content = latest.id, latest.render(ctx.values)
+    else:
+        template_id, content = render
     rendered = fingerprint(content)
     record = ctx.state.blocks().get(path) if ctx.state else None
-    new_record = Record(latest.id, rendered, rendered)
+    new_record = Record(template_id, rendered, rendered)
     if not ctx.exists(path):
         whole = heading + wrap(content, path)
         return Action(component, CREATE, path, "SWERepo block", content=whole, record=new_record, kind="block")
@@ -265,9 +299,9 @@ def _managed_block(ctx: _Context, component: str, path: str, template: str, head
         return Action(component, KEEP, path, "has a SWERepo block SWERepo didn't record: kept")
     if fingerprint(block.content) != record.written:
         return Action(component, CHANGED, path, "block changed by you: kept")
-    if record.template == latest.id and record.rendered == rendered:
+    if record.template == template_id and record.rendered == rendered:
         return Action(component, CURRENT, path, "SWERepo block")
-    return Action(component, OUTDATED, path, f"{latest.id} is newer: swerepo update (Phase 6)")
+    return Action(component, OUTDATED, path, f"{template_id} renders differently now: swerepo update (Phase 6)")
 
 
 def _block_findable(text: str, content: str, path: str) -> bool:
@@ -367,6 +401,296 @@ def _agents(ctx: _Context, hosts: list[str]) -> list[Action]:
     return actions
 
 
+# --- ci and security (ADR-20261122-4a06, ADR-20261122-a48e) -------------------------------------------------
+
+
+@dataclass
+class _Workflows:
+    """What the `ci` and `security` workflows share: the default branch and Python versions, from `[values]` once
+    recorded (renders stay stable; changes are `update`'s, Phase 6), else from the repository; and the command CI
+    would run SWERepo with now (each workflow records its own, P4-F02)."""
+
+    default_branch: str
+    python: list[str]
+    python_note: str
+    swerepo: str  # the command CI would run SWERepo with; "" for none
+    swerepo_note: str
+    with_governance: bool
+
+
+def _workflows(ctx: _Context, *, with_governance: bool) -> _Workflows:
+    recorded = ctx.state.values if ctx.state else {}
+    branch = recorded.get("default_branch")
+    if not isinstance(branch, str) or not ci.valid_folder(branch):
+        branch = ci.default_branch(ctx.root)
+    python = recorded.get("python")
+    if isinstance(python, list) and python and all(isinstance(v, str) and v in KNOWN_PYTHONS for v in python):
+        python_note = ""
+    else:
+        python, python_note = ci.python_versions(ctx.detection)
+    command, note = ci.swerepo_command(ctx.root, with_governance=with_governance)
+    return _Workflows(str(branch), [str(v) for v in python], python_note, command, note, with_governance)
+
+
+def _command(ctx: _Context, shared: _Workflows, name: str) -> tuple[str, str]:
+    """The SWERepo command for one workflow: its recorded one (a valid one; P4-F03), unless none was recorded or
+    `--with-governance` asks for one where there was none."""
+    recorded = ctx.state.values.get(name) if ctx.state else None
+    if ci.valid_swerepo_command(recorded) and (recorded or not shared.with_governance):
+        return str(recorded), ("" if recorded else shared.swerepo_note)
+    return shared.swerepo, shared.swerepo_note
+
+
+def _rewrite_if_asked(ctx: _Context, action: Action, render: tuple[str, str], asked: bool) -> Action:
+    """A managed file whose render changed because the person asked for it in this run (`--projects`,
+    `--with-governance`) is rewritten, if SWERepo wrote it and nobody changed it since (review P4-F02). Anything
+    else stays `outdated` for `update` (Phase 6)."""
+    record = ctx.state.files().get(action.path or "") if ctx.state else None
+    if not asked or action.verb != OUTDATED or record is None:
+        return action
+    template_id, text = render
+    rendered = file_fingerprint(text, template_id)
+    note = "unchanged since SWERepo wrote it: rewritten with what you asked for"
+    return Action(action.component, REWRITE, action.path, note, content=text,
+                  record=Record(template_id, rendered, rendered), kind="file", expect=record.written)  # fmt: skip
+
+
+WRITTEN = (CREATE, REWRITE, CURRENT)  # a workflow's recorded inputs match it after this run
+
+
+@dataclass
+class _CiResult:
+    actions: list[Action]
+    inputs: ci.Inputs | None  # None: no workflow can be written yet
+    written: bool  # the workflow is created, rewritten or current: its inputs may be recorded
+
+
+def _lint_mode(ctx: _Context, choice: str | None) -> tuple[str, list[str], bool]:
+    """(mode, kept linters, whether the person has a choice to make) for the root project (spec §6.3). Recorded
+    choices are used again; kept linters only if standard 1 knows how to run them (P4-F03)."""
+    recorded = ctx.state.values.get("lint") if ctx.state else None
+    adopted = [str(n) for n in (ctx.state.adopted.get("linters") or []) if n in ci.KEPT_LINT] if ctx.state else []
+    if recorded in ("ruff", "gradual"):
+        return str(recorded), [], False
+    if adopted:
+        return "kept", adopted, False
+    names = {linter.name for linter in ctx.detection.linters}
+    others = sorted(name for name in names if name in ci.KEPT_LINT)
+    if "ruff" in names or not others:
+        return "ruff", [], False
+    mode = "gradual" if choice == "gradual" else "kept"
+    return mode, others if mode == "kept" else [], True
+
+
+def _toml_problem(text: str, content: str, path: str, ruff: bool, pytest: bool) -> str | None:
+    """Why SWERepo's settings block can't be added to this pyproject.toml, or None: the result must be valid TOML
+    holding every one of the person's values unchanged (ADR-20261122-4a06 point 8)."""
+    try:
+        before = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return "isn't valid TOML: fix it, then run init again"
+    try:
+        after = tomllib.loads(append_block(text, content, path))
+    except tomllib.TOMLDecodeError:
+        return "SWERepo's [tool.ruff] or [tool.pytest] settings would clash with its own: add them yourself"
+    tool = after.get("tool", {})
+    if ruff:
+        tool.pop("ruff", None)
+    if pytest and isinstance(tool.get("pytest"), dict):
+        tool["pytest"].pop("ini_options", None)
+        if not tool["pytest"] and "pytest" not in before.get("tool", {}):
+            tool.pop("pytest")
+    if not tool and "tool" not in before:
+        after.pop("tool", None)
+    return None if after == before else "SWERepo's settings would change its values: add them yourself"
+
+
+def _settings(ctx: _Context, folder: str, lint: str) -> Action:
+    """SWERepo's ruff and pytest settings, as a marked block at the end of the project's pyproject.toml."""
+    c = "ci"
+    path = "pyproject.toml" if folder == "." else f"{folder}/pyproject.toml"
+    ruff = lint in ("ruff", "gradual") and not ci.ruff_configured(ctx.root, folder)
+    pytest = not ci.pytest_configured(ctx.root, folder)
+    length = ci.line_length(ctx.root, folder) if lint == "gradual" else None
+    render = ci.settings_block(ctx.store, ruff=ruff, pytest=pytest, ruff_line_length=length)
+    if render is None:
+        return Action(c, KEEP, path, "ruff and pytest settings: yours")
+    action = _managed_block(ctx, c, path, render[0], render=render)
+    if action.verb == ADD_BLOCK:
+        problem = _toml_problem(ctx.read(path), action.content or "", path, ruff, pytest)
+        if problem:
+            return Action(c, KEEP, path, problem)
+    if action.verb in (ADD_BLOCK, CREATE):
+        tables = [name for name, on in (("[tool.ruff]", ruff), ("[tool.pytest.ini_options]", pytest)) if on]
+        action.note = ", ".join(tables)
+    return action
+
+
+def _project_inputs(ctx: _Context, folders: list[str]) -> tuple[list[Action], list[ci.Project]]:
+    """Jobs and settings for the Python projects listed with `--projects` (spec §11)."""
+    actions: list[Action] = []
+    projects: list[ci.Project] = []
+    for folder in folders:
+        install, note = ci.install_command(ctx.root, folder)
+        found = detect(ctx.root / folder)
+        python, python_note = ci.python_versions(found)
+        if install is None or not python:
+            actions.append(Action("ci", NOTE, None, f"{folder}/ gets no jobs: {note or python_note}"))
+            continue
+        names = {linter.name for linter in found.linters}
+        others = sorted(name for name in names if name in ci.KEPT_LINT)
+        # the project's own choice: a root [tool.ruff] doesn't make a black project a ruff one (P4-F04)
+        own_ruff = "ruff" in names or ci.ruff_configured(ctx.root, folder, inherit=False)
+        lint = "ruff" if own_ruff or not others else "kept"
+        projects.append(ci.Project(folder, install, python, ci.lint_runs(lint, others)))
+        actions.append(_settings(ctx, folder, lint))
+    return actions, projects
+
+
+def _listed_projects(ctx: _Context, projects: list[str] | None) -> list[str]:
+    """`--projects`, else `[projects] listed`: each a repository folder with a pyproject.toml (spec §11)."""
+    folders = projects if projects is not None else (ctx.state.projects_listed if ctx.state else [])
+    checked: list[str] = []
+    for given in folders:
+        folder = given.strip().strip("/")
+        if not ci.valid_folder(folder):
+            raise UsageError("--projects: each project is a folder inside the repository, written with '/'")
+        if not inside(ctx.root, ctx.root / folder) or not (ctx.root / folder / "pyproject.toml").is_file():
+            raise UsageError(f"--projects: {folder} has no pyproject.toml")
+        if folder not in checked:
+            checked.append(folder)
+    jobs = [ci.Project(f, "", [], []).job for f in checked]
+    if len(set(jobs)) != len(jobs):
+        raise UsageError("--projects: two folders would give jobs the same name")
+    return checked
+
+
+def _coverage_notes(ctx: _Context, listed: list[str]) -> list[Action]:
+    """Every project root no SWERepo job covers, named (spec §11)."""
+    skipped = set(ctx.state.projects_not_covered) if ctx.state else set()
+    notes = []
+    for project in ctx.detection.projects:
+        if project.path == "." or project.path in listed or project.path in skipped:
+            continue
+        if project.kind == "python":
+            how = f"--projects {project.path} gives it jobs"
+        else:
+            how = f"a {project.kind} project: require its own workflow's checks (github, Phase 5)"
+        notes.append(Action("ci", NOTE, None, f"{project.path}/ isn't covered by ci-ok: {how}, or list it "
+                                              "under [projects] not_covered"))  # fmt: skip
+    return notes
+
+
+def _ci(ctx: _Context, shared: _Workflows, lint_mode: tuple[str, list[str]], projects: list[str] | None) -> _CiResult:
+    c = "ci"
+    actions: list[Action] = []
+    install, install_note = ci.install_command(ctx.root)
+    if install is None or not shared.python:
+        reason = install_note or shared.python_note
+        actions.append(Action(c, NOTE, None, f"{standard.CI_WORKFLOW} not written: {reason}"))
+        return _CiResult(actions, None, False)
+    recorded_install = ctx.state.values.get("ci_install") if ctx.state else None
+    if recorded_install in ci.INSTALLS:  # only the commands standard 1 writes (P4-F03)
+        install = str(recorded_install)
+    lint, linters = lint_mode
+    listed = _listed_projects(ctx, projects)
+    project_actions, project_inputs = _project_inputs(ctx, listed)
+    seamspec = ci.seamspec_pin(ctx.state.tools.get("seamspec") if ctx.state else None)
+    governance, governance_note = _command(ctx, shared, "governance_command")
+    inputs = ci.Inputs(shared.default_branch, install, shared.python, lint, linters, governance, seamspec,
+                       project_inputs)  # fmt: skip
+    versions = f"{shared.python[0]}–{shared.python[-1]}" if len(shared.python) > 1 else shared.python[0]
+    render = ci.render_workflow(ctx.store, inputs)
+    workflow = _managed_file(ctx, c, standard.CI_WORKFLOW, ci.WORKFLOW, render=render)
+    workflow = _rewrite_if_asked(ctx, workflow, render, projects is not None or shared.with_governance)
+    if workflow.verb == CREATE:
+        how = {"ruff": "ruff", "kept": ", ".join(linters) + " (kept)", "gradual": "ruff on changed files"}[lint]
+        workflow.note = f"Python {versions}; lint: {how}"
+    elif workflow.verb in (OUTDATED, CHANGED) and (projects is not None or shared.with_governance):
+        workflow.note += "; what you asked for (--projects, --with-governance) waits for it"
+    actions.append(workflow)
+    actions.append(_settings(ctx, ".", lint))
+    actions += project_actions
+    for note in (shared.python_note, f"governance job: {governance_note}" if governance_note else ""):
+        if note:
+            actions.append(Action(c, NOTE, None, note))
+    needed = ["pytest", *(["ruff"] if lint in ("ruff", "gradual") else linters)]
+    missing = [name for name in needed if name not in ci.declared_dependencies(ctx.root)]
+    if missing and workflow.verb == CREATE:
+        add = "uv add --dev " + " ".join(missing)
+        note = f"not among the project's dependencies: {', '.join(missing)} (CI runs them: {add})"
+        actions.append(Action(c, NOTE, None, note))
+    others = [w.path for w in ctx.detection.workflows if w.path != standard.CI_WORKFLOW]
+    if others and workflow.verb == CREATE:
+        audit = "uvx zizmor==1.32.0 --offline .github/workflows"
+        note = f"workflow-audit also audits {', '.join(others)}: run `{audit}` before merging"
+        actions.append(Action(c, NOTE, None, note))
+    actions += _coverage_notes(ctx, listed)
+    return _CiResult(actions, inputs, workflow.verb in WRITTEN)
+
+
+CONTACTS = ("github", "placeholder")  # or an email address the person types
+_CONTACT_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
+
+
+def has_github_remote(root: Path) -> bool:
+    url = ci._git(root, "remote", "get-url", "origin") or ""
+    return "github.com" in url
+
+
+def contact_text(contact: str) -> str:
+    """The reporting paragraph of SECURITY.md (ADR-20261122-a48e point 1)."""
+    if contact == "github":
+        return (
+            "Please report it privately through GitHub: on this repository's **Security** tab, choose "
+            "**Report a vulnerability**."
+        )
+    if _CONTACT_EMAIL.fullmatch(contact):
+        return f"Please email {contact}."
+    return (
+        "_How to report a vulnerability privately is still to be decided: give an email address here, or turn on "
+        "GitHub's private vulnerability reporting and point to it._"
+    )
+
+
+def _security(ctx: _Context, shared: _Workflows, contact: str | None) -> tuple[list[Action], str | None]:
+    """The component's actions, and the privacy workflow's SWERepo command when it is created, rewritten or
+    current (to record), else None."""
+    c = "security"
+    actions: list[Action] = []
+    policy = ctx.detection.documents.get("security")
+    if policy or ctx.exists("SECURITY.md"):
+        actions.append(Action(c, KEEP, policy or "SECURITY.md", "yours"))
+    else:
+        chosen = contact or ("github" if has_github_remote(ctx.root) else "placeholder")
+        action = _starter(ctx, c, "SECURITY.md", "security/policy", {**ctx.values, "contact": contact_text(chosen)})
+        actions.append(action)
+        if action.verb == CREATE and chosen == "github":
+            note = "turn on GitHub's private vulnerability reporting in the repository's security settings"
+            actions.append(Action(c, NOTE, None, note))
+    command, note = _command(ctx, shared, "privacy_command")
+    written: str | None = None
+    if command:
+        template = ctx.store.latest("security", "privacy-workflow")
+        values = {"default_branch": shared.default_branch, "python_main": (shared.python or ci.DEFAULT_PYTHONS)[-1],
+                  "swerepo": command}  # fmt: skip
+        render = (template.id, template.render(values))
+        workflow = _managed_file(ctx, c, standard.PRIVACY_WORKFLOW, "security/privacy-workflow", render=render)
+        workflow = _rewrite_if_asked(ctx, workflow, render, shared.with_governance)
+        actions.append(workflow)
+        written = command if workflow.verb in WRITTEN else None
+    else:
+        actions.append(Action(c, NOTE, None, f"{standard.PRIVACY_WORKFLOW} not written: {note}"))
+    actions.append(_managed_block(ctx, c, ".gitignore", "security/gitignore"))
+    hits = privacy.scan(ctx.root, ctx.state.privacy_allow_paths if ctx.state else [])
+    if hits:
+        message = f"privacy scan: {privacy.summary(hits)}: fix them before committing"
+    else:
+        message = "privacy scan: nothing found"
+    actions.append(Action(c, NOTE, None, message))
+    return actions, written
+
+
 def _has_commits(root: Path) -> bool:
     try:
         done = subprocess.run(
@@ -386,9 +710,18 @@ def make_plan(
     hosts: list[str] | None = None,
     store: TemplateStore | None = None,
     today: datetime.date | None = None,
+    with_governance: bool = False,
+    projects: list[str] | None = None,
+    lint: str | None = None,
+    contact: str | None = None,
 ) -> Plan:
-    """What `swerepo init` would do. Writes nothing."""
+    """What `swerepo init` would do. Writes nothing. `lint`: "kept" or "gradual" when other linters are found
+    (spec §6.3); `contact`: "github", "placeholder" or an email address for SECURITY.md (ADR-20261122-a48e)."""
     components = resolve_components(only, skip)
+    if projects is not None and "ci" not in components:
+        raise UsageError("--projects gives Python projects their own CI jobs: it needs the ci component")
+    if lint is not None and lint not in ("kept", "gradual"):
+        raise UsageError(f"lint choice {lint!r}: kept or gradual")
     unknown_hosts = [h for h in hosts or [] if h not in HOSTS]
     if unknown_hosts:
         raise UsageError(f"unknown editor {', '.join(unknown_hosts)} (known: {', '.join(HOSTS)})")
@@ -413,8 +746,9 @@ def make_plan(
     ctx = _Context(root, detection, state, store or TemplateStore(), {}, today or datetime.date.today())
     adr_dir, adopted = _adr_dir(ctx)
     progress_dir = str((state.adopted.get("progress_dir") if state else None) or standard.PROGRESS_DIR)
-    linters = [str(name) for name in (state.adopted.get("linters") or [])] if state else []
-    computed = compute_values(root, detection, adr_dir, progress_dir, linters)
+    # The lint choice first, so the commands the agents block lists match the CI it gets (P4-F07).
+    mode, kept, lint_question = _lint_mode(ctx, lint)
+    computed = compute_values(root, detection, adr_dir, progress_dir, kept, mode)
     ctx.values = {**computed, **{k: str(recorded[k]) for k in RECORDED_VALUES if isinstance(recorded.get(k), str)}}
 
     hosts_recorded = bool(state and state.hosts_chosen)
@@ -424,8 +758,19 @@ def make_plan(
 
     if not detection.git.is_work_tree:
         plan.actions.append(Action("repository", GIT_INIT, None, "not a git repository yet: git init"))
+    shared = _workflows(ctx, with_governance=with_governance) if {"ci", "security"} & set(components) else None
+    ci_result: _CiResult | None = None
+    privacy_command: str | None = None
     for component in components:
-        if component == "docs":
+        if component == "ci" and shared is not None:
+            ci_result = _ci(ctx, shared, (mode, kept), projects)
+            plan.actions += ci_result.actions
+            plan.lint_question = lint_question and ci_result.inputs is not None
+        elif component == "security" and shared is not None:
+            security_actions, privacy_command = _security(ctx, shared, contact)
+            plan.actions += security_actions
+            plan.contact_question = any(a.path == "SECURITY.md" and a.verb == CREATE for a in plan.actions)
+        elif component == "docs":
             plan.actions += _docs(ctx, adr_dir, adopted)
         elif component == "agents":
             plan.actions += _agents(ctx, chosen_hosts)
@@ -435,8 +780,11 @@ def make_plan(
         else:
             plan.actions.append(Action(component, LATER_VERB, None, f"init adds it from Phase {LATER[component]}"))
 
-    applied = [c for c in components if c in AVAILABLE]
-    plan.state_text = _new_state(ctx, plan, applied, adr_dir if adopted else None)
+    # A component counts as applied when init could write it: ci without a workflow isn't recorded as chosen.
+    applied = [
+        c for c in components if c in AVAILABLE and not (c == "ci" and (ci_result is None or not ci_result.inputs))
+    ]
+    plan.state_text = _new_state(ctx, plan, applied, adr_dir if adopted else None, shared, ci_result, privacy_command)
     if "docs" in applied and any(a.changes for a in plan.actions):  # writing .swerepo.toml counts
         _progress_entry(ctx, plan, applied, progress_dir)
     return plan
@@ -457,8 +805,17 @@ def _progress_entry(ctx: _Context, plan: Plan, applied: list[str], progress_dir:
     plan.actions.append(_starter(ctx, "docs", path, "docs/progress-entry", values))
 
 
-def _new_state(ctx: _Context, plan: Plan, applied: list[str], adopted_adr_dir: str | None) -> str | None:
-    """The `.swerepo.toml` after this run, or None when it wouldn't change."""
+def _new_state(
+    ctx: _Context,
+    plan: Plan,
+    applied: list[str],
+    adopted_adr_dir: str | None,
+    shared: _Workflows | None = None,
+    ci_result: _CiResult | None = None,
+    privacy_command: str | None = None,
+) -> str | None:
+    """The `.swerepo.toml` after this run, or None when it wouldn't change. A workflow's inputs are recorded only
+    when it is created, rewritten or current, so they always rebuild what was written (P4-F02)."""
     if not applied:
         return None
     before = ctx.state.dumps() if ctx.state else None
@@ -471,13 +828,34 @@ def _new_state(ctx: _Context, plan: Plan, applied: list[str], adopted_adr_dir: s
         state.set_hosts(plan.hosts)
     if adopted_adr_dir and state.adopted.get("adr_dir") != adopted_adr_dir:
         state.set_adopted("adr_dir", adopted_adr_dir)
+    inputs = ci_result.inputs if ci_result and ci_result.written else None
+    values: dict[str, str | list[str]] = {}
+    if shared is not None and (inputs is not None or privacy_command is not None):
+        values["default_branch"] = shared.default_branch
+        if shared.python:
+            values["python"] = shared.python
+    if privacy_command is not None:
+        values["privacy_command"] = privacy_command
+    if inputs is not None:
+        values.update(ci_install=inputs.install, lint=inputs.lint, governance_command=inputs.swerepo)
+    for name, value in values.items():
+        if state.values.get(name) != value:
+            state.set_value(name, value)
+    if inputs is not None:
+        if inputs.lint == "kept" and state.adopted.get("linters") != inputs.linters:
+            state.set_adopted_linters(inputs.linters)
+        listed = [project.folder for project in inputs.projects]
+        if listed != state.projects_listed and (listed or state.projects_listed):
+            state.set_projects_listed(listed)
+        if state.tools.get("seamspec") != inputs.seamspec:
+            state.set_tool("seamspec", inputs.seamspec)
     if ctx.state is None:  # spec §10: an existing repository starts with warn-only pull-request rules
         if _has_commits(ctx.root):
             state.set_pr_rules(enforce=False, warn_since=ctx.today)
         else:
             state.set_pr_rules(enforce=True)
     for action in plan.actions:
-        if action.verb in (CREATE, ADD_BLOCK) and action.record is not None and action.path:
+        if action.verb in (CREATE, ADD_BLOCK, REWRITE) and action.record is not None and action.path:
             (state.set_file if action.kind == "file" else state.set_block)(action.path, action.record)
     after = state.dumps()
     if after == before:
@@ -507,6 +885,9 @@ def _check_target(action: Action, root: Path) -> None:
     target = root / path
     if not inside(root, target):
         raise InitError(f"{path} leads out of the repository: nothing written")
+    if action.verb == REWRITE:
+        _check_unchanged(action, target)
+        return
     if action.verb == CREATE:
         for folder in target.relative_to(root).parents:
             if folder != Path(".") and (root / folder).exists() and not (root / folder).is_dir():
@@ -527,12 +908,23 @@ def _check_target(action: Action, root: Path) -> None:
         raise InitError(f"{path} ends inside an unclosed code fence: nothing written; close it, then run init again")
 
 
+def _check_unchanged(action: Action, target: Path) -> None:
+    """A file to rewrite must still be what SWERepo wrote: a person's edit since the plan stops the run."""
+    try:
+        text = read_exact(target, errors="surrogateescape")
+    except OSError as error:
+        raise InitError(f"{action.path}: can't read it ({error.strerror or type(error).__name__})") from error
+    template = action.record.template if action.record else ""
+    if target.is_symlink() or file_fingerprint(text, template) != action.expect:
+        raise InitError(f"{action.path} changed since the plan was made: nothing written; run init again")
+
+
 def _check_targets(plan: Plan, root: Path) -> None:
     """Before anything is written: every target as `_check_target` wants it, and `.swerepo.toml` exactly as the
     plan read it (a person may edit it while init waits at `Apply?`). A conflict stops the run with nothing
     written, so no SWERepo content is left behind unrecorded and no one's edit is lost."""
     for action in plan.actions:
-        if action.path is not None and action.verb in (CREATE, ADD_BLOCK):
+        if action.path is not None and action.verb in (CREATE, ADD_BLOCK, REWRITE):
             _check_target(action, root)
     if _state_text(root) != plan.state_before:
         raise InitError(f"{FILE_NAME} changed since the plan was made: nothing written; run init again")
@@ -553,7 +945,7 @@ def apply(plan: Plan, root: Path) -> None:
             if done.returncode != 0:
                 raise InitError(f"git init failed (exit status {done.returncode})")
     for action in plan.actions:
-        if action.verb not in (CREATE, ADD_BLOCK) or action.path is None or action.content is None:
+        if action.verb not in (CREATE, ADD_BLOCK, REWRITE) or action.path is None or action.content is None:
             continue
         target = root / action.path
         if not inside(root, target):
@@ -563,6 +955,9 @@ def apply(plan: Plan, root: Path) -> None:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with target.open("x", encoding="utf-8", newline="", errors="surrogateescape") as handle:
                     handle.write(action.content)
+            elif action.verb == REWRITE:
+                _check_unchanged(action, target)  # again, just before writing
+                target.write_text(action.content, encoding="utf-8", newline="")
             else:
                 text = read_exact(target, errors="surrogateescape")
                 try:

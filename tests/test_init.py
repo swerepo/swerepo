@@ -81,9 +81,10 @@ class TestNewProject:
     def test_the_state_file_records_what_was_written(self, new_project: Path):
         init(new_project, hosts=["claude", "gemini"])
         state = State.load(new_project)
-        assert state.components == ["docs", "agents"] and state.hosts == ["claude", "gemini"]
-        assert set(state.files()) == set(MANAGED)  # starter files are the person's: not recorded
-        assert set(state.blocks()) == {"AGENTS.md", "CLAUDE.md", "GEMINI.md"}
+        assert state.components == ["docs", "agents", "ci", "security"] and state.hosts == ["claude", "gemini"]
+        # starter files are the person's: not recorded
+        assert set(state.files()) == {*MANAGED, ".github/workflows/swerepo-ci.yml"}
+        assert set(state.blocks()) == {"AGENTS.md", "CLAUDE.md", "GEMINI.md", "pyproject.toml", ".gitignore"}
         assert state.values["project"] == "invoices" and state.pr_enforce  # a new project enforces the PR rules
 
     def test_running_it_again_changes_nothing(self, new_project: Path):
@@ -197,8 +198,8 @@ class TestChoices:
         assert "agents" not in {a.component for a in plan.actions}
 
     def test_components_of_later_phases_are_listed_not_applied(self, new_project: Path):
-        plan = make_plan(new_project, only=["ci"])
-        assert [(a.component, a.verb) for a in plan.actions] == [("ci", LATER_VERB)]
+        plan = make_plan(new_project, only=["github"])
+        assert [(a.component, a.verb) for a in plan.actions] == [("github", LATER_VERB)]
         assert plan.state_text is None and not plan.changes
 
     def test_wrong_names_are_usage_errors(self, new_project: Path):
@@ -279,10 +280,11 @@ class TestCommandLine:
 
     def test_in_a_terminal_it_asks_the_editors_then_to_apply(self, new_project: Path, monkeypatch):
         monkeypatch.setattr(cli, "_interactive", lambda: True)
-        declined = self.runner.invoke(app, ["init", "--path", str(new_project)], input="antigravity\nn\n")
+        # the editors, the security contact (its default), then whether to apply
+        declined = self.runner.invoke(app, ["init", "--path", str(new_project)], input="antigravity\n\nn\n")
         assert declined.exit_code == 0 and "Nothing applied." in declined.output and "Antigravity" in declined.output
         assert not (new_project / FILE_NAME).exists()
-        accepted = self.runner.invoke(app, ["init", "--path", str(new_project)], input="claude, gemini\ny\n")
+        accepted = self.runner.invoke(app, ["init", "--path", str(new_project)], input="claude, gemini\n\ny\n")
         assert accepted.exit_code == 0 and State.load(new_project).hosts == ["claude", "gemini"]
 
     def test_json(self, new_project: Path):
@@ -313,7 +315,7 @@ class TestGeminiReviewRound1:
 
     def test_p3_f01_check_no_component_subtracts_from_the_chosen_ones(self, new_project: Path):
         runner = CliRunner()
-        init(new_project, hosts=[])
+        init(new_project, hosts=[], only=["docs", "agents"])
         result = runner.invoke(app, ["check", "--path", str(new_project), "--no-agents"])
         lines = result.output.splitlines()[1:-1]
         rows = [line.split(maxsplit=1) for line in lines if line.startswith("  ") and line[2] != " "]

@@ -1,7 +1,7 @@
 """The `swerepo` command line.
 
 Commands arrive phase by phase (docs/PROGRESS.md): `check` since Phase 2; `init` (docs, agents), `adr` and
-`progress` since Phase 3.
+`progress` since Phase 3; `init` for ci and security since Phase 4.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from swerepo import __version__, standard
 from swerepo.adr import AdrError, new_adr, write_index
 from swerepo.blocks import inside
 from swerepo.check import UsageError, in_github_actions, one_line, run_check
-from swerepo.init import HOSTS, InitError, apply, make_plan, noreply_warning
+from swerepo.init import HOSTS, InitError, apply, has_github_remote, make_plan, noreply_warning
 from swerepo.progress import report
 from swerepo.state import COMPONENTS, State, StateError
 
@@ -114,23 +114,59 @@ def _ask_hosts(detected: list[str]) -> list[str]:
     return [] if names == ["none"] else names
 
 
+def _ask_lint() -> str:
+    """Keep the project's linters, or move to ruff gradually (spec §6.3)."""
+    typer.echo(
+        "Linters other than ruff were found. Keep them (CI runs them), or move to ruff gradually "
+        "(ruff checks only the files each change touches)?"
+    )
+    answer = typer.prompt("Linters (keep, gradual)", default="keep").strip().lower()
+    return "gradual" if answer.startswith("g") else "kept"
+
+
+def _ask_contact(root: Path) -> str:
+    """Who to report vulnerabilities to, for SECURITY.md (ADR-20261122-a48e point 1)."""
+    default = "github" if has_github_remote(root) else "placeholder"
+    typer.echo(
+        "SECURITY.md says how to report a vulnerability privately: 'github' (GitHub's private vulnerability "
+        "reporting, no address published), an email address, or 'placeholder' to decide later."
+    )
+    return typer.prompt("Security contact", default=default).strip()
+
+
 @app.command(context_settings=EXTRA_ARGS, epilog=SHORTHAND)
 def init(
     ctx: typer.Context,
     only: Annotated[str | None, typer.Option("--only", help="Apply only these components, comma-separated.")] = None,
+    projects: Annotated[
+        str | None, typer.Option("--projects", help="Monorepo: Python project folders with CI jobs, comma-separated.")
+    ] = None,
+    with_governance: Annotated[
+        bool, typer.Option("--with-governance", help="Add the governance CI job even from an unreleased SWERepo.")
+    ] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Print the plan and stop.")] = False,
     yes: Annotated[bool, typer.Option("--yes", help="Apply without asking (for scripts).")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Print one JSON result instead of text.")] = False,
     path: Annotated[Path, typer.Option("--path", help="The repository to set up.")] = Path("."),
 ) -> None:
     """Set the repository up to the standard: print the plan, then apply it. Never replaces your files.
-    This version applies `docs` and `agents`; the other components come in later phases."""
+    This version applies `docs`, `agents`, `ci` and `security`; the other components come in later phases."""
     interactive = _interactive() and not as_json and not yes
     try:
         components, skipped = _selection(only, ctx.args)
-        plan = make_plan(path, only=components, skip=skipped)
-        if interactive and not dry_run and "agents" in plan.components and not plan.hosts_recorded:
-            plan = make_plan(path, only=components, skip=skipped, hosts=_ask_hosts(plan.hosts))
+        listed = [p.strip() for p in projects.split(",") if p.strip()] if projects is not None else None
+        options = {"only": components, "skip": skipped, "with_governance": with_governance, "projects": listed}
+        plan = make_plan(path, **options)
+        if interactive and not dry_run:
+            asked: dict[str, object] = {}
+            if "agents" in plan.components and not plan.hosts_recorded:
+                asked["hosts"] = _ask_hosts(plan.hosts)
+            if plan.lint_question:
+                asked["lint"] = _ask_lint()
+            if plan.contact_question:
+                asked["contact"] = _ask_contact(path.resolve())
+            if asked:
+                plan = make_plan(path, **options, **asked)
     except UsageError as error:
         raise _fail(error, 2, "init") from error
     except InitError as error:
@@ -158,7 +194,9 @@ def init(
         raise typer.Exit(0)
     created = sum(1 for a in plan.changes if a.verb == "create")
     blocks = sum(1 for a in plan.changes if a.verb == "add block")
-    typer.echo(f"Applied: {created} file(s) created, {blocks} block(s) added.")
+    rewritten = sum(1 for a in plan.changes if a.verb == "rewrite")
+    again = f", {rewritten} rewritten" if rewritten else ""
+    typer.echo(f"Applied: {created} file(s) created, {blocks} block(s) added{again}.")
     typer.echo("Next: review the changes (git status, git diff), commit them on a new branch, open a pull request.")
     warning = noreply_warning(path.resolve())
     if warning:

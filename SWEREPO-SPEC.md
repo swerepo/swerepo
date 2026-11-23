@@ -1,6 +1,6 @@
 # SWERepo — Specification
 
-**Status:** draft for the owner's review · **Version:** 0.9 (design) · **Date:** 2026-11-21
+**Status:** draft for the owner's review · **Version:** 0.10 (design) · **Date:** 2026-11-22
 **Name:** SWERepo, command `swerepo`, at `github.com/swerepo/swerepo` (renamed from Golden Repo in v0.6, ADR-20261120-1a27)
 **What changed:** Appendix A. **How the BLUEPRINT's ideas were handled:** Appendix B.
 
@@ -158,20 +158,23 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
   - **tests**: pytest through uv on Linux, on every Python version the project supports. The versions come from `requires-python` (for a new project, `>=3.11`, so 3.11 to 3.14), up to the newest version standard 1 knows; SWERepo never changes a declared range;
   - **tests-macos**: on pushes to `main` only (macOS minutes cost about ten times more on private repositories);
   - **workflow-audit**: `zizmor` on `.github/workflows/`, run through `uvx` at a pinned version;
-  - **governance**: on pull requests, `swerepo check --ci --base <base branch>` at a pinned SWERepo version (§15; an unreleased SWERepo doesn't add this job unless asked), and, when SeamSpec is set up, `seamspec spec --check docs/EARNED_SPEC.md` at the pinned SeamSpec version (§6.8);
-  - **dependency-review**: on pull requests to public repositories, GitHub's `dependency-review-action` (fails on new dependencies with known vulnerabilities). On private repositories it needs a paid GitHub plan, so the job is skipped there by a condition in the workflow and `check` says "not available on this plan";
-  - **`ci-ok`**: a single aggregating job (`if: always()`) that passes only when every job passed, or was skipped by design (macOS on pull requests, dependency review on private repositories); failed or cancelled jobs fail it. The ruleset requires only `ci-ok`, so adding a job never means editing GitHub settings.
+  - **governance**: on pull requests, `swerepo check --ci --base <base branch> --author <login>` at a pinned SWERepo version (§15; an unreleased SWERepo doesn't add this job unless asked);
+  - **seamspec**: SeamSpec's locked rules, inside `ci-ok` so a failing rule blocks the merge (ADR-20261122-4a06): `seamspec doctor --ci`, `seamspec verify --all --ci` and `seamspec spec --check docs/EARNED_SPEC.md` (§6.8) at the pinned SeamSpec version (`[tools] seamspec`). The job is always in the workflow: without `.seamspec/config.toml` it says so and passes, so setting SeamSpec up later needs no workflow change;
+  - **dependency-review**: on pull requests to public repositories, GitHub's `dependency-review-action` (fails on new dependencies with known vulnerabilities). On private repositories it needs a paid GitHub plan, so the job is skipped there by a condition in the workflow;
+  - **one lint and one test job per project** listed with `--projects` (§11);
+  - **`ci-ok`**: a single aggregating job (`if: always()`) that reads every job's result: each must succeed, except a job skipped by design (macOS off pushes, governance off pull requests, dependency review off pull requests to public repositories), which must be skipped; failed, cancelled or unexpectedly skipped jobs fail it. The ruleset requires only `ci-ok`, so adding a job never means editing GitHub settings.
+- **Installing the project:** `uv sync --locked` with a `uv.lock` (the project's own, or its uv workspace's), `uv sync` without. Projects uv can't install (Poetry's lock without uv's, no `pyproject.toml` or no `[project]` table) get no workflow in standard 1's first template, and the plan says why. Lint and tests run the project's own tools through `uv run`; the plan names those missing from its dependencies (`uv add --dev pytest ruff`), since SWERepo never edits dependencies.
 - Actions pinned to commit SHAs, `permissions: contents: read` by default, `persist-credentials: false` on checkout, `concurrency` to cancel superseded runs, a `timeout-minutes` on every job.
 - The type checker is an option (§19).
 
 ### 6.3 Code quality (component `ci`)
 
-- `pyproject.toml` sections for ruff (lint rules and format) and pytest, merged into an existing file at table level without touching other sections or formatting.
+- Settings for ruff and pytest in a **marked block at the end of `pyproject.toml`** (`# swerepo:begin` … `# swerepo:end`; ADR-20261122-4a06): `[tool.ruff]` only when ruff is chosen and not configured, `[tool.pytest.ini_options]` only when the project has no pytest configuration. The person's text above it is kept byte for byte; if the block would clash with their TOML, it isn't added and the plan says so.
 - **Projects that already lint.** SWERepo looks for existing linters and formatters (ruff, black, isort, flake8, pylint) in `pyproject.toml`, `setup.cfg`, `tox.ini`, `.flake8` and `.pre-commit-config.yaml`:
   - **ruff already configured:** its configuration is kept as it is; the lint job runs it.
   - **other tools found:** the person chooses (shown in the plan; the default is the first):
     1. **keep them**: no ruff settings are added; the lint job runs the detected tools through `uv run`, and they are recorded under `[adopted] linters`;
-    2. **move to ruff gradually**: ruff settings are added, matched to the existing line length and target version where they can be read, and on pull requests ruff checks **only the files the PR changes**, so existing code isn't flagged all at once. SWERepo never reformats or edits code to make it pass.
+    2. **move to ruff gradually**: ruff settings are added, matched to the existing line length where it can be read (ruff takes the target version from `requires-python`), and ruff checks **only the Python files each change touches** (a pull request against its base, a push against the commit before it), so existing code isn't flagged all at once. SWERepo never reformats or edits code to make it pass.
   - **nothing found:** ruff, as for a new project.
 - The pytest section is added only when the project has no pytest configuration of its own (`pytest.ini`, `setup.cfg`, `tox.ini`, `pyproject.toml`).
 - **Locked SeamSpec tests are never linted or reformatted** (SeamSpec's ADR-20261013-c3f7). SeamSpec records a hash of each approved rule test, and any edit, even whitespace, counts as tampering. A `ruff format .` run by an agent would break every lock, and `seamspec init` doesn't add the exclusion to the repositories it sets up. So:
@@ -182,8 +185,8 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
 
 ### 6.4 Security and privacy (component `security`)
 
-- `SECURITY.md`: how to report a vulnerability (the contact is asked for; a placeholder if none is given).
-- A privacy check (`.github/workflows/swerepo-privacy.yml` and the same check locally as `swerepo check --only security`): no personal email addresses, no home-folder paths, no obvious secrets in tracked files. Lesson from SessionWalk, where personal details had to be removed from history.
+- `SECURITY.md`: how to report a vulnerability. The contact is asked for: GitHub's private vulnerability reporting (the default with a GitHub remote; no address is published, and the owner turns it on in the repository's settings), an email address, or a placeholder to fill in (ADR-20261122-a48e). Written once; the person's from then on.
+- A privacy check (`.github/workflows/swerepo-privacy.yml` and the same check locally as `swerepo check --only security`): no personal email addresses, no home-folder paths, no obvious secrets (private keys and well-known token formats) in tracked files and in untracked files git would add. `[privacy] allow_paths` globs read as git's (`*` within a folder, `**` across folders). Findings name the file and line, never what was found. Lesson from SessionWalk, where personal details had to be removed from history. The workflow needs a SWERepo it can install, as the `governance` job does (§15); on pull requests, `governance` reports the same findings inside `ci-ok`.
   - **Allowed by default:** noreply addresses (`users.noreply.github.com`), reserved example domains (`example.com`, `example.org`, …), emails in `[project].authors` and `maintainers` in `pyproject.toml`, the contact in `SECURITY.md`, and placeholder home paths (`/Users/me`, `/home/user`, `C:\Users\you`, `~`).
   - **Allowed by the person:** files or globs listed under `[privacy] allow_paths` in `.swerepo.toml`, and a single line marked with a `swerepo: allow-privacy` comment. Allowances name files, never the addresses themselves, so no personal data goes into `.swerepo.toml`.
 - Guidance to turn on GitHub secret scanning and push protection (free on public repositories); `check` reports whether they are on when it can read the setting.
@@ -237,7 +240,7 @@ Designed so that parallel branches don't collide: each PR adds its own files, an
 
 ### 6.8 Locked rules (component `seamspec`)
 
-- SeamSpec set up through its own command (§13), in enforced mode with its CI workflow.
+- SeamSpec set up through its own command (§13), in enforced mode, its locked rules run by the `seamspec` job in `swerepo-ci.yml` (§6.2; ADR-20261122-4a06).
 - **`docs/EARNED_SPEC.md`**: the rules SeamSpec enforces today, written by `seamspec spec --out docs/EARNED_SPEC.md` and checked in CI with `seamspec spec --check docs/EARNED_SPEC.md`. Reviewers see a change to the enforced rules as a readable diff, next to what `openspec/specs/` says was planned.
 - The **hygiene rule pack** proposed as SeamSpec rules, for the person to approve:
   1. No personal email addresses or home-folder paths in tracked files (same allowances as §6.4).
@@ -333,6 +336,10 @@ mode = "solo"
 project = "invoices"
 python = ["3.11", "3.12", "3.13", "3.14"]
 default_branch = "main"
+ci_install = "uv sync --locked"   # how CI installs the project (§6.2)
+lint = "ruff"                     # ruff | kept | gradual (§6.3)
+governance_command = ""           # how swerepo-ci.yml runs SWERepo; "" until a released one can be pinned (§15)
+privacy_command = ""              # the same for swerepo-privacy.yml (§6.4)
 code_owner = "@me"
 
 [files."docs/adr/TEMPLATE.md"]
@@ -350,8 +357,8 @@ template = "agents/block@1"
 rendered = "0c7e…"                # of the block content only
 written = "0c7e…"
 
-[sections."pyproject.toml"."tool.ruff"]
-template = "ci/ruff@1"
+[blocks."pyproject.toml"]            # ruff and pytest settings (§6.3)
+template = "ci/pyproject@1"
 rendered = "77d0…"
 written = "77d0…"
 
@@ -439,7 +446,7 @@ A **monorepo** holds several projects in one repository, for example `services/o
 - **v0.1:**
   - reports the layout;
   - sets up the repository-level parts (docs, agents, security, GitHub, the CI aggregator) once, at the root. One ADR folder and one progress folder serve every project; one progress file per PR keeps many teams from colliding;
-  - adds a lint and test job per Python project only when `--projects` lists them, each running in its own folder;
+  - adds a lint and test job per Python project only when `--projects` lists them (a folder with a `pyproject.toml`, also under a folder detection skips, such as `tools/`), each running in its own folder; the list is recorded under `[projects] listed`;
   - **settings per project:** ruff and pytest settings (§6.3) go into each listed project's own `pyproject.toml`, with that project's own linter detection and choice. Exception: when the root `pyproject.toml` already holds `[tool.ruff]` (for example a uv workspace root), the ruff settings go there once and projects inherit them, as ruff looks for the nearest configuration;
   - **projects outside `ci-ok`:** every project root not covered by a SWERepo job (unsupported languages such as TypeScript in v0.1, or Python projects not listed) is named in the plan. Its own existing CI keeps running, but the ruleset requires only `ci-ok`, so a failure there wouldn't block a merge. `init` lists the job names of the workflows that cover that folder and asks whether to require them too (recorded under `[github] extra_required_checks`, added to the ruleset beside `ci-ok`). The person can instead record the project as knowingly uncovered (`[projects] not_covered`). Until one of the two, `check` reports `✗ web/ not covered by any required check`;
   - for SeamSpec, explains its current limit (one test setup per repository; per-folder runners are on SeamSpec's roadmap) and sets it up for one project root the person chooses.
@@ -485,7 +492,7 @@ A **monorepo** holds several projects in one repository, for example `services/o
 SWERepo uses SeamSpec only through its public command line; SeamSpec needs no changes.
 
 - **Requires** the `seamspec` command. If missing, SWERepo says how to install it (`uv tool install seamspec`) and asks before installing it itself.
-- **`init --only seamspec`** runs `seamspec init --mode enforced --ci --hosts <editors>`, passing the non-Claude editors chosen in the `agents` component (§6.6: `cursor`, `vscode`, `antigravity`), so SeamSpec sets up the same editors SWERepo does. Without `--hosts`, SeamSpec detects editors by their folders, which don't exist yet in a new project, and would treat a `GEMINI.md` as Antigravity. It runs in the person's terminal, so SeamSpec's own consent screen ("Allow automatic test runs?") is answered by the person. `--yes` never answers it.
+- **`init --only seamspec`** runs `seamspec init --mode enforced --no-ci --hosts <editors>` (its locked rules run in `swerepo-ci.yml`, §6.2; without the `ci` component it keeps SeamSpec's own workflow, `--ci`, and says nothing else runs them), passing the non-Claude editors chosen in the `agents` component (§6.6: `cursor`, `vscode`, `antigravity`), so SeamSpec sets up the same editors SWERepo does. Without `--hosts`, SeamSpec detects editors by their folders, which don't exist yet in a new project, and would treat a `GEMINI.md` as Antigravity. It runs in the person's terminal, so SeamSpec's own consent screen ("Allow automatic test runs?") is answered by the person. `--yes` never answers it.
 - **`CLAUDE.md` and `AGENTS.md`:** SeamSpec keeps writing its own blocks; SWERepo's block and the `@AGENTS.md` import sit beside them, outside SeamSpec's markers.
 - **The earned spec** (§6.8) is written **after** the first review, so it isn't empty and immediately stale:
   1. `init --only seamspec` runs `seamspec init`, then proposes the hygiene rules;
@@ -647,6 +654,15 @@ TypeScript (npm/pnpm, vitest/jest, eslint/prettier), matching SeamSpec's presets
 ---
 
 ## Appendix A: Revision history
+
+### 0.9 → 0.10
+
+Decisions from building Phase 4 (`init` for `ci` and `security`):
+
+1. **SeamSpec's locked rules run inside `swerepo-ci.yml`** (the owner's choice; ADR-20261122-4a06): an always-present `seamspec` job under `ci-ok`, and `seamspec init --no-ci` (§6.2, §6.8, §13).
+2. **The workflow** (ADR-20261122-4a06): composed from templates at one version number; `ci-ok` checks each job's result against what was expected; installs with uv; jobs per listed project (§6.2, §11).
+3. **ruff and pytest settings as a marked block** at the end of `pyproject.toml`, replacing `[sections]` (§6.3, §9).
+4. **The security component** (ADR-20261122-a48e): the contact defaults to GitHub's private vulnerability reporting; the privacy scan also reads untracked files git would add and reports obvious secrets, naming files and lines only (§6.4).
 
 ### 0.8 → 0.9
 

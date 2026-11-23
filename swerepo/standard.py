@@ -1,6 +1,6 @@
 """Standard 1: the components, their files, and which checks later phases add (SWEREPO-SPEC §6, §8).
 
-`check` reads this; Phase 3's `init` will use the same lists to know what to create (ADR-20261120-fc5a).
+`check` reads this; `init` uses the same names to know what to create (ADR-20261120-fc5a).
 """
 
 from __future__ import annotations
@@ -34,11 +34,7 @@ GITHUB_FILES = (
 
 # Checks a later phase adds: shown as "?" until then, never silently left out (ADR-20261120-fc5a point 4).
 LATER = {
-    "ci": (("ci.python-matrix", "Python versions in swerepo-ci.yml match requires-python", 4),),
-    "security": (
-        ("security.privacy-scan", "privacy scan of tracked files", 4),
-        ("security.secret-scanning", "GitHub secret scanning and push protection", 5),
-    ),
+    "security": (("security.secret-scanning", "GitHub secret scanning and push protection", 5),),
     "github": (("github.live", "ruleset and merge settings on GitHub match .github/swerepo/", 5),),
     "seamspec": (("seamspec.health", "SeamSpec health, CI pin and hygiene rules", 7),),
     "release": (("release.environment", "protected release environment", 8),),

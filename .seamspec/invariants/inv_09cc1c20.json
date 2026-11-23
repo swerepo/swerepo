@@ -1,0 +1,34 @@
+{
+  "schema_version": "1",
+  "id": "inv_09cc1c20",
+  "title": "ci-ok waits for every job and fails when one didn't do what was expected",
+  "assertion": "In every `.github/workflows/swerepo-ci.yml` that `swerepo init` writes (with ruff, kept linters, a gradual move to ruff, the governance job, per-project jobs, and jobs asked for on a later run), `ci-ok` runs `if: always()` and its `needs:` names every other job. Run with GitHub's results for those jobs, its step passes only when every job succeeded or was skipped by design (test-macos off pushes, governance off pull requests, dependency-review off pull requests to public repositories), and exits non-zero when any job failed, was cancelled, was skipped unexpectedly, or ran when it should have been skipped.",
+  "scope": {
+    "paths": [
+      "swerepo/ci.py",
+      "swerepo/init.py",
+      "swerepo/templates/ci/"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261122-4a06 (Phase 4): the ruleset requires only ci-ok, so a job ci-ok doesn't wait for, or a failure it lets through, wouldn't block a merge. Strengthened after SeamSpec's reviewer: the test runs ci-ok's own step on sample results; the Python-versions promise moved to its own rule.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_09cc1c20.py",
+    "harness_sha256": "6df504c87e5049393e49f74445a8ecc89ca447515726f3630a390b82434b5d8c",
+    "assertion_sha256": "f490e8319640e885667cff6b149754390235944d2698b29df73bfdca95d621e9"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-23T05:03:42.246287Z",
+  "approved_at": "2026-11-23T07:46:33.950875Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}
