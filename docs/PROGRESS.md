@@ -4,7 +4,7 @@ What is being built now and next. The log of what each change did is in [progres
 
 ## Now
 
-**Phase 3: `swerepo init` for `docs` and `agents`, `adr` and `progress`.** `init` prints a plan, then creates missing files and adds marked blocks, never replacing a file; `adr new` and `adr index` make ADR names and the index; `progress` prints Now, Next and the latest entries. Review closed after 5 rounds (docs/reviews/phase-3.md); 10 locked rules; pull request next.
+**Dogfooding `swerepo init`:** SWERepo set up its own repository's `docs` and `agents` components (ADR-20261121-d0f5). Phase 3 is done.
 
 ## Next
 
@@ -22,7 +22,7 @@ What is being built now and next. The log of what each change did is in [progres
 | 0 | Skeleton, CI, ADRs, SeamSpec | done ([PR #1](https://github.com/swerepo/swerepo/pull/1), [review](reviews/phase-0.md)) |
 | 1 | Detection, state file, rendering, fingerprints | done ([PR #2](https://github.com/swerepo/swerepo/pull/2), [review](reviews/phase-1.md)) |
 | 2 | `check` | done ([PR #3](https://github.com/swerepo/swerepo/pull/3), [review](reviews/phase-2.md); Copilot fixes in [PR #4](https://github.com/swerepo/swerepo/pull/4)) |
-| 3 | `init` for `docs` and `agents`; `progress`, `adr` | in review |
+| 3 | `init` for `docs` and `agents`; `progress`, `adr` | done ([PR #6](https://github.com/swerepo/swerepo/pull/6), [review](reviews/phase-3.md)); applied here (ADR-20261121-d0f5) |
 | 4 | `ci` and `security` | |
 | 5 | `github`; `threads` | |
 | 6 | `update`, merge, `diff`, `status` | |
