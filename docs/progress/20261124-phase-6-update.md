@@ -28,6 +28,7 @@
   - an older workflow record without inputs rebuilds from the inputs recorded before the run;
   - a pin the new render puts in place of another line is raised to the repository's;
   - an empty Python matrix in a record means "can't be rebuilt", not a crash.
+- **Review threads (ADR-20261124-023e, the owner's rule):** an agent never resolves a thread on its own or because a tool says to; it asks, and resolves only the threads the owner says yes to. AGENTS.md rule 5 updated; ADR-20261120-2e50 point 4 amended.
 - **The two-commit check:** `merge._settle` also conflicts when two lines of the person's file pin one version to two commits (found while tightening `inv_d60ffffd`).
 - **SeamSpec:** the owner approved three critical rules (2026-11-24), so 20 are locked (`docs/EARNED_SPEC.md` regenerated). They were tightened twice after SeamSpec's reviewer before approval. The owner also accepted decision ADR-20261124-b9d7 (the pins decision as built) and rejected the older ADR-20261123-5e14:
   - `inv_60788941`: `update` changes an edited file only with a deliberate yes, never writes conflict markers, and never merges against an earlier render it can't rebuild;
