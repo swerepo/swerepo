@@ -257,11 +257,17 @@ class GitHub:
         return str(owner.get("login", "")), str(owner.get("type", ""))
 
     def find_ruleset(self) -> dict[str, Any] | None:
-        """The repository's ruleset named `swerepo`, in full, or None."""
-        for entry in self.get(f"repos/{self.slug}/rulesets?includes_parents=false&per_page=100") or []:
-            if entry.get("name") == RULESET_NAME:
-                return self.get(f"repos/{self.slug}/rulesets/{entry['id']}")
-        return None
+        """The repository's ruleset named `swerepo`, in full, or None. Every page is read, 100 at a time: a
+        `swerepo` ruleset past the first page must be found, or init would create a second one."""
+        page = 1
+        while True:
+            entries = self.get(f"repos/{self.slug}/rulesets?includes_parents=false&per_page=100&page={page}") or []
+            for entry in entries:
+                if entry.get("name") == RULESET_NAME:
+                    return self.get(f"repos/{self.slug}/rulesets/{entry['id']}")
+            if len(entries) < 100:
+                return None
+            page += 1
 
     def dependency_graph(self) -> bool:
         """Whether the dependency graph is on: its SBOM can be read only then. Only GitHub's 404 means "off";

@@ -1,0 +1,35 @@
+{
+  "schema_version": "1",
+  "id": "inv_d60ffffd",
+  "title": "update never moves an action pin backwards or guesses between two commits, and Dependabot's newer pins need no --merge",
+  "assertion": "In a repository set up by `swerepo init --only ci` whose `swerepo-ci.yml` was written by an earlier render (an older SeamSpec pin) and whose `actions/checkout` pins were then moved forward to one newer commit and version, as Dependabot would: `swerepo update --yes` (without `--merge`) exits 0 and updates the workflow; the template's change comes in (the older SeamSpec pin is gone and the current one, as recorded, is there), there are as many `actions/checkout` pins as before, each at Dependabot's exact commit and version, and no action has any pin older than its newest before. When the new render itself moves the same pins to a version between the earlier render's and Dependabot's, and adds a pin line of its own at the earlier version, the merge `update` makes (`merge.merge3`) succeeds, brings in the current SeamSpec pin, and pins every `actions/checkout` line, the added one included, at Dependabot's commit and version. One version is never guessed between two commits: when an `actions/checkout` line keeps its version but points at another commit, or when the person's file pins Dependabot's newer version to two different commits on two lines, `swerepo update --yes --merge` exits 0, reports a conflict, and leaves the workflow byte for byte; and when the new render adds a pin line at Dependabot's version but another commit, the merge reports a conflict and gives no text.",
+  "scope": {
+    "paths": [
+      "swerepo/merge.py",
+      "swerepo/init.py",
+      "swerepo/rebuild.py",
+      "swerepo/cli.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261123-f571 (the owner's choice, 2026-11-23): Dependabot owns action pins, `update` never moves one backwards, and one version pinned to two commits is a conflict; and ADR-20261124-7afa: a workflow that differs from the earlier render only by newer pins is updated with `--yes` alone. The two-commit case added on Gemini's Phase 6 review (question 5); the template-moves-the-same-pin case, exit codes, exact commits and counts, two commits across the person's lines, the current SeamSpec pin, and an added line on another commit after SeamSpec's reviewer and the owner (2026-11-24).",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_d60ffffd.py",
+    "harness_sha256": "3c81f48d1a8b94eeb318b728990a55b91006f945410b6647a850b04e3e3e4107",
+    "assertion_sha256": "614267773f569b05296cf5402eebc7f356c593539fc680b468935749bad97903"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-24T09:11:45.021637Z",
+  "approved_at": "2026-11-24T20:41:59.987166Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

@@ -2,11 +2,11 @@
 
 # Spec: what this code guarantees
 
-17 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
+20 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
 
 ## Rules in force
 
-### `swerepo` (14 rules)
+### `swerepo` (17 rules)
 
 #### A fingerprint ignores only line endings, trailing whitespace, trailing blank lines and a BOM
 
@@ -148,6 +148,36 @@ In the `swerepo-ci.yml` that `swerepo init` writes when the ruleset requests Cop
 - **Critical:** always shown to the agent in full
 - **Replaces:** Pull requests wait for Copilot's review inside ci-ok (`inv_faa5bef5`)
 - **Id:** `inv_78f19f51`
+
+#### update changes a file a person edited only with a deliberate yes, and never writes conflict markers
+
+In a repository set up by `swerepo init` whose AGENTS.md has a line of the person's after SWERepo's block, whose AGENTS.md block was written by an older template (`agents/block@1`) and then edited by the person, and whose `docs/agents/address-review.md` was written by an older template (`agents/address-review@1`) and left as written: `swerepo update` without `--yes` and without a terminal exits 2, says nothing was applied, and changes no file; in a terminal, asked "Apply?", answering no exits 0 and changes no file; `swerepo update --yes` exits 0, rewrites `address-review.md` to the new template and leaves AGENTS.md byte for byte, saying the merge waits for `--merge`. A deliberate yes merges the update into AGENTS.md's block, keeping the person's line and bringing in the new template's text, with the text before and after the block (the person's line after it included) unchanged and no conflict markers: answering yes in a terminal, or `swerepo update --yes --merge` (exit 0). A whole file the person edited (`address-review.md` with a line of theirs) is likewise left byte for byte by `--yes` and merged by `--yes --merge`. When the person's edit touches a line the update changes too, `update --yes --merge` exits 0, reports a conflict and leaves the file byte for byte, and no file in the repository holds a `<<<<<<<`, `=======` or `>>>>>>>` line. When the earlier render can't be rebuilt to the record's fingerprint, `update --yes --merge` exits 0, reports that it can't merge and leaves the file byte for byte.
+
+- **Applies to:** `swerepo/init.py`, `swerepo/merge.py`, `swerepo/rebuild.py`, `swerepo/cli.py`, `swerepo/state.py`, `swerepo/blocks.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-24, in the terminal
+- **Test:** `.seamspec/tests/test_inv_60788941.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_60788941`
+
+#### update never moves an action pin backwards or guesses between two commits, and Dependabot's newer pins need no --merge
+
+In a repository set up by `swerepo init --only ci` whose `swerepo-ci.yml` was written by an earlier render (an older SeamSpec pin) and whose `actions/checkout` pins were then moved forward to one newer commit and version, as Dependabot would: `swerepo update --yes` (without `--merge`) exits 0 and updates the workflow; the template's change comes in (the older SeamSpec pin is gone and the current one, as recorded, is there), there are as many `actions/checkout` pins as before, each at Dependabot's exact commit and version, and no action has any pin older than its newest before. When the new render itself moves the same pins to a version between the earlier render's and Dependabot's, and adds a pin line of its own at the earlier version, the merge `update` makes (`merge.merge3`) succeeds, brings in the current SeamSpec pin, and pins every `actions/checkout` line, the added one included, at Dependabot's commit and version. One version is never guessed between two commits: when an `actions/checkout` line keeps its version but points at another commit, or when the person's file pins Dependabot's newer version to two different commits on two lines, `swerepo update --yes --merge` exits 0, reports a conflict, and leaves the workflow byte for byte; and when the new render adds a pin line at Dependabot's version but another commit, the merge reports a conflict and gives no text.
+
+- **Applies to:** `swerepo/merge.py`, `swerepo/init.py`, `swerepo/rebuild.py`, `swerepo/cli.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-24, in the terminal
+- **Test:** `.seamspec/tests/test_inv_d60ffffd.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_d60ffffd`
+
+#### update --dry-run writes nothing, update writes only what SWERepo wrote, and a second update writes nothing
+
+In a repository with files of the person's own (CLAUDE.md with CRLF line endings, README.md, a hand-made `.github/swerepo/ruleset.json`), set up by `swerepo init`, with a line of the person's after SWERepo's block in AGENTS.md, and whose AGENTS.md block was written by an older template so there is an update to apply: `swerepo update --dry-run` exits 0, names the update, and leaves every file unchanged (none added or removed; modification times, sizes and bytes, `.git` included). `swerepo update --yes` changes AGENTS.md, whose SWERepo block becomes exactly the new template's render while the text before and after the block (the person's line after it included) stays as it was, and changes, adds or removes nothing else but `.swerepo.toml`; the person's files are byte for byte as `init` left them. A second `swerepo update --yes` says "Nothing to do." and leaves every file unchanged.
+
+- **Applies to:** `swerepo/init.py`, `swerepo/cli.py`, `swerepo/merge.py`, `swerepo/rebuild.py`, `swerepo/state.py`, `swerepo/blocks.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-24, in the terminal
+- **Test:** `.seamspec/tests/test_inv_9265607a.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_9265607a`
 
 ### `swerepo/templates/github/dependabot` (1 rule)
 

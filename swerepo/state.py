@@ -11,7 +11,7 @@ import os
 import re
 import tempfile
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -39,11 +39,14 @@ class StateError(ValueError):
 
 @dataclass(frozen=True)
 class Record:
-    """What SWERepo wrote at a path: the template, the template's own output, and what was written."""
+    """What SWERepo wrote at a path: the template, the template's own output, and what was written. `inputs`: the
+    values that output was rendered from, so `update` can rebuild it even after `[values]` moved on (ADR-20261124-7afa
+    point 10); None for records written before it existed."""
 
     template: str
     rendered: str
     written: str
+    inputs: dict[str, str] | None = field(default=None, compare=False, hash=False)
 
 
 def check_path(path: object, *, key: str) -> str:
@@ -354,13 +357,19 @@ class State:
         _check_record(record.template, record.rendered, record.written, key=key)
         if kind not in self.doc:
             self.doc.add(kind, tomlkit.table(is_super_table=True))
-        values = {"template": record.template, "rendered": record.rendered, "written": record.written}
+        if record.inputs is not None:
+            _check_inputs(record.inputs, key=f"{key}.inputs")
+        values: dict[str, Any] = {"template": record.template, "rendered": record.rendered, "written": record.written}
+        if record.inputs is not None:
+            values["inputs"] = _inline(record.inputs)
         existing = self.doc[kind].get(path)
         if existing is not None:
             # Update the known keys in place: a person's comments and extra keys in the record stay
-            # (review: Copilot on PR #2).
+            # (review: Copilot on PR #2). Inputs that no longer apply go: they describe this record's render.
             for name, value in values.items():
                 existing[name] = value
+            if record.inputs is None and "inputs" in existing:
+                del existing["inputs"]
             return
         entry = tomlkit.table()
         for name, value in values.items():
@@ -407,10 +416,25 @@ def _reason(error: Exception) -> str:
 def _records(table: Any) -> dict[str, Record]:
     if table is None:
         return {}
-    return {
-        str(path): Record(str(entry["template"]), str(entry["rendered"]), str(entry["written"]))
-        for path, entry in table.items()
-    }
+    found = {}
+    for path, entry in table.items():
+        inputs = entry.get("inputs")
+        recorded = {str(k): str(v) for k, v in inputs.items()} if isinstance(inputs, dict) else None
+        found[str(path)] = Record(str(entry["template"]), str(entry["rendered"]), str(entry["written"]), recorded)
+    return found
+
+
+def _inline(inputs: dict[str, str]) -> Any:
+    """The inputs as one inline table, keys sorted, so a record stays a few lines."""
+    table = tomlkit.inline_table()
+    for name in sorted(inputs):
+        table.append(name, inputs[name])
+    return table
+
+
+def _check_inputs(inputs: Any, *, key: str) -> None:
+    if not isinstance(inputs, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in inputs.items()):
+        raise StateError(f"{key}: must be a table of text values")
 
 
 def _check_components(components: Any, *, key: str) -> None:
@@ -472,6 +496,8 @@ def _validate(doc: TOMLDocument, running: str = __version__) -> None:
             if not isinstance(entry, dict):
                 raise StateError(f"{key}: must be a table with template, rendered and written")
             _check_record(entry.get("template"), entry.get("rendered"), entry.get("written"), key=key)
+            if "inputs" in entry:
+                _check_inputs(entry["inputs"], key=f"{key}.inputs")
     _validate_settings(data)
     projects = data.get("projects", {})
     if not isinstance(projects, dict):

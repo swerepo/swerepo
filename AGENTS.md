@@ -70,7 +70,7 @@ These rules apply to every agent and every person working on swerepo (the SWERep
 4. Any change to the design, the process (CI workflows included) or the runtime dependencies gets an ADR in `docs/adr/` (`swerepo adr new "Title"`).
 5. Run the full test suite before saying tests pass, even for docs-only changes.
 6. Before committing: no personal emails, home-folder paths, keys or passwords in the change.
-7. Answer every review thread before asking for a merge: fix it and reply with the commit, or reply why not.
+7. Answer every review thread before asking for a merge: fix it and reply with the commit, or reply why not. `swerepo threads <pr>` lists the open ones.
 8. Never publish a package, approve a deployment or merge without the person's explicit go-ahead.
 9. When a test fails, fix the code; never weaken the test. With SeamSpec, never edit a locked rule's test: request a supersede.
 

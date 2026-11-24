@@ -4,15 +4,15 @@ What is being built now and next. The log of what each change did is in [progres
 
 ## Now
 
-**Dependabot's pull requests can merge:** Dependabot's own pull requests no longer wait for a Copilot review that never comes, and Dependabot proposes a version once it is a week old (ADR-20261123-cc8d). Before that: secrets are caught before a push ([PR #15](https://github.com/swerepo/swerepo/pull/15)); 17 SeamSpec rules in force.
+**Phase 6, reviewed:** `swerepo update` merges SWERepo's new templates into files a person edited, only with a deliberate yes, and never moves an action pin backwards; `diff` and `status` read only (ADR-20261124-7afa, ADR-20261123-f571). Each record in `.swerepo.toml` now keeps the inputs its render used. Before that: Dependabot's pull requests can merge ([PR #16](https://github.com/swerepo/swerepo/pull/16)); 20 SeamSpec rules in force.
 
 ## Next
 
 - **Owner, on GitHub:** secret scanning and push protection are on (2026-11-23); Dependabot security updates are still off (Settings → Advanced Security).
-- **Phase 6:** `update`, three-way merge, `diff`, `status`. Also: explain `delete_branch_on_merge` in `init`'s plan, or ask about it, for teams that keep merged branches (release branches merged by pull request would be deleted); today it is changed by editing `repo-settings.json` (owner, 2026-11-23: keep it on here).
+- **Phase 6:** the pull request. Gemini signed off after 3 rounds ([review](reviews/phase-6.md)); the three `update` rules are locked (2026-11-24).
 - **Owner:** pin the repository on your profile; delete the merged `phase-0/skeleton` branch on GitHub. Decided so far: license Apache-2.0 (ADR-20261119-7384), name SWERepo and hosting `swerepo/swerepo` (ADR-20261120-1a27), SeamSpec inside `swerepo-ci.yml` and private vulnerability reporting (2026-11-22); `solo` mode, own login as code owner, squash only, merges wait for Copilot (2026-11-23).
 - **PyPI name:** claimed with the placeholder `swerepo 0.0.1` (ADR-20261119-d68b). Yank it and delete `tools/pypi-placeholder/` after the first real release (Phase 8).
-- **Notes for later phases:** `GitHub.find_ruleset` reads only the first 100 rulesets (read every page); `--only seamspec` without `ci` and SeamSpec's `strict` mode (Phase 7, ADR-20261122-4a06 point 1); Poetry projects in the CI template; the `[pr] skip_progress_label` input; `adr new` cutting slugs at a word boundary; a SeamSpec rule locking released templates (Phase 8).
+- **Notes for later phases:** `--only seamspec` without `ci` and SeamSpec's `strict` mode (Phase 7, ADR-20261122-4a06 point 1); Poetry projects in the CI template; the `[pr] skip_progress_label` input; `adr new` cutting slugs at a word boundary; a SeamSpec rule locking released templates (Phase 8).
 
 ## Phases
 
@@ -24,6 +24,6 @@ What is being built now and next. The log of what each change did is in [progres
 | 3 | `init` for `docs` and `agents`; `progress`, `adr` | done ([PR #6](https://github.com/swerepo/swerepo/pull/6), [review](reviews/phase-3.md)); applied here (ADR-20261121-d0f5) |
 | 4 | `ci` and `security` | done ([PR #8](https://github.com/swerepo/swerepo/pull/8), [review](reviews/phase-4.md)); applied here (ADR-20261123-d27b) |
 | 5 | `github`; `threads` | done ([PR #10](https://github.com/swerepo/swerepo/pull/10), [review](reviews/phase-5.md)); applied here (ADR-20261123-e2f8) |
-| 6 | `update`, merge, `diff`, `status` | |
+| 6 | `update`, merge, `diff`, `status` | reviewed ([review](reviews/phase-6.md)); pull request next (branch `phase-6/update`) |
 | 7 | `seamspec` and the hygiene rule pack | |
 | 8 | `openspec`, `release`; dogfooding | |

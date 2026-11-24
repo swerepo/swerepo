@@ -1,6 +1,6 @@
 # SWERepo — Specification
 
-**Status:** draft for the owner's review · **Version:** 0.13 (design) · **Date:** 2026-11-23
+**Status:** draft for the owner's review · **Version:** 0.14 (design) · **Date:** 2026-11-24
 **Name:** SWERepo, command `swerepo`, at `github.com/swerepo/swerepo` (renamed from Golden Repo in v0.6, ADR-20261120-1a27)
 **What changed:** Appendix A. **How the BLUEPRINT's ideas were handled:** Appendix B.
 
@@ -269,10 +269,10 @@ Designed so that parallel branches don't collide: each PR adds its own files, an
 swerepo init     [--only C,...] [--no-C ...] [--mode solo|team] [--code-owner @LOGIN] [--no-copilot-review]
                  [--projects P,...] [--with-governance] [--dry-run] [--yes] [--path DIR] [--json]
 swerepo check    [--only C,...] [--base REF] [--author LOGIN] [--skip progress] [--json] [--ci] [--path DIR]
-swerepo update   [--only C,...] [--enforce-pr-rules] [--dry-run] [--yes] [--path DIR] [--json]
+swerepo update   [--only C,...] [--enforce-pr-rules] [--dry-run] [--yes] [--merge] [--path DIR] [--json]
 swerepo -u       (short for `update`; `swerepo -u --seamspec` = `update --only seamspec`)
-swerepo diff     [FILE ...]          what update would change in files you edited, and any merge conflicts
-swerepo status                       components applied, mode, standard version, tool versions
+swerepo diff     [FILE ...] [--path DIR]   what update would change in files you edited, and any merge conflicts
+swerepo status   [--path DIR] [--json]     components applied, mode, standard version, tool versions, files by state
 swerepo progress [-n N]              Now, Next and the latest N progress entries
 swerepo adr new TITLE                a new ADR from the template, with a fresh name
 swerepo adr index                    regenerate the ADR index
@@ -369,6 +369,7 @@ written = "a41b…"
 template = "agents/block@1"
 rendered = "0c7e…"                # of the block content only
 written = "0c7e…"
+inputs = { commands = "…", project = "invoices" }  # the values this render used, nothing more (§16)
 
 [blocks."pyproject.toml"]            # ruff and pytest settings (§6.3)
 template = "ci/pyproject@1"
@@ -582,12 +583,13 @@ SWERepo · check · /Users/me/code/legacy-api (standard 1, mode: team)
 
 - **`swerepo update`** (`-u`) re-renders every applied component with the current templates and standard, and, for each file, block or section:
   - unchanged since SWERepo wrote it → replaced with the new render;
-  - changed by a person → **three-way merge** with `git merge-file`: the base is the earlier render (rebuilt from the recorded template version and `[values]`, checked against `rendered`), "ours" is the person's file, "theirs" is the new render. A clean merge is shown as a diff in the plan and applied on yes. A conflict leaves the file as it is, is reported as `~ conflict`, and `swerepo diff` shows the change to apply by hand. SWERepo never writes conflict markers into a file;
+  - changed by a person → **three-way merge** with `git merge-file`: the base is the earlier render (rebuilt from the recorded template version and `[values]`, checked against `rendered`), "ours" is the person's file, "theirs" is the new render. A clean merge is shown as a diff in the plan and applied on the person's yes in a terminal; without one, only with `--yes --merge`, so `--yes` alone never merges into a person's edits. A workflow that differs only by newer action pins (Dependabot's) is updated with `--yes` alone (ADR-20261124-7afa). A conflict leaves the file as it is, is reported as `~ conflict`, and `swerepo diff` shows the change to apply by hand. SWERepo never writes conflict markers into a file;
   - new item in the standard → added (shown in the plan);
   - item removed from the standard → reported, never deleted automatically.
 - **Per component:** `swerepo -u --seamspec`, `-u --ci`, `-u --agents`, …
+- **Each record keeps the inputs its render used** (`inputs` in `.swerepo.toml`), so a partial run or a conflict never stops another file's earlier render from being rebuilt. `update` renders with the project as it is now: its commands, the Python versions `requires-python` allows, and SWERepo's own released CI pin (`init` keeps the recorded ones and notes the change); the default branch stays recorded. A merge or rewrite that would leave a JSON or TOML file unparseable is reported, never written. An earlier render whose fingerprint doesn't match the record is never merged against: the file is reported as "can't merge" and left alone.
 - **The standard's changelog** ships with the package, so `update` can say why something changed ("standard 2: CI adds Python 3.15").
-- **Version pins** of other tools (SeamSpec's CI pin, SWERepo's own pin in CI, action SHAs) are updated only through `update`, always shown first.
+- **Version pins** of other tools (SeamSpec's CI pin, SWERepo's own pin in CI) are updated only through `update`, always shown first. **Action pins** (`uses: owner/action@<commit>  # v<version>`) are also moved forward by Dependabot. `update` keeps the newer of the repository's and the template's and never moves one backwards: one version pinned to two commits, or any other change on a pin line, is a conflict. `check` counts pins that are only newer as current (ADR-20261123-f571).
 
 ---
 
@@ -676,6 +678,15 @@ TypeScript (npm/pnpm, vitest/jest, eslint/prettier), matching SeamSpec's presets
 ---
 
 ## Appendix A: Revision history
+
+### 0.13 → 0.14
+
+Decisions from building Phase 6 (`update`, merge, `diff`, `status`):
+
+1. **Merging into a person's edits needs a deliberate yes** (the owner's choice; ADR-20261124-7afa): a terminal yes after the diff, or `--yes --merge`; `--yes` alone never merges. Pins-only differences (Dependabot's) update with `--yes` alone (§7, §16).
+2. **Action pins** (ADR-20261123-f571): `update` keeps the newer pin and never moves one backwards; one version pinned to two commits is a conflict; `check` counts newer pins alone as current (§16).
+3. **Per-record `inputs`** (the owner's watchout; ADR-20261124-7afa point 10): each record keeps the values its render used, so shared `[values]` keys can move on without losing another file's merge base. Older records get them on the next `update` when they rebuild the recorded render, from `[values]` as recorded before the run. `update` renders with the project's current commands and Python versions, and moves SWERepo's own CI pin to a release (§9, §16).
+4. **`diff` and `status`** take `--path`; `status` takes `--json`; neither calls GitHub (§7).
 
 ### 0.12 → 0.13
 

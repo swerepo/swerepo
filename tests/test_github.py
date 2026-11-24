@@ -836,3 +836,32 @@ class TestCopilotReviewPR16:
             done = subprocess.run(["bash", "-c", script], env={**env, "COMMITS": str(count)}, capture_output=True,
                                   text=True, check=False)  # fmt: skip
             assert (done.returncode == 0) is passes, (count, done.stdout)
+
+
+class TestRulesetPages:
+    """A `swerepo` ruleset past the first 100 is found (noted in Phase 5; done in Phase 6)."""
+
+    def test_every_page_is_read_until_one_is_short(self):
+        hub = github.GitHub("acme/app", command="gh")
+        asked: list[str] = []
+        pages = {1: [{"id": n, "name": f"r{n}"} for n in range(100)], 2: [{"id": 7, "name": "swerepo"}]}
+
+        def get(path: str):
+            asked.append(path)
+            if "/rulesets/7" in path:
+                return {"id": 7, "name": "swerepo"}
+            page = int(path.rsplit("page=", 1)[1])
+            return pages.get(page, [])
+
+        hub.get = get  # type: ignore[method-assign]
+        assert hub.find_ruleset() == {"id": 7, "name": "swerepo"}
+        assert [p.rsplit("page=", 1)[1] for p in asked if "page=" in p] == ["1", "2"]
+        asked.clear()
+        pages[2] = []
+        assert hub.find_ruleset() is None and len([p for p in asked if "page=" in p]) == 2  # stops on a short page
+
+
+def test_the_plan_says_merged_branches_are_deleted_and_how_to_keep_them(project: Path):
+    notes_text = " ".join(notes(plan_for(project, code_owner="@dev")))
+    assert "delete a pull request's branch once it merges" in notes_text
+    assert '"delete_branch_on_merge": false' in notes_text

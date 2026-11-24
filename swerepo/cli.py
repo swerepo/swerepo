@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -18,8 +18,14 @@ from swerepo.adr import AdrError, new_adr, write_index
 from swerepo.blocks import inside
 from swerepo.check import UsageError, in_github_actions, one_line, run_check
 from swerepo.init import (
+    CANT_MERGE,
+    CHANGED,
+    CONFLICT,
+    CURRENT,
     HOSTS,
+    MERGE,
     MODE_MEANING,
+    REWRITE,
     InitError,
     apply,
     apply_github,
@@ -269,6 +275,153 @@ def init(
         typer.echo(warning)
 
 
+def _update_plan(path: Path, components: list[str] | None, skipped: list[str], command: str, **options: Any):
+    """The update plan for the components SWERepo set up here (all of them, or those asked for)."""
+    _, state = _repository(path, command)
+    if state is None:
+        raise UsageError("SWERepo hasn't set this repository up yet: run swerepo init")
+    chosen = components if components is not None else list(state.components)
+    missing = [c for c in chosen if c not in state.components]
+    if missing:
+        raise UsageError(f"not set up here: {', '.join(missing)} (swerepo init --only {','.join(missing)})")
+    return make_plan(path, only=chosen, skip=skipped, update=True, **options)
+
+
+@app.command(context_settings=EXTRA_ARGS, epilog=SHORTHAND)
+def update(
+    ctx: typer.Context,
+    only: Annotated[str | None, typer.Option("--only", help="Update only these components, comma-separated.")] = None,
+    enforce_pr_rules: Annotated[
+        bool, typer.Option("--enforce-pr-rules", help="Make the pull-request rules fail, not warn (spec §10).")
+    ] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Print the plan and stop.")] = False,
+    yes: Annotated[bool, typer.Option("--yes", help="Apply without asking (for scripts).")] = False,
+    merge: Annotated[
+        bool, typer.Option("--merge", help="With --yes: also merge the update into files you edited.")
+    ] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Print one JSON result instead of text.")] = False,
+    path: Annotated[Path, typer.Option("--path", help="The repository to update.")] = Path("."),
+) -> None:
+    """Bring what SWERepo manages up to the current templates: replace what nobody changed, merge the update into
+    your edits (shown first), and report conflicts. Never touches your own files, never deletes one."""
+    interactive = _interactive() and not as_json and not yes
+    try:
+        components, skipped = _selection(only, ctx.args)
+        plan = _update_plan(path, components, skipped, "update", merge=merge or interactive,
+                            enforce_pr_rules=enforce_pr_rules)  # fmt: skip
+    except UsageError as error:
+        raise _fail(error, 2, "update") from error
+    except InitError as error:
+        raise _fail(error, 1, "update") from error
+    if not as_json:
+        typer.echo(plan.render_text())
+        for action in plan.actions:
+            if action.verb == MERGE and action.diff:  # a merge into a person's file is always shown first
+                typer.echo("\n" + "\n".join(one_line(line) for line in action.diff.splitlines()))
+    if dry_run or not plan.changes:
+        if as_json:
+            typer.echo(json.dumps(plan.to_dict(applied=False), indent=2, ensure_ascii=False))
+        raise typer.Exit(0)
+    if not yes and not interactive:
+        if as_json:
+            typer.echo(json.dumps(plan.to_dict(applied=False), indent=2, ensure_ascii=False))
+        typer.echo("swerepo update: nothing applied: run it in a terminal to answer, or with --yes", err=True)
+        raise typer.Exit(2)
+    if not yes and not typer.confirm("Apply?", default=False):
+        typer.echo("Nothing applied.")
+        raise typer.Exit(0)
+    try:
+        apply(plan, path)
+        github_lines = _apply_github(plan, path, yes) if plan.github_apply else []
+    except InitError as error:
+        raise _fail(error, 1, "update") from error
+    if as_json:
+        typer.echo(json.dumps({**plan.to_dict(applied=True), "github": github_lines}, indent=2, ensure_ascii=False))
+        raise typer.Exit(0)
+    counts = {verb: sum(1 for a in plan.changes if a.verb == verb) for verb in (REWRITE, MERGE, "create", "add block")}
+    typer.echo(f"Applied: {counts[REWRITE]} updated, {counts[MERGE]} merged, "
+               f"{counts['create'] + counts['add block']} added.")  # fmt: skip
+    for line in github_lines:
+        typer.echo(one_line(line))
+    left = sum(1 for a in plan.actions if a.verb in (CONFLICT, CANT_MERGE))
+    if left:
+        typer.echo(f"{left} file(s) left as they are: swerepo diff shows the change to make by hand.")
+    typer.echo("Next: review the changes (git status, git diff), commit them on a new branch, open a pull request.")
+
+
+@app.command()
+def diff(
+    files: Annotated[list[str] | None, typer.Argument(help="Only these files (default: all).")] = None,
+    path: Annotated[Path, typer.Option("--path", help="The repository.")] = Path("."),
+) -> None:
+    """What `update` would change in files you edited, and, where your edits conflict with the update, the
+    change to make by hand. Changes nothing."""
+    try:
+        plan = _update_plan(path, None, [], "diff", merge=True, read_github=False)
+    except UsageError as error:
+        raise _fail(error, 2, "diff") from error
+    except InitError as error:
+        raise _fail(error, 1, "diff") from error
+    wanted = {f.replace("\\", "/").removeprefix("./") for f in files or []}  # as the plan names them (P6-F07)
+    kinds = {
+        MERGE: "merged into your edits",
+        CONFLICT: "conflicts with your edits: make this change by hand",
+        CANT_MERGE: "can't be merged (the earlier render can't be rebuilt): SWERepo's new version against yours",
+    }
+    shown = [a for a in plan.actions if a.verb in kinds and a.diff and (not wanted or a.path in wanted)]
+    for action in shown:
+        typer.echo(f"{action.path}: {kinds[action.verb]}")
+        typer.echo("\n".join(one_line(line) for line in (action.diff or "").splitlines()))
+    if not shown:
+        typer.echo("Nothing to show: update changes no file you edited.")
+
+
+@app.command()
+def status(
+    as_json: Annotated[bool, typer.Option("--json", help="Print one JSON result instead of text.")] = False,
+    path: Annotated[Path, typer.Option("--path", help="The repository.")] = Path("."),
+) -> None:
+    """What SWERepo set up here, and what `update` would do: components, mode, versions, and how many managed
+    files are current, outdated, edited or in conflict. Changes nothing."""
+    try:
+        _, state = _repository(path, "status")
+        if state is None:
+            raise UsageError("SWERepo hasn't set this repository up yet: run swerepo init")
+        plan = _update_plan(path, None, [], "status", merge=True, read_github=False)
+    except UsageError as error:
+        raise _fail(error, 2, "status") from error
+    except InitError as error:
+        raise _fail(error, 1, "status") from error
+    kinds = {CURRENT: "current", REWRITE: "outdated", MERGE: "edited, update merges cleanly",
+             CONFLICT: "edited, conflicts with the update", CANT_MERGE: "edited, can't merge",
+             CHANGED: "edited, nothing to update"}  # fmt: skip
+    counts = {label: sum(1 for a in plan.actions if a.verb == verb and a.path) for verb, label in kinds.items()}
+    result = {
+        "components": list(state.components),
+        "mode": state.mode,
+        "standard": state.standard,
+        "swerepo": {"recorded": state.swerepo_version, "running": __version__},
+        "tools": dict(state.tools),
+        "pr_rules": "enforced" if state.pr_enforce else "warnings",
+        "files": counts,
+    }
+    if as_json:
+        typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+    typer.echo(f"SWERepo · status · {path.resolve().name}")
+    typer.echo(f"  components  {', '.join(result['components'])}")
+    typer.echo(f"  mode        {state.mode or 'not chosen'}")
+    typer.echo(f"  standard    {state.standard} · SWERepo {state.swerepo_version} recorded, {__version__} running")
+    if state.tools:
+        typer.echo("  tools       " + ", ".join(f"{name} {version}" for name, version in sorted(state.tools.items())))
+    typer.echo(f"  PR rules    {result['pr_rules']}")
+    for label, count in counts.items():
+        if count:
+            typer.echo(f"  {count:>3}  {label}")
+    if counts[kinds[REWRITE]] or counts[kinds[MERGE]]:
+        typer.echo("Next: swerepo update")
+
+
 adr_app = typer.Typer(help="Architecture decision records: a new one from the template, or the index.")
 app.add_typer(adr_app, name="adr")
 
@@ -422,4 +575,6 @@ def hook_install(path: Annotated[Path, typer.Option("--path", help="The reposito
 
 
 def main() -> None:
+    if sys.argv[1:2] == ["-u"]:  # `swerepo -u` is `swerepo update` (spec §7)
+        sys.argv[1] = "update"
     app()

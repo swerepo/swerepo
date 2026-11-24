@@ -281,3 +281,36 @@ def test_setters_validate():
         state.set_file("a.md", Record("docs/a@1", "x", HASH_A))
     with pytest.raises(StateError, match="must be relative"):
         state.set_block("/abs.md", Record("docs/a@1", HASH_A, HASH_A))
+
+
+class TestRecordInputs:
+    """Each record keeps the inputs its render used (ADR-20261124-7afa point 10)."""
+
+    def test_inputs_round_trip_on_one_line(self):
+        state = State.new()
+        state.set_file("docs/adr/TEMPLATE.md", Record("docs/adr-template@1", HASH_A, HASH_A, {"project": "app"}))
+        out = state.dumps()
+        assert 'inputs = {project = "app"}' in out
+        again = State.parse(out)
+        assert again.files()["docs/adr/TEMPLATE.md"].inputs == {"project": "app"}
+        state.set_file("docs/adr/TEMPLATE.md", Record("docs/adr-template@1", HASH_A, HASH_A))  # older code
+        assert "inputs" not in state.dumps()  # they described a render this record no longer has
+
+    def test_records_without_inputs_still_load(self):
+        state = State.parse(SPEC_EXAMPLE, running="0.1.0")
+        assert all(record.inputs is None for record in state.files().values())
+
+    def test_updating_keeps_a_persons_comments_and_keys(self):
+        text = SPEC_EXAMPLE.replace(f'written = "{HASH_B}"', f'written = "{HASH_B}"  # mine\nnote = "mine"')
+        state = State.parse(text, running="0.1.0")
+        state.set_file("docs/adr/TEMPLATE.md", Record("docs/adr-template@2", HASH_B, HASH_B, {"b": "2", "a": "1"}))
+        out = state.dumps()
+        assert 'note = "mine"' in out and 'inputs = {a = "1", b = "2"}' in out
+
+    @pytest.mark.parametrize("inputs", ["{project = 1}", '"app"', '{a = ["x"]}'])
+    def test_inputs_must_be_text(self, inputs: str):
+        text = SPEC_EXAMPLE.replace(f'written = "{HASH_B}"', f'written = "{HASH_B}"\ninputs = {inputs}', 1)
+        with pytest.raises(StateError, match="inputs: must be a table of text values"):
+            State.parse(text, running="0.1.0")
+        with pytest.raises(StateError, match="inputs"):
+            State.new().set_file("a.md", Record("docs/adr-template@1", HASH_A, HASH_A, {"a": 1}))  # type: ignore[dict-item]
