@@ -27,7 +27,7 @@ from swerepo.blocks import replace_block_content
 from swerepo.detect import KNOWN_PYTHONS, Detection
 from swerepo.fingerprint import HASH, BlockError, find_block
 from swerepo.globs import Glob
-from swerepo.render import Template, TemplateStore
+from swerepo.render import Template, TemplateError, TemplateStore
 
 WORKFLOW = "ci/workflow"
 PYPROJECT = "ci/pyproject"
@@ -38,7 +38,7 @@ SWEREPO_FROM_GITHUB = "uvx --from git+https://github.com/swerepo/swerepo@main sw
 SWEREPO_OWN_CHECKOUT = "uv run --locked swerepo"
 # The jobs `ci-ok` waits for, before the optional ones (governance, then one lint and one test job per project).
 BASE_JOBS = ("lint", "test", "test-macos", "workflow-audit", "seamspec", "dependency-review")
-FIXED_JOBS = frozenset({*BASE_JOBS, "governance", "ci-ok"})  # names a project's jobs may never take
+FIXED_JOBS = frozenset({*BASE_JOBS, "governance", "copilot-review", "ci-ok"})  # names a project's jobs may never take
 # Kept linters in CI, each told to skip locked SeamSpec tests on its command line (spec §6.3).
 KEPT_LINT = {
     "black": "black --check --extend-exclude '\\.seamspec' .",
@@ -368,6 +368,7 @@ class Inputs:
     swerepo: str = ""  # the governance job's SWERepo command; "" for no governance job
     seamspec: str = SEAMSPEC_PIN
     projects: list[Project] = field(default_factory=list)
+    copilot_review: bool = False  # merges wait for Copilot's review (ADR-20261123-a359; from the github component)
 
 
 def lint_runs(lint: str, linters: list[str]) -> list[str]:
@@ -403,6 +404,11 @@ def render_workflow(store: TemplateStore, inputs: Inputs, version: int | None = 
     if inputs.swerepo:
         jobs.append(_fragment(store, "job-governance", template.version, {**values, "swerepo": inputs.swerepo}))
         needs.append("governance")
+    if inputs.copilot_review:
+        if template.version < 2:
+            raise TemplateError(f"{template.id} has no copilot-review job: it comes with ci/workflow@2")
+        jobs.append(_fragment(store, "job-copilot-review", template.version, {}))
+        needs.append("copilot-review")
     for project in inputs.projects:
         project_values = {
             "folder": project.folder,

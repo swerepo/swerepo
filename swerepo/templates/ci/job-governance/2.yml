@@ -1,0 +1,20 @@
+  # The pull-request rules and the standard (spec §15): a progress entry, ADRs for new dependencies and
+  # workflow changes, and every chosen component in place.
+  governance:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # check --base compares with the base branch
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.9.28"
+          python-version: "@@python_main@@"
+      - name: swerepo check
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: @@swerepo@@ check --ci --base "origin/$BASE_REF" --author "$AUTHOR"

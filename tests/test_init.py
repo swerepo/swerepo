@@ -81,9 +81,17 @@ class TestNewProject:
     def test_the_state_file_records_what_was_written(self, new_project: Path):
         init(new_project, hosts=["claude", "gemini"])
         state = State.load(new_project)
-        assert state.components == ["docs", "agents", "ci", "security"] and state.hosts == ["claude", "gemini"]
+        assert state.components == ["docs", "agents", "ci", "security", "github"]
+        assert state.hosts == ["claude", "gemini"]
+        github_files = {
+            ".github/swerepo/ruleset.json",
+            ".github/swerepo/repo-settings.json",
+            ".github/copilot-instructions.md",
+            ".github/dependabot.yml",
+            ".github/pull_request_template.md",
+        }
         # starter files are the person's: not recorded
-        assert set(state.files()) == {*MANAGED, ".github/workflows/swerepo-ci.yml"}
+        assert set(state.files()) == {*MANAGED, ".github/workflows/swerepo-ci.yml", *github_files}
         assert set(state.blocks()) == {"AGENTS.md", "CLAUDE.md", "GEMINI.md", "pyproject.toml", ".gitignore"}
         assert state.values["project"] == "invoices" and state.pr_enforce  # a new project enforces the PR rules
 
@@ -198,8 +206,8 @@ class TestChoices:
         assert "agents" not in {a.component for a in plan.actions}
 
     def test_components_of_later_phases_are_listed_not_applied(self, new_project: Path):
-        plan = make_plan(new_project, only=["github"])
-        assert [(a.component, a.verb) for a in plan.actions] == [("github", LATER_VERB)]
+        plan = make_plan(new_project, only=["seamspec"])
+        assert [(a.component, a.verb) for a in plan.actions] == [("seamspec", LATER_VERB)]
         assert plan.state_text is None and not plan.changes
 
     def test_wrong_names_are_usage_errors(self, new_project: Path):
@@ -267,7 +275,9 @@ class TestCommandLine:
     def test_yes_applies_and_says_what_next(self, new_project: Path):
         result = self.runner.invoke(app, ["init", "--path", str(new_project), "--yes"])
         assert result.exit_code == 0, result.output
-        assert "Applied:" in result.output and "commit them on a new branch" in result.output
+        assert "Applied:" in result.output
+        # no GitHub repository yet: the next steps start with a commit, then the repository, then its settings
+        assert "gh repo create --source . --push" in result.output and "swerepo init --only github" in result.output
         assert (new_project / FILE_NAME).is_file()
 
     def test_dry_run_and_no_terminal_write_nothing(self, new_project: Path):
@@ -280,11 +290,11 @@ class TestCommandLine:
 
     def test_in_a_terminal_it_asks_the_editors_then_to_apply(self, new_project: Path, monkeypatch):
         monkeypatch.setattr(cli, "_interactive", lambda: True)
-        # the editors, the security contact (its default), then whether to apply
-        declined = self.runner.invoke(app, ["init", "--path", str(new_project)], input="antigravity\n\nn\n")
+        # the editors, the security contact, the mode and the code owner (their defaults), then whether to apply
+        declined = self.runner.invoke(app, ["init", "--path", str(new_project)], input="antigravity\n\n\n\nn\n")
         assert declined.exit_code == 0 and "Nothing applied." in declined.output and "Antigravity" in declined.output
         assert not (new_project / FILE_NAME).exists()
-        accepted = self.runner.invoke(app, ["init", "--path", str(new_project)], input="claude, gemini\n\ny\n")
+        accepted = self.runner.invoke(app, ["init", "--path", str(new_project)], input="claude, gemini\n\n\n\ny\n")
         assert accepted.exit_code == 0 and State.load(new_project).hosts == ["claude", "gemini"]
 
     def test_json(self, new_project: Path):

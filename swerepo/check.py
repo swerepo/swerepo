@@ -5,6 +5,7 @@ Read-only. Findings are computed first, then printed as text or JSON, so both sa
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -14,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from swerepo import __version__, ci, privacy, standard
+from swerepo import __version__, ci, github, privacy, standard
 from swerepo.blocks import file_fingerprint
 from swerepo.detect import Detection, detect
 from swerepo.fingerprint import HASH, HTML, BlockError, comment_style, find_block, fingerprint
@@ -137,6 +138,7 @@ class Context:
     root: Path
     detection: Detection
     state: State | None
+    hub: github.GitHub | None = None  # GitHub through gh, when asked for and reachable (never with --ci)
 
     def exists(self, path: str) -> bool:
         return (self.root / path).is_file()
@@ -347,6 +349,15 @@ def _ci(ctx: Context) -> list[Finding]:
         found.append(_seamspec_excluded(ctx, detected))
     if d.is_monorepo or (ctx.state is not None and ctx.state.projects_listed):
         found.extend(_projects_covered(ctx, text or ""))
+    if text is not None and "dependency-review:" in text:
+        found.append(_dependency_graph(ctx))
+    # The wait belongs to the github component: without it, a ruleset is the person's own (review P5-F10).
+    github_chosen = ctx.state is not None and "github" in ctx.state.components
+    committed = _read_json(ctx, github.RULESET_FILE) if github_chosen and ctx.exists(github.RULESET_FILE) else None
+    if text is not None and committed is not None:  # the committed ruleset decides
+        found.append(_copilot_wait(github.has_copilot_review(committed), text))
+    elif text is not None and github_chosen and "copilot_review" in ctx.state.github:
+        found.append(_copilot_wait(ctx.state.github["copilot_review"] is True, text))
     return found
 
 
@@ -384,6 +395,36 @@ def workflow_jobs(text: str) -> dict[str, list[str]]:
         elif line.strip() and not line.startswith("      "):
             in_needs_list = False
     return jobs
+
+
+def _copilot_wait(review_on: bool, text: str) -> Finding:
+    """swerepo-ci.yml waits for Copilot's review exactly when the github component turned it on (ADR-a359, P5-F01)."""
+    c, item = "ci", "ci.copilot-review"
+    waits = "copilot-review" in workflow_jobs(text).get("ci-ok", [])
+    if review_on and not waits:
+        message = "swerepo-ci.yml doesn't wait for the Copilot review the ruleset requests: swerepo init --only github"
+        return _missing(c, item, message, standard.CI_WORKFLOW)
+    if waits and not review_on:
+        message = "swerepo-ci.yml waits for a Copilot review the ruleset doesn't request: every pull request would fail"
+        return _missing(c, item, message, standard.CI_WORKFLOW)
+    message = "waits for Copilot's review" if waits else "no Copilot review to wait for"
+    return _ok(c, item, message, standard.CI_WORKFLOW)
+
+
+def _dependency_graph(ctx: Context) -> Finding:
+    """Dependency review fails ci-ok while GitHub's dependency graph is off (PR #9; ADR-20261123-4e40 point 8)."""
+    c, item = "ci", "ci.dependency-graph"
+    if ctx.hub is None:
+        return Finding(c, item, UNKNOWN, "dependency graph: can't tell (needs gh, logged in; never read with --ci)")
+    try:
+        if ctx.hub.repo().get("private") is True:  # dependency-review is skipped by design there (P5-F06)
+            return _ok(c, item, "dependency graph: not needed (private repository: dependency-review is skipped)")
+        if ctx.hub.dependency_graph():
+            return _ok(c, item, "GitHub's dependency graph is on (dependency-review needs it)")
+    except github.GitHubError as error:
+        return Finding(c, item, UNKNOWN, f"dependency graph: can't read GitHub ({error})")
+    message = "GitHub's dependency graph is off: dependency-review fails ci-ok (Settings → Advanced Security)"
+    return _missing(c, item, message)
 
 
 def _ci_ok(text: str) -> Finding:
@@ -561,6 +602,25 @@ def _ini_section(text: str, wanted: str) -> list[str]:
     return lines
 
 
+def _secret_scanning(ctx: Context) -> list[Finding]:
+    """GitHub's secret scanning and push protection (spec §6.4), when gh can read them."""
+    c, item = "security", "security.secret-scanning"
+    if ctx.hub is None:
+        return [Finding(c, item, UNKNOWN, "secret scanning: can't tell (needs gh, logged in; never read with --ci)")]
+    try:
+        analysis = ctx.hub.repo().get("security_and_analysis") or {}
+    except github.GitHubError as error:
+        return [Finding(c, item, UNKNOWN, f"secret scanning: can't read GitHub ({error})")]
+    keys = ("secret_scanning", "secret_scanning_push_protection")
+    states = {key: (analysis.get(key) or {}).get("status") for key in keys}
+    if None in states.values():
+        return [Finding(c, item, UNKNOWN, "secret scanning: GitHub doesn't show it to this login (admins only)")]
+    off = [key.replace("_", " ") for key, status in states.items() if status != "enabled"]
+    if off:
+        return [_missing(c, item, f"{' and '.join(off)} off on GitHub (Settings → Advanced Security)", blocking=False)]
+    return [_ok(c, item, "secret scanning and push protection on")]
+
+
 def _security(ctx: Context) -> list[Finding]:
     c = "security"
     policy = ctx.detection.documents.get("security") or ("SECURITY.md" if ctx.exists("SECURITY.md") else None)
@@ -580,6 +640,7 @@ def _security(ctx: Context) -> list[Finding]:
         found.append(_missing(c, "security.gitignore", ".gitignore missing", ".gitignore"))
     else:
         found.append(_block_finding(c, "security.gitignore", ".gitignore", text))
+    found.extend(_secret_scanning(ctx))
     hits = privacy.scan(ctx.root, ctx.state.privacy_allow_paths if ctx.state else [])
     if hits:
         found.append(_missing(c, "security.privacy-scan", privacy.summary(hits), hits[0].path))
@@ -604,12 +665,69 @@ def _github(ctx: Context) -> list[Finding]:
         found.append(_missing(c, "github.issue-templates", message, ".github/ISSUE_TEMPLATE"))
     found.append(_codeowners(ctx, d.documents.get("codeowners")))
     found.extend(_commit_email(ctx))
+    found.extend(_github_live(ctx))
+    return found
+
+
+def _read_json(ctx: Context, path: str) -> dict[str, Any] | None:
+    try:
+        data = json.loads(ctx.read(path) or "")
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _github_live(ctx: Context) -> list[Finding]:
+    """The live ruleset and merge settings against the committed files (spec §12), read through gh with GET
+    requests only, and never with --ci (ADR-20261123-4e40 point 7)."""
+    c = "github"
+    applied = ctx.state.github.get("applied") if ctx.state else None
+    if ctx.hub is None:
+        if applied is False and github.repository(ctx.root) is None:
+            return [_missing(c, "github.live", "ruleset not applied (no GitHub repository yet)")]
+        return [Finding(c, "github.live", UNKNOWN, "ruleset and merge settings on GitHub: can't tell (needs gh, "
+                                                  "logged in; never read with --ci)")]  # fmt: skip
+    found: list[Finding] = []
+    pairs = (("github.ruleset", github.RULESET_FILE, "ruleset"), ("github.merge-settings", github.SETTINGS_FILE, None))
+    for item, path, kind in pairs:
+        if not ctx.exists(path):
+            continue  # already reported missing by its own finding (P5-F02)
+        committed = _read_json(ctx, path)
+        if committed is None:
+            found.append(Finding(c, item, UNKNOWN, f"can't compare with GitHub: {path} isn't readable JSON", path))
+            continue
+        problem = github.not_applicable(kind or "repo-settings", committed)
+        if problem:  # init refuses to apply it, so it never matches GitHub (PR #10 review)
+            found.append(_missing(c, item, f"{path}: {problem}: swerepo init won't apply it", path))
+            continue
+        try:
+            live = ctx.hub.find_ruleset() if kind else ctx.hub.repo()
+        except github.GitHubError as error:
+            found.append(Finding(c, item, UNKNOWN, f"can't read GitHub ({error})", path))
+            continue
+        label = f'ruleset "{github.RULESET_NAME}"' if kind else "merge settings"
+        if live is None:
+            found.append(_missing(c, item, f"{label} not applied on GitHub: swerepo init --only github", path))
+            continue
+        compare = github.ruleset_differences if kind else github.settings_differences
+        differences = compare(committed, live)
+        if differences:
+            verb = "differs" if kind else "differ"
+            message = f"{label} on GitHub {verb} from {path} ({', '.join(differences)}): swerepo init --only github"
+            found.append(_missing(c, item, message, path))
+        else:
+            found.append(_ok(c, item, f"{label} on GitHub {'matches' if kind else 'match'} {path}", path))
     return found
 
 
 def _codeowners(ctx: Context, path: str | None) -> Finding:
     c, item = "github", "github.codeowners"
     if path is None:
+        recorded = ctx.state.values.get("code_owner") if ctx.state else None
+        if ctx.state is not None and "github" in ctx.state.components and not github.valid_owner(recorded):
+            # init leaves CODEOWNERS out when nobody is named; that's a choice, not a failure (review P5-F03)
+            message = "no CODEOWNERS: no code owner named (swerepo init --only github --code-owner @login)"
+            return _missing(c, item, message, ".github/CODEOWNERS", blocking=False)
         return _missing(c, item, "CODEOWNERS missing (.github/CODEOWNERS)", ".github/CODEOWNERS")
     text = ctx.read(path) or ""
     try:
@@ -618,7 +736,9 @@ def _codeowners(ctx: Context, path: str | None) -> Finding:
         return _missing(c, item, f"{path}: SWERepo block markers are broken ({error})", path)
     if block is None:
         return _missing(c, item, f"{path} has no SWERepo block (governance owners)", path)
-    after = [line for line in text.splitlines()[block.end_line :] if line.strip() and not line.lstrip().startswith("#")]
+    # the same line breaks find_block counts: CR, LF, CRLF; not U+2028 or form feeds (review P5-F08)
+    rest = re.split(r"\r\n|\r|\n", text)[block.end_line :]
+    after = [line for line in rest if line.strip() and not line.lstrip().startswith("#")]
     if after:
         # path patterns only, never owners: a malformed line may start with an @handle or an email address
         patterns = ", ".join(token for line in after if "@" not in (token := line.split()[0]))
@@ -840,7 +960,10 @@ def _record(ctx: Context, kind: str, path: str, record: Record, component: str, 
         return Finding(component, item, CHANGED, f"{label} changed by you (kept)", path)
     try:
         _, name, version = parse_id(record.template)
-        latest = store.versions(component, name)
+        if github.is_builder(record.template):  # JSON built in Python, versioned like a template (ADR-4e40)
+            latest = [int(github.latest(name).rsplit("@", 1)[1])]
+        else:
+            latest = store.versions(component, name)
     except TemplateError:
         latest = []
     if not latest:
@@ -882,6 +1005,7 @@ def run_check(
     skip: tuple[str, ...] = (),
     store: TemplateStore | None = None,
     exclude: tuple[str, ...] = (),
+    read_github: bool = False,
 ) -> Report:
     """Check the repository at `root`. `exclude`: components to leave out (`--no-<component>`), from `only`
     or, without it, from the chosen ones. Raises UsageError for wrong usage (exit 2)."""
@@ -916,7 +1040,8 @@ def run_check(
     elif not detection.git.is_toplevel:
         message = "a folder inside a git repository: files are looked for here, not at the repository's top"
         findings.append(Finding("repository", "repository.git", UNKNOWN, message))
-    ctx = Context(root=root, detection=detection, state=state)
+    hub = github.GitHub.connect(root) if read_github else None  # read-only GET requests (ADR-20261123-4e40)
+    ctx = Context(root=root, detection=detection, state=state, hub=hub)
 
     chosen = chosen_components(state, detection)
     for component in COMPONENTS:

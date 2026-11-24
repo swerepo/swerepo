@@ -1,6 +1,6 @@
 # SWERepo — Specification
 
-**Status:** draft for the owner's review · **Version:** 0.10 (design) · **Date:** 2026-11-22
+**Status:** draft for the owner's review · **Version:** 0.11 (design) · **Date:** 2026-11-23
 **Name:** SWERepo, command `swerepo`, at `github.com/swerepo/swerepo` (renamed from Golden Repo in v0.6, ADR-20261120-1a27)
 **What changed:** Appendix A. **How the BLUEPRINT's ideas were handled:** Appendix B.
 
@@ -162,6 +162,7 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
   - **seamspec**: SeamSpec's locked rules, inside `ci-ok` so a failing rule blocks the merge (ADR-20261122-4a06): `seamspec doctor --ci`, `seamspec verify --all --ci` and `seamspec spec --check docs/EARNED_SPEC.md` (§6.8) at the pinned SeamSpec version (`[tools] seamspec`). The job is always in the workflow: without `.seamspec/config.toml` it says so and passes, so setting SeamSpec up later needs no workflow change;
   - **dependency-review**: on pull requests to public repositories, GitHub's `dependency-review-action` (fails on new dependencies with known vulnerabilities). On private repositories it needs a paid GitHub plan, so the job is skipped there by a condition in the workflow;
   - **one lint and one test job per project** listed with `--projects` (§11);
+  - **copilot-review**: where the `github` component turns Copilot review on, pull requests wait for Copilot's review (of any commit) inside `ci-ok`: the job asks GitHub every 30 seconds for up to 20 minutes, and a later push passes at once. A draft fails at once, and the workflow runs again when it is marked ready for review (ADR-20261123-a359);
   - **`ci-ok`**: a single aggregating job (`if: always()`) that reads every job's result: each must succeed, except a job skipped by design (macOS off pushes, governance off pull requests, dependency review off pull requests to public repositories), which must be skipped; failed, cancelled or unexpectedly skipped jobs fail it. The ruleset requires only `ci-ok`, so adding a job never means editing GitHub settings.
 - **Installing the project:** `uv sync --locked` with a `uv.lock` (the project's own, or its uv workspace's), `uv sync` without. Projects uv can't install (Poetry's lock without uv's, no `pyproject.toml` or no `[project]` table) get no workflow in standard 1's first template, and the plan says why. Lint and tests run the project's own tools through `uv run`; the plan names those missing from its dependencies (`uv add --dev pytest ruff`), since SWERepo never edits dependencies.
 - Actions pinned to commit SHAs, `permissions: contents: read` by default, `persist-credentials: false` on checkout, `concurrency` to cancel superseded runs, a `timeout-minutes` on every job.
@@ -259,7 +260,8 @@ Designed so that parallel branches don't collide: each PR adds its own files, an
 ## 7. Command line
 
 ```
-swerepo init     [--only C,...] [--no-C ...] [--mode solo|team] [--projects P,...] [--dry-run] [--yes] [--path DIR] [--json]
+swerepo init     [--only C,...] [--no-C ...] [--mode solo|team] [--code-owner @LOGIN] [--no-copilot-review]
+                 [--projects P,...] [--with-governance] [--dry-run] [--yes] [--path DIR] [--json]
 swerepo check    [--only C,...] [--base REF] [--author LOGIN] [--skip progress] [--json] [--ci] [--path DIR]
 swerepo update   [--only C,...] [--enforce-pr-rules] [--dry-run] [--yes] [--path DIR] [--json]
 swerepo -u       (short for `update`; `swerepo -u --seamspec` = `update --only seamspec`)
@@ -274,6 +276,8 @@ swerepo --version
 
 - **Components** (`C`): `docs`, `agents`, `ci`, `security`, `github`, `seamspec`, `openspec`, `release`. `--only` selects; `--no-<component>` skips. `--seamspec` alone is shorthand for `--only seamspec` (and so for each component), on `init` and `check`.
 - **`--mode`**: `solo` or `team` (§12). Default: `solo` for a repository owned by a user, `team` for one owned by an organisation; always shown in the plan.
+- **`--code-owner`**: the CODEOWNERS owner of governance files, `@login` or `@org/team`, or `none` (§6.1). Default: the repository's owner when that is a user; never guessed from git config. Without one, CODEOWNERS isn't written, and `check` warns without failing.
+- **`--no-copilot-review`**: a ruleset without Copilot review, and no wait for it in CI (§12).
 - **Without a terminal**, `init` applies only with `--yes`; otherwise it prints the plan and exits `2` without writing (ADR-20261121-6c3d).
 - **`--yes`** answers yes to SWERepo's own questions in scripts. It never answers another tool's consent (SeamSpec's consent to run tests stays a person's answer; §13).
 - **`--json`** prints one machine-readable result (plan, changes, findings) for scripts.
@@ -386,6 +390,7 @@ skip_progress_label = "no-progress"   # optional; the commit trailer `Progress: 
 
 [github]
 applied = true                    # false until the ruleset and settings are applied (§12)
+copilot_review = true             # the ruleset requests Copilot's review, and CI waits for it (ADR-20261123-a359)
 extra_required_checks = []        # monorepo: other workflows' checks required beside ci-ok (§11)
 
 [projects]                        # monorepos only (§11)
@@ -469,7 +474,8 @@ A **monorepo** holds several projects in one repository, for example `services/o
   2. create the repository and push (`gh repo create --source . --push`); SWERepo never creates repositories or pushes;
   3. run `swerepo update --only github` to apply the ruleset and merge settings.
   Until then, `check` reports `✗ ruleset not applied (no GitHub repository yet)`.
-- **Settings as code.** The ruleset and merge settings live in `.github/swerepo/ruleset.json` and `repo-settings.json`. They are the source of truth: a person may edit them (SWERepo then treats them like any edited file), `init`/`update --only github` applies them, and `check` compares the live settings with them.
+- **On GitHub, but without `gh`** (not installed or not logged in): the plan says the settings wait for `gh`, and the next steps are the usual branch and pull request, then `gh auth login` and `swerepo init --only github`.
+- **Settings as code.** The ruleset and merge settings live in `.github/swerepo/ruleset.json` and `repo-settings.json`. They are the source of truth: a person may edit them (SWERepo then treats them like any edited file), `init`/`update --only github` applies them, and `check` compares the live settings with them. Two edits are never applied, and `check` reports them: a ruleset renamed away from `swerepo`, and fields in `repo-settings.json` beyond the merge settings (such as `private`).
 - **The ruleset** is named `swerepo`, so reruns find and update their own ruleset and never touch others. It targets the default branch.
 
 | Rule | `solo` | `team` |
@@ -491,6 +497,7 @@ A **monorepo** holds several projects in one repository, for example `services/o
 - **Plan limits are explained, not hidden:** on a private repository on GitHub's Free plan, rulesets and required checks aren't enforced; `check` says "set up, but not enforced on this plan".
 - **Bypass list:** empty by default (an admin bypass would show "merge anyway" to the admin).
 - **`swerepo threads <pr>`** reads open review threads through `gh api graphql` and prints each with its file, line and last comment, so agents and people can answer every thread. It never replies or resolves.
+- **How the settings are applied** (ADR-20261123-4e40): the JSON is built in Python (`github/ruleset@1`, `github/repo-settings@1`, versioned like templates), and what is applied is the committed file once it exists, a person's edits included. The ruleset named `swerepo` is updated in place when it exists, so a hand-made one is adopted, and created when it doesn't; other rulesets are never touched. `check` compares the live ruleset and merge settings with the committed files through `gh`, with GET requests only and never with `--ci`, and reports secret scanning, push protection and the dependency graph the same way.
 
 ---
 
@@ -661,6 +668,14 @@ TypeScript (npm/pnpm, vitest/jest, eslint/prettier), matching SeamSpec's presets
 ---
 
 ## Appendix A: Revision history
+
+### 0.10 → 0.11
+
+Decisions from building Phase 5 (`init` for `github`; `threads`):
+
+1. **The github component** (ADR-20261123-4e40): JSON settings built in Python and versioned like templates; a hand-made `swerepo` ruleset adopted; `check` reading GitHub only with `gh` and never with `--ci`; the dependency graph reported (§6.1, §12, §15).
+2. **Merges wait for Copilot's review** (the owner's choice; ADR-20261123-a359): a `copilot-review` job inside `ci-ok`, in `ci/workflow@2` (§6.2).
+3. **New flags** `--code-owner` and `--no-copilot-review`; `[github] copilot_review` (§7, §9).
 
 ### 0.9 → 0.10
 

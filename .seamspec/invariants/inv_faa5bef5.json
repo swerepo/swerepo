@@ -1,0 +1,36 @@
+{
+  "schema_version": "1",
+  "id": "inv_faa5bef5",
+  "title": "Pull requests wait for Copilot's review inside ci-ok",
+  "assertion": "In the `swerepo-ci.yml` that `swerepo init` writes when the ruleset requests Copilot's review (also when github is applied on its own after ci), `ci-ok` waits for a `copilot-review` job that runs on pull requests only and whose `permissions:` block grants `pull-requests: read` and nothing else, and the `pull_request` trigger lists `types: [opened, synchronize, reopened, ready_for_review]`, so a draft marked ready runs again. Run as written, with the values its own `env:` block maps from GitHub (`GH_TOKEN` included; the fake `gh` refuses without it), the job asks GitHub for exactly `repos/<repository>/pulls/<number>/reviews` with `--paginate`. It passes once that list holds a review by `copilot-pull-request-reviewer[bot]`, asking again when the first answer has none. It fails when none comes or only others reviewed (look-alike names included), and fails at once on a draft, without asking. `ci-ok`'s step fails on a pull request whose `copilot-review` didn't succeed, and on a push where it ran. With `--no-copilot-review` (also on a later run that turns the wait off) or a committed ruleset without Copilot review, there is no such job.",
+  "scope": {
+    "paths": [
+      "swerepo/ci.py",
+      "swerepo/init.py",
+      "swerepo/github.py",
+      "swerepo/cli.py",
+      "swerepo/templates/ci/"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "The owner's decision (2026-11-23) and ADR-20261123-a359: merges wait for Copilot's review, because PR #3 was merged before its review arrived. Tightened after SeamSpec's reviewer and a second review: the fake gh answers only the reviews address with --paginate, the review arrives on a second ask, the job's env: and if: are checked, drafts don't ask at all, and the opt-out runs through the real flag. Tightened again at the owner's request before locking: GH_TOKEN must reach gh, the job's read-only permission, the trigger's place under pull_request, and turning the wait off on a later run. Then, after SeamSpec's reviewer: the permissions block must hold only pull-requests: read.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_faa5bef5.py",
+    "harness_sha256": "a41cc685eb0824c2c9d28ba227eb525ba2fc84b149c16d725a1de1a026c42c65",
+    "assertion_sha256": "632c81b3f188a30b25c85d53a9524357ec322c48a7748a01dd2ed4e15149f435"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-23T10:01:38.716743Z",
+  "approved_at": "2026-11-24T00:54:57.864093Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

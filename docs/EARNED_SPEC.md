@@ -2,11 +2,11 @@
 
 # Spec: what this code guarantees
 
-13 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
+15 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
 
 ## Rules in force
 
-### `swerepo` (11 rules)
+### `swerepo` (13 rules)
 
 #### A fingerprint ignores only line endings, trailing whitespace, trailing blank lines and a BOM
 
@@ -117,6 +117,26 @@ In the `.github/workflows/swerepo-ci.yml` that `swerepo init` writes, the `test`
 - **Approved by:** Vamshidhar Pandrapagada, 2026-11-23, in the terminal
 - **Test:** `.seamspec/tests/test_inv_2c3b6053.py` (pytest)
 - **Id:** `inv_2c3b6053`
+
+#### check, init's plan and threads only read GitHub; init changes the swerepo ruleset and merge settings only after a yes
+
+With a repository on GitHub and `gh` logged in (a fake `gh` that logs every call and its request body), `swerepo check` (text and `--json`, before and after the ruleset files exist), `swerepo init --dry-run` and `swerepo threads` only read: REST calls use GET only, and GraphQL sends a query, never a mutation (in its arguments or on stdin, with `--input -` or `--input=-`). Every other `gh` call counts as a change, however it is spelled: `-X PUT`, `-XPUT`, `--method PUT`, `--method=PUT`, or a body (`-f`, `-F`, `--field`, `--raw-field`, `--input`, attached or not) with no method. `swerepo check --ci` doesn't call `gh` at all, with or without the ruleset files. `swerepo init --only github` changes nothing on GitHub: without `--yes` and without a terminal, when the person says no at "Apply?", or when they are asked about the ruleset and the merge settings and say no to both. With `--yes` it changes only the repository's merge settings and the ruleset named `swerepo`: it updates that ruleset in place, or creates it when there is none, and never touches another ruleset. What it sends is exactly the committed `ruleset.json` and `repo-settings.json`.
+
+- **Applies to:** `swerepo/github.py`, `swerepo/threads.py`, `swerepo/check.py`, `swerepo/init.py`, `swerepo/cli.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-24, in the terminal
+- **Test:** `.seamspec/tests/test_inv_ef31cc79.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_ef31cc79`
+
+#### Pull requests wait for Copilot's review inside ci-ok
+
+In the `swerepo-ci.yml` that `swerepo init` writes when the ruleset requests Copilot's review (also when github is applied on its own after ci), `ci-ok` waits for a `copilot-review` job that runs on pull requests only and whose `permissions:` block grants `pull-requests: read` and nothing else, and the `pull_request` trigger lists `types: [opened, synchronize, reopened, ready_for_review]`, so a draft marked ready runs again. Run as written, with the values its own `env:` block maps from GitHub (`GH_TOKEN` included; the fake `gh` refuses without it), the job asks GitHub for exactly `repos/<repository>/pulls/<number>/reviews` with `--paginate`. It passes once that list holds a review by `copilot-pull-request-reviewer[bot]`, asking again when the first answer has none. It fails when none comes or only others reviewed (look-alike names included), and fails at once on a draft, without asking. `ci-ok`'s step fails on a pull request whose `copilot-review` didn't succeed, and on a push where it ran. With `--no-copilot-review` (also on a later run that turns the wait off) or a committed ruleset without Copilot review, there is no such job.
+
+- **Applies to:** `swerepo/ci.py`, `swerepo/init.py`, `swerepo/github.py`, `swerepo/cli.py`, `swerepo/templates/ci/`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-24, in the terminal
+- **Test:** `.seamspec/tests/test_inv_faa5bef5.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_faa5bef5`
 
 ### `(repository root)` (2 rules)
 

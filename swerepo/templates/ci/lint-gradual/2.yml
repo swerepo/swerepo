@@ -1,0 +1,37 @@
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # to compare with the base branch or the commit before the push
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.9.28"
+          python-version: "@@python_main@@"
+      - run: @@install@@
+      # Moving to ruff gradually (spec §6.3): only the Python files this change touched are checked, so existing
+      # code isn't flagged all at once. SWERepo never reformats code to make it pass.
+      - name: ruff on the changed files
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -eu
+          if [ "$EVENT" = "pull_request" ]; then
+            base=$(git merge-base "origin/$BASE_REF" HEAD)
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+              && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            base=$BEFORE
+          elif git rev-parse -q --verify "HEAD~1^{commit}" >/dev/null; then
+            base=HEAD~1  # a new branch's first push
+          else
+            echo "No earlier commit to compare with: nothing to check."
+            exit 0
+          fi
+          git diff -z --name-only --diff-filter=ACMR "$base" HEAD -- '*.py' '*.pyi' > "$RUNNER_TEMP/changed"
+          if [ ! -s "$RUNNER_TEMP/changed" ]; then
+            echo "No Python files changed."
+            exit 0
+          fi
+          # `--` so a file whose name starts with "-" isn't read as an option (review P4-F09)
+          xargs -0 uv run ruff check --force-exclude -- < "$RUNNER_TEMP/changed"
+          xargs -0 uv run ruff format --check --force-exclude -- < "$RUNNER_TEMP/changed"
