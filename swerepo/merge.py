@@ -3,10 +3,10 @@
 `merge3` merges a person's file ("ours") with SWERepo's new render ("theirs") over the earlier render ("base").
 Pins are settled first, line by line: a pin line that each side left alone or changed only as a pin is set, on all
 three sides, to the newest of them, so pins never conflict and `update` never moves one backwards. A pin the person
-lowered is their edit, and a pin line the new render adds never brings an older pin than the repository's. Then
-`git merge-file` merges the rest. Anything it can't merge is a conflict: no text comes back, the file stays as it
-is, and conflict markers are never written. Anything but a clean, parseable pin line is an ordinary edit, and one
-version pinned to two commits is never guessed.
+lowered is their edit, and a pin the new render introduces (on an added line, or in place of another line) never
+brings an older pin than the repository's. Then `git merge-file` merges the rest. Anything it can't merge is a
+conflict: no text comes back, the file stays as it is, and conflict markers are never written. Anything but a clean,
+parseable pin line is an ordinary edit, and one version pinned to two commits is never guessed.
 """
 
 from __future__ import annotations
@@ -155,10 +155,15 @@ def _settle(b: list[str], o: list[str], t: list[str]) -> tuple[int, set[str]]:
             repository.setdefault(found.action, []).append(found)
     if not _one_commit_per_version([found for pins in repository.values() for found in pins]):
         conflicts += 1  # the person's file pins one version to two commits, after settling too: never guessed
-    for k in sorted(set(range(len(t))) - set(to_theirs.values())):  # lines the new render adds
+    from_theirs = {k: i for i, k in to_theirs.items()}
+    for k in range(len(t)):  # pins the new render introduces: on added lines, or in place of another line
         found = pin(t[k])
         if found is None or found.action not in repository:
             continue
+        i = from_theirs.get(k)
+        earlier = pin(b[i]) if i is not None else None
+        if earlier is not None and earlier.action == found.action:
+            continue  # this action's pin line in the earlier render too: settled above, or the person's edit
         candidates = [*repository[found.action], found]
         if not _one_commit_per_version(candidates):
             conflicts += 1

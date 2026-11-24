@@ -198,3 +198,14 @@ def test_two_commits_for_one_version_across_lines_of_ours_conflict():
     theirs = base.replace("c\n", "c changed\n")
     result = merge3(base, ours, theirs)
     assert result.text is None and result.conflicts
+
+
+def test_a_pin_the_new_render_puts_in_place_of_another_line_is_raised():
+    """PR #18 review: theirs replaces a `run:` step with a checkout at an older version: raised to the
+    repository's."""
+    newer = "      - uses: actions/checkout@" + "f" * 40 + "  # v99.0.0\n"
+    older = "      - uses: actions/checkout@" + "1" * 40 + "  # v7.0.1\n"
+    base = "steps:\n" + newer + "      - run: echo hi\n"
+    theirs = "steps:\n" + newer + older
+    result = merge3(base, base, theirs)
+    assert result.text == "steps:\n" + newer + newer

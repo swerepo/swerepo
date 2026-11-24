@@ -353,8 +353,12 @@ class TestReviewP6:
         assert "ADR-20261124-abcd" in (repo / readme).read_text()
         state = State.load(repo)
         record = state.files()[readme]
-        state.set_file(readme, Record(record.template, fingerprint("older"), record.written, record.inputs))
-        state.save(repo)  # as if an older docs/adr-readme wrote it: update rewrites it
+        text = (repo / readme).read_text()
+        older = text.replace("\n", "\nAn older template's line.\n", 1)  # as an older docs/adr-readme wrote it
+        (repo / readme).write_text(older)
+        mark = file_fingerprint(older, record.template)
+        state.set_file(readme, Record(record.template, mark, mark, record.inputs))
+        state.save(repo)  # SWERepo's render alone, nobody changed it: update rewrites it
         found = action(plan(repo), readme)
         assert found.verb == REWRITE and "ADR-20261124-abcd" in (found.content or "")
         apply(plan(repo), repo)
@@ -486,3 +490,76 @@ class TestReviewP6:
         assert all((repo / path).read_bytes() == data for path, data in before.items())
         assert State.load(repo).values["python"] == ["3.12", "3.13", "3.14"]  # still ci's to change
         assert action(plan(repo, only=["ci"]), WORKFLOW).verb == REWRITE  # ci itself does
+
+
+class TestCopilotPR18:
+    """Copilot's review of PR #18."""
+
+    def test_a_merged_rule_survives_a_later_template_change(self, repo: Path):
+        """After a merge, `written` != `rendered`: a later change is merged too, with consent, never rewritten."""
+        old = as_older_agents_block(repo)
+        text = (repo / "AGENTS.md").read_text()
+        (repo / "AGENTS.md").write_text(text.replace(old, old.replace("\n", "\nA rule of my own.\n", 1)))
+        apply(plan(repo, merge=True), repo)
+        assert "A rule of my own." in agents_block(repo)
+        make(repo, {"Makefile": "test:\n\tpytest\n"})  # the project's commands change: the block renders anew
+        waiting = action(plan(repo), "AGENTS.md")
+        assert waiting.verb == KEEP and "--merge" in waiting.note  # --yes alone: never rewritten over the rule
+        apply(plan(repo), repo)
+        assert "A rule of my own." in agents_block(repo)
+        apply(plan(repo, merge=True), repo)
+        assert "A rule of my own." in agents_block(repo) and "make test" in agents_block(repo)
+
+    def test_kept_dependabot_pins_survive_a_later_template_change(self, repo: Path):
+        text = (repo / WORKFLOW).read_text()
+        line = next(line for line in text.splitlines() if "actions/checkout@" in line)
+        newer = line.split("@")[0] + "@" + "f" * 40 + "  # v99.0.0"
+        (repo / WORKFLOW).write_text(text.replace(line, newer))
+        state = State.load(repo)
+        record = state.files()[WORKFLOW]
+        kept = file_fingerprint((repo / WORKFLOW).read_text(), record.template)
+        state.set_file(WORKFLOW, Record(record.template, record.rendered, kept, record.inputs))  # an update kept v99
+        state.save(repo)
+        pyproject = (repo / "pyproject.toml").read_text()
+        (repo / "pyproject.toml").write_text(pyproject.replace('">=3.12"', '">=3.13"'))  # the workflow renders anew
+        found = action(plan(repo), WORKFLOW)
+        assert found.verb == MERGE and newer in (found.content or "")  # pins only: --yes alone, pins kept
+        assert '"3.12"' not in (found.content or "")
+
+    def test_a_merge_keeps_bytes_that_arent_utf8(self, repo: Path):
+        runbook = "docs/agents/address-review.md"
+        state = State.load(repo)
+        record = state.files()[runbook]
+        old = STORE.get("agents/address-review@1").render(record.inputs or {})
+        (repo / runbook).write_bytes(old.encode() + b"\nNote: caf\xe9\n")  # a Latin-1 line of the person's
+        mark = file_fingerprint(old, "agents/address-review@1")
+        state.set_file(runbook, Record("agents/address-review@1", mark, mark, record.inputs))
+        state.save(repo)
+        result = CliRunner().invoke(app, ["update", "--path", str(repo), "--yes", "--merge", "--json"])
+        assert result.exit_code == 0, result.output
+        data = (repo / runbook).read_bytes()
+        assert b"caf\xe9" in data and b"swerepo threads" in data
+
+    def test_an_older_workflow_record_still_merges_after_requires_python_moves(self, repo: Path):
+        state = State.load(repo)
+        record = state.files()[WORKFLOW]
+        state.set_file(WORKFLOW, Record(record.template, record.rendered, record.written))  # no inputs: older
+        state.save(repo)
+        text = (repo / WORKFLOW).read_text()
+        assert "name: swerepo-ci" in text
+        (repo / WORKFLOW).write_text(text.replace("name: swerepo-ci", "name: mine", 1))
+        pyproject = (repo / "pyproject.toml").read_text()
+        (repo / "pyproject.toml").write_text(pyproject.replace('">=3.12"', '">=3.13"'))
+        found = action(plan(repo, merge=True), WORKFLOW)
+        assert found.verb == MERGE, found.note
+        assert "name: mine" in (found.content or "") and '"3.12"' not in (found.content or "")
+
+    def test_an_empty_python_matrix_cant_be_rebuilt(self, repo: Path):
+        record = State.load(repo).files()[WORKFLOW]
+        assert rebuild(STORE, record.template, {**(record.inputs or {}), "python": ""}) is None
+        state = State.load(repo)
+        state.set_file(WORKFLOW, Record(record.template, record.rendered, record.written,
+                                        {**(record.inputs or {}), "python": ""}))  # fmt: skip
+        state.save(repo)
+        assert CliRunner().invoke(app, ["status", "--path", str(repo)]).exit_code == 0
+        assert CliRunner().invoke(app, ["diff", "--path", str(repo)]).exit_code == 0

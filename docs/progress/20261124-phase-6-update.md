@@ -22,6 +22,12 @@
 - **Smaller:** `GitHub.find_ruleset` reads every page of rulesets; `init`'s plan explains `delete_branch_on_merge` when it creates `repo-settings.json`.
 - **Dogfooded here:** `swerepo update` rewrote the AGENTS.md block and `docs/agents/address-review.md` to version 2 and backfilled `inputs` on all 12 records; a second run has nothing to do; `check` and `status` report everything current.
 - **Review:** Gemini's early review of the merge (`M6-F01`–`M6-F04`) is fixed with tests. Round 1 (`P6-F01`–`P6-F07`): all seven fixed with tests: merged JSON and TOML checked before writing, and the merged settings are what GitHub gets; the ADR index kept; Dependabot's pins current in `check`, `status` and `update` alike; older records backfilled before a partial run moves `[values]`; check names with commas; `update` follows `requires-python` and SWERepo's released pin; `diff` shows what can't be merged, and `diff` and `status` never call GitHub. Round 2 (`P6-F08`): `update --only github` no longer applies `ci`'s own updates. Gemini signed off in round 3. Spec v0.14.
+- **Copilot's review of PR #18:** 5 findings, all fixed with tests (`TestCopilotPR18`):
+  - a file or block merged earlier (`written` != `rendered`) is merged again on a later template change, never rewritten over the person's rule or kept pins;
+  - a whole-file write keeps bytes that aren't UTF-8;
+  - an older workflow record without inputs rebuilds from the inputs recorded before the run;
+  - a pin the new render puts in place of another line is raised to the repository's;
+  - an empty Python matrix in a record means "can't be rebuilt", not a crash.
 - **The two-commit check:** `merge._settle` also conflicts when two lines of the person's file pin one version to two commits (found while tightening `inv_d60ffffd`).
 - **SeamSpec:** the owner approved three critical rules (2026-11-24), so 20 are locked (`docs/EARNED_SPEC.md` regenerated). They were tightened twice after SeamSpec's reviewer before approval. The owner also accepted decision ADR-20261124-b9d7 (the pins decision as built) and rejected the older ADR-20261123-5e14:
   - `inv_60788941`: `update` changes an edited file only with a deliberate yes, never writes conflict markers, and never merges against an earlier render it can't rebuild;

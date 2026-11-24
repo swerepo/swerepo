@@ -260,10 +260,12 @@ def _managed_file(
     template: str,
     render: tuple[str, str] | None = None,
     inputs: dict[str, str] | None = None,
+    legacy: dict[str, str] | None = None,
 ) -> Action:
     """A file SWERepo keeps current: created when missing, otherwise compared with its record. `render`:
     (template id, text) rendered by the component itself, for files built from several templates, with the
-    `inputs` it was rendered from (ADR-20261124-7afa point 10)."""
+    `inputs` it was rendered from (ADR-20261124-7afa point 10). `legacy`: update only, the inputs the file was
+    built from as recorded before this run, for an older record without inputs of its own (PR #18 review)."""
     if not inside(ctx.root, ctx.root / path):
         return Action(component, KEEP, path, _OUTSIDE)
     if render is None:
@@ -293,7 +295,7 @@ def _managed_file(
         action = Action(component, OUTDATED, path, f"{template_id} renders differently now: swerepo update",
                         inputs=inputs)  # fmt: skip
     if ctx.update:
-        return _for_update(ctx, action, record, (template_id, text), current, "file")
+        return _for_update(ctx, action, record, (template_id, text), current, "file", legacy)
     return action
 
 
@@ -353,15 +355,22 @@ def _managed_block(
     return action
 
 
-def _earlier_render(ctx: _Context, record: Record, inputs: dict[str, str] | None, mark: Callable[[str, str], str]):
+def _earlier_render(
+    ctx: _Context,
+    record: Record,
+    inputs: dict[str, str] | None,
+    mark: Callable[[str, str], str],
+    legacy: dict[str, str] | None = None,
+):
     """The record's earlier render and the inputs that rebuild it: (inputs, text, trusted). From the record's own
-    inputs; for an older record without them, from this run's inputs or, for a plain template, from the values
-    recorded before this run (the owner's backfill, ADR-20261124-7afa point 10). Trusted only when the rebuild's
+    inputs; for an older record without them, from this run's inputs, the component's inputs as recorded before
+    this run (`legacy`, for a file built from several inputs), or, for a plain template, the values recorded
+    before this run (the owner's backfill, ADR-20261124-7afa point 10). Trusted only when the rebuild's
     fingerprint is the record's `rendered`."""
     if record.inputs is not None:
         candidates = [record.inputs]
     else:
-        candidates = [inputs] if inputs is not None else []
+        candidates = [found for found in (inputs, legacy) if found is not None]
         with contextlib.suppress(TemplateError, KeyError, ValueError):  # a file built in code: this run's only
             candidates.append(rebuild.used(ctx.store.get(record.template), ctx.before))
     text = None
@@ -381,7 +390,15 @@ def _diff(before: str, after: str, path: str, labels: tuple[str, str] = ("yours"
 WORKFLOWS = ".github/workflows/"
 
 
-def _for_update(ctx: _Context, action: Action, record: Record, new: tuple[str, str], current: str, kind: str) -> Action:
+def _for_update(
+    ctx: _Context,
+    action: Action,
+    record: Record,
+    new: tuple[str, str],
+    current: str,
+    kind: str,
+    legacy: dict[str, str] | None = None,
+) -> Action:
     """What `update` does with a managed file or block SWERepo recorded (ADR-20261124-7afa point 2): rewrite it
     when nobody changed it, merge it from the rebuilt earlier render when the person did, and backfill the inputs
     of an older record whose earlier render they rebuild (point 10). `current`: the file, or the block's content."""
@@ -394,7 +411,9 @@ def _for_update(ctx: _Context, action: Action, record: Record, new: tuple[str, s
     indexed = kind == "file" and template_id.startswith("docs/adr-readme@")  # its ADR index is filled in (P6-F02)
     if indexed:
         text = _with_adrs(ctx, path, text)
-    if action.verb == OUTDATED:
+    # Rewritten outright only when what SWERepo wrote was its render alone; after a merge (`written` != `rendered`)
+    # the file holds the person's edits or kept pins, so it goes through the merge and its consent (PR #18 review)
+    if action.verb == OUTDATED and record.written == record.rendered:
         if problem := _unparseable(ctx, path, kind, text):
             note = f"SWERepo's new version {problem}: kept; update it by hand"
             return Action(c, CANT_MERGE, path, note, inputs=inputs, diff=_diff(current, text, path))
@@ -402,7 +421,7 @@ def _for_update(ctx: _Context, action: Action, record: Record, new: tuple[str, s
         note = f"unchanged since SWERepo wrote it: updated to {template_id}"
         return Action(c, REWRITE, path, note, content=text, record=Record(template_id, rendered, rendered, inputs),
                       kind=kind, expect=record.written, inputs=inputs, diff=_diff(current, text, path))  # fmt: skip
-    base_inputs, base, trusted = _earlier_render(ctx, record, inputs, mark)
+    base_inputs, base, trusted = _earlier_render(ctx, record, inputs, mark, legacy)
     backfill = trusted and record.inputs is None
     kept = Record(record.template, record.rendered, record.written, base_inputs) if backfill else None
     # Dependabot's newer pins in a workflow, and nothing else, aren't the person's edit (ADR-20261123-f571; P6-F03)
@@ -623,8 +642,8 @@ def _rewrite_if_asked(ctx: _Context, action: Action, render: tuple[str, str], as
     `--with-governance`) is rewritten, if SWERepo wrote it and nobody changed it since (review P4-F02). Anything
     else stays `outdated` for `update` (Phase 6)."""
     record = ctx.state.files().get(action.path or "") if ctx.state else None
-    if not asked or action.verb != OUTDATED or record is None:
-        return action
+    if not asked or action.verb != OUTDATED or record is None or record.written != record.rendered:
+        return action  # after a merge the file holds the person's edits: update merges it (PR #18 review)
     template_id, text = render
     rendered = file_fingerprint(text, template_id)
     note = "unchanged since SWERepo wrote it: rewritten with what you asked for"
@@ -637,8 +656,8 @@ def _rewrite_block_if_asked(ctx: _Context, action: Action, render: tuple[str, st
     """SWERepo's block, rewritten in place when the person asked for its new content in this run (`--code-owner`)
     and nobody changed the block since SWERepo wrote it (review P5-F10). Anything else stays as it is."""
     record = ctx.state.blocks().get(action.path or "") if ctx.state else None
-    if not asked or action.verb != OUTDATED or record is None:
-        return action
+    if not asked or action.verb != OUTDATED or record is None or record.written != record.rendered:
+        return action  # after a merge the block holds the person's edits: update merges it (PR #18 review)
     template_id, content = render
     rendered = fingerprint(content)
     note = "SWERepo block unchanged since it was written: rewritten with what you asked for"
@@ -847,8 +866,17 @@ def _ci(
                        project_inputs, copilot)  # fmt: skip
     versions = f"{python[0]}–{python[-1]}" if len(python) > 1 else python[0]
     render = ci.render_workflow(ctx.store, inputs)
+    legacy = None
+    if ctx.update:  # the workflow as recorded before this run, for an older record without inputs (PR #18 review)
+        before = dataclasses.replace(ctx, update=False)
+        old_python = [str(v) for v in recorded_python] if _valid_python(recorded_python) else python  # type: ignore[union-attr]
+        _, old_projects = _project_inputs(before, listed)
+        old_governance, _ = _command(before, shared, "governance_command")
+        old_wait = recorded_wait if recorded_copilot in ("true", "false") else copilot
+        legacy = rebuild.workflow_inputs(ci.Inputs(shared.default_branch, install, old_python, lint, linters,
+                                                   old_governance, seamspec, old_projects, old_wait))  # fmt: skip
     workflow = _managed_file(
-        ctx, c, standard.CI_WORKFLOW, ci.WORKFLOW, render=render, inputs=rebuild.workflow_inputs(inputs)
+        ctx, c, standard.CI_WORKFLOW, ci.WORKFLOW, render=render, inputs=rebuild.workflow_inputs(inputs), legacy=legacy
     )
     workflow = _rewrite_if_asked(ctx, workflow, render, projects is not None or shared.with_governance or asked)
     if workflow.verb == CREATE:
@@ -925,6 +953,11 @@ def _security(ctx: _Context, shared: _Workflows, contact: str | None) -> tuple[l
         main = str(recorded_python) if keep else (shared.python or ci.DEFAULT_PYTHONS)[-1]
         values = {"default_branch": shared.default_branch, "python_main": main, "swerepo": command}
         render = (template.id, template.render(values))
+        legacy = None
+        if ctx.update and recorded_python in KNOWN_PYTHONS:  # as recorded before this run (PR #18 review)
+            old_command, _ = _command(dataclasses.replace(ctx, update=False), shared, "privacy_command")
+            old = {"default_branch": shared.default_branch, "python_main": str(recorded_python), "swerepo": old_command}
+            legacy = rebuild.used(template, old)
         workflow = _managed_file(
             ctx,
             c,
@@ -932,6 +965,7 @@ def _security(ctx: _Context, shared: _Workflows, contact: str | None) -> tuple[l
             "security/privacy-workflow",
             render=render,
             inputs=rebuild.used(template, values),
+            legacy=legacy,
         )
         workflow = _rewrite_if_asked(ctx, workflow, render, shared.with_governance)
         actions.append(workflow)
@@ -1667,7 +1701,7 @@ def apply(plan: Plan, root: Path) -> None:
                     updated = replace_block_content(text, action.content, style=style, marker="swerepo")
                     target.write_text(updated, encoding="utf-8", newline="", errors="surrogateescape")
                 else:
-                    target.write_text(action.content, encoding="utf-8", newline="")
+                    target.write_text(action.content, encoding="utf-8", newline="", errors="surrogateescape")
             else:
                 text = read_exact(target, errors="surrogateescape")
                 try:

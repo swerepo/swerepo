@@ -52,8 +52,11 @@ def _workflow_from(inputs: Mapping[str, str]) -> ci.Inputs:
         if project is None:
             raise ValueError("a project's inputs aren't ones standard 1 writes")
         projects.append(project)
+    python = _listed(inputs["python"])
+    if not python:  # no Python version: there is no matrix to rebuild (PR #18 review)
+        raise ValueError("a workflow's inputs name no Python version")
     return ci.Inputs(
-        inputs["default_branch"], inputs["install"], _listed(inputs["python"]), inputs["lint"],
+        inputs["default_branch"], inputs["install"], python, inputs["lint"],
         _listed(inputs["linters"]), inputs["swerepo"], inputs["seamspec"], projects,
         inputs["copilot_review"] == "true",
     )  # fmt: skip
