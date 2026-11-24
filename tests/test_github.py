@@ -794,3 +794,45 @@ class TestCopilotReviewPR11:
         assert "what you gave (--code-owner) isn't in it" in action(plan, github.RULESET_FILE).note
         plan = plan_for(project, mode="team", code_owner="@dev")
         assert "isn't in it" not in action(plan, github.RULESET_FILE).note
+
+
+class TestDependencyBots:
+    """Dependency bots' pull requests and Dependabot's cooldown (ADR-20261123-cc8d)."""
+
+    def test_every_update_waits_a_week_for_new_versions(self, project: Path):
+        apply(plan_for(project), project)
+        text = (project / ".github/dependabot.yml").read_text()
+        entries = text.split("  - package-ecosystem: ")[1:]
+        assert [e.split("\n", 1)[0] for e in entries] == ["github-actions", "uv"]
+        for entry in entries:  # under each update, next to its schedule
+            assert "\n    schedule:\n      interval: weekly\n    cooldown:\n      default-days: 7\n" in entry + "\n"
+
+    def test_the_wait_reads_the_author_from_its_env_block(self, project: Path):
+        apply(make_plan(project, only=["ci", "github"], today=TODAY, hosts=[]), project)
+        job = (project / WORKFLOW).read_text().split("\n  copilot-review:\n", 1)[1].split("\n  ci-ok:\n", 1)[0]
+        assert "AUTHOR: ${{ github.event.pull_request.user.login }}" in job  # never ${{ }} inside the script
+        script = job.split("run: |", 1)[1]
+        assert "${{" not in script and '"dependabot[bot]")' in script and "renovate" not in script
+
+
+class TestCopilotReviewPR16:
+    """Copilot's review of PR #16, each reproduced before the fix."""
+
+    def test_dependabot_fails_closed_when_github_lists_250_commits(self, project: Path, tmp_path: Path):
+        """GitHub lists at most 250 commits of a pull request: a list that long may hide a person's commit."""
+        apply(make_plan(project, only=["ci", "github"], today=TODAY, hosts=[]), project)
+        text = (project / WORKFLOW).read_text()
+        job = text.split("\n  copilot-review:\n", 1)[1].split("\n  ci-ok:\n", 1)[0]
+        script = "\n".join(line[10:] for line in job.split("        run: |\n", 1)[1].splitlines()) + "\n"
+        fake = tmp_path / "bin"
+        fake.mkdir()
+        (fake / "gh").write_text(
+            '#!/bin/sh\nfor i in $(seq 1 "$COMMITS"); do echo "dependabot[bot] true web-flow"; done\n'
+        )
+        (fake / "gh").chmod(0o755)
+        env = {"PATH": f"{fake}{os.pathsep}{os.environ['PATH']}", "GH_TOKEN": "x", "REPOSITORY": "acme/app",
+               "NUMBER": "1", "DRAFT": "false", "AUTHOR": "dependabot[bot]", "HEAD_REPO": "acme/app"}  # fmt: skip
+        for count, passes in ((1, True), (249, True), (250, False)):
+            done = subprocess.run(["bash", "-c", script], env={**env, "COMMITS": str(count)}, capture_output=True,
+                                  text=True, check=False)  # fmt: skip
+            assert (done.returncode == 0) is passes, (count, done.stdout)

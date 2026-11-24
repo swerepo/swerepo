@@ -40,3 +40,4 @@ GitHub's `copilot_code_review` rule (`review_on_push: false`) reviews a pull req
 - A pull request can't merge before Copilot has reviewed it, where Copilot review is on.
 - A pull request's CI takes as long as Copilot's review, usually a few minutes. The 20-minute limit makes a missing review a visible failure, not a hang.
 - Later pushes to the same pull request pass the job at once.
+- *Amended by ADR-20261123-cc8d:* pull requests opened by Dependabot (`dependabot[bot]`) with only its own commits pass at once. GitHub never requests Copilot's review for them, so they would otherwise always fail.

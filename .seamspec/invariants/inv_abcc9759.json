@@ -1,0 +1,34 @@
+{
+  "schema_version": "1",
+  "id": "inv_abcc9759",
+  "title": "Dependabot's version updates wait a week, and SWERepo's settings turn auto-merge off",
+  "assertion": "In what `swerepo init --only github` writes, for a uv project and a pip project alike and in solo and team mode: `.github/dependabot.yml` holds under `updates:` only two entries, one for `github-actions` and one for the project's Python ecosystem (`uv` with a `uv.lock`, else `pip`), with nothing after the last entry. Each entry has exactly one `cooldown:`, holding `default-days: 7` and nothing else (no shorter wait for some updates, no exclusions), so Dependabot proposes a version update only once the new version is a week old. `.github/swerepo/repo-settings.json` has `\"allow_auto_merge\": false`.",
+  "scope": {
+    "paths": [
+      "swerepo/templates/github/dependabot/",
+      "swerepo/github.py",
+      "swerepo/init.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "The owner's decision (2026-11-23, ADR-20261123-cc8d): Dependabot's pull requests no longer wait for Copilot, so what guards them is a week's cooldown (a broken or malicious release is usually pulled by then) and a person who merges (auto-merge off, ADR-20261123-4e40 point 4). Locked at the owner's request, as its own rule. Tightened after SeamSpec's reviewer: the cooldown block holds only the 7 days, nothing follows the last entry, and the rule promises only what the written files hold.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_abcc9759.py",
+    "harness_sha256": "1f5e957e5e289d19a7629b9f4fa6b6ee8d4d08451094dff4b4c368964423cdc7",
+    "assertion_sha256": "803fc77c7282d1dd1c2531890e80f3ae730cac0066f431773c4fdf864a6ed00e"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-24T05:03:06.990196Z",
+  "approved_at": "2026-11-24T05:46:10.299276Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

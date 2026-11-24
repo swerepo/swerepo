@@ -153,6 +153,46 @@ class TestWhoIsSkipped:
         findings = pr(repo, author="dependabot[bot]")
         assert list(findings) == ["pr.skipped"] and findings["pr.skipped"].status == NOT_CHOSEN
 
+    def test_an_exempt_authors_branch_with_someone_elses_commit_follows_the_rules(self, repo: Path):
+        """Review DB-F02: the exemption holds only while every commit on the branch is the bot's own."""
+        bot = "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>"
+        make(repo, {"app.py": "print('bump')\n"})
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "Bump", f"--author={bot}")
+        assert list(pr(repo, author="dependabot[bot]")) == ["pr.skipped"]  # the bot's commits only
+        make(repo, {"app.py": "print('bump, and more')\n"})
+        commit(repo, "a person's change on the bot's branch")
+        findings = pr(repo, author="dependabot[bot]")
+        assert "pr.skipped" not in findings and findings["pr.progress"].status == MISSING
+
+    def test_a_persons_merge_on_an_exempt_authors_branch_follows_the_rules(self, repo: Path):
+        """Copilot on PR #16: a person merging main into the bot's branch, with changes of their own, counts."""
+        bot = "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>"
+        make(repo, {"app.py": "print('bump')\n"})
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "Bump", f"--author={bot}")
+        git(repo, "checkout", "-q", "main")
+        make(repo, {"README.md": "# main moved on\n"})
+        commit(repo, "main moves on")
+        git(repo, "checkout", "-q", "feature")
+        git(repo, "merge", "-q", "--no-ff", "--no-commit", "main")
+        make(repo, {".github/workflows/ci.yml": "jobs: {sneaked: in}\n"})  # slipped in while merging
+        commit(repo, "Merge main")
+        findings = pr(repo, author="dependabot[bot]")
+        assert "pr.skipped" not in findings and findings["pr.progress"].status == MISSING
+
+    def test_githubs_own_checkout_merge_doesnt_count(self, repo: Path):
+        """In CI the checkout is GitHub's merge of the pull request into its base: that merge isn't the bot's, but
+        it isn't a commit on the pull request either."""
+        bot = "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>"
+        make(repo, {"app.py": "print('bump')\n"})
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "Bump", f"--author={bot}")
+        git(repo, "checkout", "-q", "--detach", "main")
+        git(repo, "merge", "-q", "--no-ff", "-m", "Merge feature into main", "feature",
+            "--no-edit")  # fmt: skip  # as GitHub builds refs/pull/N/merge: base first, the pull request second
+        assert list(pr(repo, author="dependabot[bot]")) == ["pr.skipped"]
+
     def test_exempt_authors_from_the_state_file(self, repo: Path):
         (repo / FILE_NAME).write_text('standard = 1\nswerepo = "0.0.1"\n[pr]\nexempt_authors = ["renovate[bot]"]\n')
         assert "pr.skipped" in pr(repo, author="renovate[bot]")

@@ -162,6 +162,7 @@ jobs:
 
   # Merges wait for Copilot's review of the pull request, of any commit (ADR-20261123-a359): asked every 30
   # seconds for up to 20 minutes; a later push passes at once. Re-run the job if the review came later.
+  # Dependabot's own pull requests don't wait: GitHub never requests Copilot for them (ADR-20261123-cc8d).
   copilot-review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -175,6 +176,8 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           NUMBER: ${{ github.event.pull_request.number }}
           DRAFT: ${{ github.event.pull_request.draft }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           set -euo pipefail  # a failing gh call stops the job with its own error, not a 20-minute wait
           if [ "${DRAFT:-false}" = "true" ]; then
@@ -182,6 +185,31 @@ jobs:
             echo "A draft: Copilot reviews it once it is marked ready for review, and this job runs again then."
             exit 1
           fi
+          case "${AUTHOR:-}" in
+            "dependabot[bot]")
+              # Dependabot: GitHub requests Copilot's review only for authors who have Copilot, so none comes. Its
+              # pull request holds Dependabot's commits only: its branch is in this repository, and every commit is
+              # authored by Dependabot and committed and signed by GitHub itself (`web-flow`), which no one else can
+              # be. Anything else fails at once: changes by people or agents go in a pull request of their own, which
+              # waits for Copilot (ADR-20261123-cc8d).
+              commits=""
+              if [ "${HEAD_REPO:-}" = "$REPOSITORY" ]; then
+                commits=$(gh api "repos/$REPOSITORY/pulls/$NUMBER/commits" --paginate \
+                  --jq '.[] | "\(.author.login // "-") \(.commit.verification.verified) \(.committer.login // "-")"')
+              fi
+              others=$(printf '%s\n' "$commits" \
+                | awk 'NF && ($1 != "dependabot[bot]" || $2 != "true" || $3 != "web-flow")' | wc -l)
+              # GitHub lists at most 250 commits of a pull request: a list that long may hide others, so it fails
+              listed=$(printf '%s\n' "$commits" | awk 'NF' | wc -l)
+              if [ -n "$commits" ] && [ "$listed" -lt 250 ] && [ "$others" -eq 0 ]; then
+                echo "Opened by Dependabot, every commit its own: dependency updates don't wait for Copilot's review."
+                exit 0
+              fi
+              echo "Opened by Dependabot, but not only its own commits on a branch of this repository: a dependency"
+              echo "update's pull request holds only Dependabot's commits. Open a separate one for other changes."
+              exit 1
+              ;;
+          esac
           for attempt in $(seq 1 40); do
             # one line per review by Copilot, on any page of the list
             reviewed=$(gh api "repos/$REPOSITORY/pulls/$NUMBER/reviews" --paginate \

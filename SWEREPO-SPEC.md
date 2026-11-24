@@ -1,6 +1,6 @@
 # SWERepo — Specification
 
-**Status:** draft for the owner's review · **Version:** 0.12 (design) · **Date:** 2026-11-23
+**Status:** draft for the owner's review · **Version:** 0.13 (design) · **Date:** 2026-11-23
 **Name:** SWERepo, command `swerepo`, at `github.com/swerepo/swerepo` (renamed from Golden Repo in v0.6, ADR-20261120-1a27)
 **What changed:** Appendix A. **How the BLUEPRINT's ideas were handled:** Appendix B.
 
@@ -148,7 +148,7 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
   - The lines go in a marked block (`# swerepo:begin` … `# swerepo:end`) **at the end of the file**, in a new CODEOWNERS or an existing one, because in CODEOWNERS the last matching line wins. A team's own lines (per-folder owners) stay above the block.
   - If lines are later added below the block, `check` reports `~ CODEOWNERS: lines after the SWERepo block can override governance owners`, naming any that do.
 - `.github/ISSUE_TEMPLATE/` for bugs and features.
-- `.github/dependabot.yml`: weekly updates for GitHub Actions and Python dependencies.
+- `.github/dependabot.yml`: weekly updates for GitHub Actions and Python dependencies, each new version proposed once it is 7 days old (`cooldown`), since a broken or malicious release is usually pulled by then. Security updates don't wait (ADR-20261123-cc8d).
 - Commits under a noreply address: `check` warns when recent commits use a personal email address (lesson from SessionWalk), and also when the repository's `git config user.email` is one, so a new repository with no commits yet is caught before its first commit. `init` shows the same warning, with the command to set a noreply address for this repository, before it prints the steps that start with a commit (§12).
 
 ### 6.2 CI (component `ci`)
@@ -162,7 +162,7 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
   - **seamspec**: SeamSpec's locked rules, inside `ci-ok` so a failing rule blocks the merge (ADR-20261122-4a06): `seamspec doctor --ci`, `seamspec verify --all --ci` and `seamspec spec --check docs/EARNED_SPEC.md` (§6.8) at the pinned SeamSpec version (`[tools] seamspec`). The job is always in the workflow: without `.seamspec/config.toml` it says so and passes, so setting SeamSpec up later needs no workflow change;
   - **dependency-review**: on pull requests to public repositories, GitHub's `dependency-review-action` (fails on new dependencies with known vulnerabilities). On private repositories it needs a paid GitHub plan, so the job is skipped there by a condition in the workflow;
   - **one lint and one test job per project** listed with `--projects` (§11);
-  - **copilot-review**: where the `github` component turns Copilot review on, pull requests wait for Copilot's review (of any commit) inside `ci-ok`: the job asks GitHub every 30 seconds for up to 20 minutes, and a later push passes at once. A draft fails at once, and the workflow runs again when it is marked ready for review (ADR-20261123-a359);
+  - **copilot-review**: where the `github` component turns Copilot review on, pull requests wait for Copilot's review (of any commit) inside `ci-ok`: the job asks GitHub every 30 seconds for up to 20 minutes, and a later push passes at once. A draft fails at once, and the workflow runs again when it is marked ready for review (ADR-20261123-a359). Pull requests opened by Dependabot (`dependabot[bot]`) pass at once while every commit is Dependabot's, verified and committed by GitHub itself, on a branch in the repository, and fail at once with any other commit: a dependency update's pull request holds only Dependabot's commits. GitHub never requests Copilot's review for them, and the person who merges reviews the update (ADR-20261123-cc8d);
   - **`ci-ok`**: a single aggregating job (`if: always()`) that reads every job's result: each must succeed, except a job skipped by design (macOS off pushes, governance off pull requests, dependency review off pull requests to public repositories), which must be skipped; failed, cancelled or unexpectedly skipped jobs fail it. The ruleset requires only `ci-ok`, so adding a job never means editing GitHub settings.
 - **Installing the project:** `uv sync --locked` with a `uv.lock` (the project's own, or its uv workspace's), `uv sync` without. Projects uv can't install (Poetry's lock without uv's, no `pyproject.toml` or no `[project]` table) get no workflow in standard 1's first template, and the plan says why. Lint and tests run the project's own tools through `uv run`; the plan names those missing from its dependencies (`uv add --dev pytest ruff`), since SWERepo never edits dependencies.
 - Actions pinned to commit SHAs, `permissions: contents: read` by default, `persist-credentials: false` on checkout, `concurrency` to cancel superseded runs, a `timeout-minutes` on every job.
@@ -572,7 +572,7 @@ SWERepo · check · /Users/me/code/legacy-api (standard 1, mode: team)
   - an ADR added or changed when a file in `.github/workflows/` changed, except files that match SWERepo's recorded render;
   - the ADR index matches the ADR files.
   With `[pr] enforce = false` (existing repositories at first, §10), these findings are warnings: printed, shown as annotations on the PR, but not failing `--ci`.
-  Skipped for pull requests by bots listed under `[pr] exempt_authors` (default `dependabot[bot]`, passed in by the workflow) and for diffs that touch only lockfiles.
+  Skipped for pull requests by bots listed under `[pr] exempt_authors` (default `dependabot[bot]`, passed in by the workflow) while every commit on the branch is the bot's own, and for diffs that touch only lockfiles.
 - **What this version checks** is listed in `swerepo/standard.py`; checks a later phase adds show as `?` naming that phase, never silently skipped. The header names the folder, not its absolute path, and the commit-email check counts addresses without printing them (ADR-20261120-fc5a). `--base` runs at the repository's top level; its mechanics (merge base vs working tree, PEP 503 dependency names, `--author` for the bot exemption) are in ADR-20261120-5e21. `--json` prints one JSON value and nothing else, also with `--ci`.
 - **No score.** A number invites gaming and hides what matters; the list says what to do next.
 
@@ -676,6 +676,10 @@ TypeScript (npm/pnpm, vitest/jest, eslint/prettier), matching SeamSpec's presets
 ---
 
 ## Appendix A: Revision history
+
+### 0.12 → 0.13
+
+1. **Dependency bots and the Copilot wait** (the owner's choice; ADR-20261123-cc8d): pull requests by `dependabot[bot]` pass `copilot-review` at once, and Dependabot waits 7 days before proposing a new version (§6.1, §6.2).
 
 ### 0.11 → 0.12
 
