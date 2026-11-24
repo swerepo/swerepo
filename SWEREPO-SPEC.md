@@ -1,6 +1,6 @@
 # SWERepo — Specification
 
-**Status:** draft for the owner's review · **Version:** 0.11 (design) · **Date:** 2026-11-23
+**Status:** draft for the owner's review · **Version:** 0.12 (design) · **Date:** 2026-11-23
 **Name:** SWERepo, command `swerepo`, at `github.com/swerepo/swerepo` (renamed from Golden Repo in v0.6, ADR-20261120-1a27)
 **What changed:** Appendix A. **How the BLUEPRINT's ideas were handled:** Appendix B.
 
@@ -190,6 +190,12 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
 - A privacy check (`.github/workflows/swerepo-privacy.yml` and the same check locally as `swerepo check --only security`): no personal email addresses, no home-folder paths, no obvious secrets (private keys and well-known token formats) in tracked files and in untracked files git would add. `[privacy] allow_paths` globs read as git's (`*` within a folder, `**` across folders). Findings name the file and line, never what was found. Lesson from SessionWalk, where personal details had to be removed from history. The workflow needs a SWERepo it can install, as the `governance` job does (§15); on pull requests, `governance` reports the same findings inside `ci-ok`.
   - **Allowed by default:** noreply addresses (`users.noreply.github.com`), reserved example domains (`example.com`, `example.org`, …), emails in `[project].authors` and `maintainers` in `pyproject.toml`, the contact in `SECURITY.md`, and placeholder home paths (`/Users/me`, `/home/user`, `C:\Users\you`, `~`).
   - **Allowed by the person:** files or globs listed under `[privacy] allow_paths` in `.swerepo.toml`, and a single line marked with a `swerepo: allow-privacy` comment. Allowances name files, never the addresses themselves, so no personal data goes into `.swerepo.toml`.
+- **A pre-push privacy hook** (ADR-20261123-24e0): `swerepo hook install` writes a git `pre-push` hook that runs the same scan on the lines each commit about to be pushed adds, so a key, a personal email address or a home-folder path never reaches GitHub. It shows the kind, the commit and `file:line`, never what was found.
+  - **Pre-push, not pre-commit,** because SeamSpec owns the pre-commit hook. A pre-push hook of the person's own is never replaced; the command prints the line to add to it instead.
+  - **Runs SWERepo** through the recorded `privacy_command`, else `swerepo`.
+  - **What counts as new:** commits the remote being pushed to doesn't have, and the lines a merge adds that no parent had.
+  - **Fails closed** when SWERepo can't run. `git push --no-verify` skips it on purpose.
+  - **Per clone:** hooks aren't tracked, so each clone installs its own; locally, `check` reminds as a warning, never with `--ci`.
 - Guidance to turn on GitHub secret scanning and push protection (free on public repositories); `check` reports whether they are on when it can read the setting.
 - `.gitignore` entries for local secrets and machine-specific files (`.env`, editor and agent machine configs), in a marked block.
 
@@ -271,6 +277,8 @@ swerepo progress [-n N]              Now, Next and the latest N progress entries
 swerepo adr new TITLE                a new ADR from the template, with a fresh name
 swerepo adr index                    regenerate the ADR index
 swerepo threads PR                   open review threads of a PR, compact (read-only; through `gh`)
+swerepo privacy [--pre-push]         the privacy scan; with --pre-push, of the commits git is about to push
+swerepo hook install                 the pre-push privacy hook (never replaces a hook of yours)
 swerepo --version
 ```
 
@@ -620,7 +628,7 @@ The rules make breaking the process **visible**; they make it **impossible** onl
 2. **Where it lives.** *Decided:* its own organisation, public: `github.com/swerepo/swerepo` (ADR-20261119-13fc, names from ADR-20261120-1a27).
 3. **License.** *Decided:* Apache-2.0, like SeamSpec (ADR-20261119-7384).
 4. **Type checker.** None by default, mypy, pyright or ty. Proposal: none in standard 1, offered as an option.
-5. **Secret scanning.** GitHub's own secret scanning plus the privacy check only, or also a local scanner (for example gitleaks) as an option. Proposal: GitHub's plus the privacy check; a local scanner with the pre-commit option later (it's a separate binary).
+5. **Secret scanning.** *Decided* (ADR-20261123-24e0): GitHub's secret scanning and push protection, plus SWERepo's privacy scan in CI and in a local pre-push hook. gitleaks stays an option for later, for git history and its longer list of formats (it's a separate binary).
 6. **OpenSpec details** (§14), confirmed from its public docs before building that component.
 7. **Copilot review in rulesets.** *Decided:* rule `copilot_code_review` (parameters `review_on_push`, `review_draft_pull_requests`); it requests a review when the pull request author has Copilot code review access, so the account check is GitHub's. This repository uses it on every pull request with resolved threads required (ADR-20261120-2e50).
 8. **Should SWERepo create the branch and PR for each step** (`--pr`, through `gh`), or leave git to the person? Proposal: leave it to the person in v0.1; consider `--pr` later.
@@ -639,7 +647,7 @@ Built in this order: `check` (with `--base`); then `init`, `update`/`-u` with th
 TypeScript (npm/pnpm, vitest/jest, eslint/prettier), matching SeamSpec's presets; monorepo projects; `--pr` to open one pull request per component; the OpenSpec importer once SeamSpec ships it; changelog fragments (§19.10).
 
 **Later**
-`swerepo check` across many repositories (an organisation report); more languages; GitLab and other forges; organisation-specific standards (a company's own additions on top of the standard). Optional components, each only if dogfooding shows it earns its cost: local git hooks (pre-commit or prek: blocking commits on `main` and running the privacy check first, gitleaks later), editor hooks that block risky commands, editor skills and slash commands that wrap the `docs/agents/` runbooks, architecture layer contracts (import-linter), coverage on changed lines, Conventional Commits.
+`swerepo check` across many repositories (an organisation report); more languages; GitLab and other forges; organisation-specific standards (a company's own additions on top of the standard). Optional components, each only if dogfooding shows it earns its cost: more local git hooks (pre-commit or prek: blocking commits on `main`; gitleaks; the privacy check already runs before a push, §6.4), editor hooks that block risky commands, editor skills and slash commands that wrap the `docs/agents/` runbooks, architecture layer contracts (import-linter), coverage on changed lines, Conventional Commits.
 
 ---
 
@@ -668,6 +676,10 @@ TypeScript (npm/pnpm, vitest/jest, eslint/prettier), matching SeamSpec's presets
 ---
 
 ## Appendix A: Revision history
+
+### 0.11 → 0.12
+
+1. **A pre-push privacy hook** (the owner's choice; ADR-20261123-24e0): `swerepo hook install` and `swerepo privacy --pre-push`. The scan runs before a push, so leaks are caught before they reach GitHub; `check` reports a missing hook locally (§6.4, §7). This answers open question 5 (§19).
 
 ### 0.10 → 0.11
 
@@ -792,7 +804,7 @@ Gaps found by walking through a new project, a mature repository and a monorepo 
 | `docs/EARNED_SPEC.md` from `seamspec spec`, checked in CI | **Taken** (§6.8, §13) | SeamSpec already has `spec --out` and `spec --check`; one file and one CI step |
 | justfile entry points | **Not taken**; commands listed in the AGENTS.md block instead (§6.6) | Another tool to install; listing the `uv run` commands solves "agents guess commands" |
 | Cross-editor workflow skills (`/record-adr`, `/prepare-pr`, `/address-review`) | **Taken as plain runbooks** in `docs/agents/` (§6.6); editor wrappers deferred | Every agent can read Markdown; no per-editor formats to maintain |
-| Local git hooks (pre-commit, commit-msg, pre-push) with prek, gitleaks, Conventional Commits | **Deferred**, optional (§20) | Extra binaries, slower commits; CI is the guard |
+| Local git hooks (pre-commit, commit-msg, pre-push) with prek, gitleaks, Conventional Commits | **Deferred**, optional (§20), except SWERepo's own pre-push privacy hook (§6.4, ADR-20261123-24e0) | Extra binaries, slower commits; CI is the guard |
 | Editor hooks denying risky commands (`.agents/`, `.cursor/`, `.claude/`) | **Deferred**, optional (§17, §20) | Speed bumps only, and four host formats to maintain |
 | Architecture layer contracts (import-linter) | **Deferred**, optional (§20) | A new project has no layers yet; generic contracts add little |
 | Diff-coverage gate (≥ 85%) | **Deferred**, optional (§20) | Agents can meet a coverage number with tests that check nothing |

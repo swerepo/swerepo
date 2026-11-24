@@ -98,6 +98,7 @@ def check(
         result = run_check(
             path, only=components, base=base, author=author, skip=tuple(skip or ()), exclude=tuple(skipped),
             read_github=not ci,  # CI never needs GitHub access (spec §15)
+            local=not ci,  # local git hooks exist only on a person's machine (ADR-20261123-24e0)
         )  # fmt: skip
     except UsageError as error:
         raise _fail(error, 2, "check") from error
@@ -359,6 +360,65 @@ def threads(
         typer.echo(json.dumps(to_dict(number, found), indent=2, ensure_ascii=False))
     else:
         typer.echo("\n".join(one_line(line) for line in render_text(number, found).splitlines()))
+
+
+@app.command()
+def privacy(
+    pre_push: Annotated[
+        bool, typer.Option("--pre-push", help="Scan the commits git is about to push (refs on standard input).")
+    ] = False,
+    remote: Annotated[
+        str | None, typer.Option("--remote", help="With --pre-push: the remote git is pushing to (the hook passes it).")
+    ] = None,
+    path: Annotated[Path, typer.Option("--path", help="The repository.")] = Path("."),
+) -> None:
+    """The privacy scan: keys, personal email addresses and home-folder paths, by kind and place, never what.
+    Exit 1 when something is found."""
+    from swerepo import hook
+    from swerepo import privacy as scan
+
+    root, state = _repository(path, "privacy")
+    allow = state.privacy_allow_paths if state else []
+    if not pre_push:
+        found = scan.scan(root, allow)
+        if found:
+            typer.echo(f"swerepo privacy: {one_line(scan.summary(found))}", err=True)
+            raise typer.Exit(1)
+        typer.echo("swerepo privacy: nothing found")
+        return
+    try:
+        hits = hook.pushed_hits(root, hook.parse_updates(sys.stdin.read()), allow, remote or None)
+    except hook.HookError as error:
+        raise _fail(error, 1, "privacy") from error
+    if hits:
+        where = scan.summary(hits, place="the commits being pushed")
+        typer.echo(f"swerepo: push refused: {one_line(where)}", err=True)
+        advice = (
+            "swerepo: remove it from those commits (amend or rebase), or mark a line meant to be published with "
+            f"'{scan.MARKER}'; git push --no-verify skips this check once."
+        )
+        typer.echo(advice, err=True)
+        raise typer.Exit(1)
+
+
+hook_app = typer.Typer(help="Local git hooks: the pre-push privacy scan (ADR-20261123-24e0).")
+app.add_typer(hook_app, name="hook")
+
+
+@hook_app.command("install")
+def hook_install(path: Annotated[Path, typer.Option("--path", help="The repository.")] = Path(".")) -> None:
+    """Install the pre-push hook that refuses a push adding a key, a personal email address or a home-folder path.
+    Never replaces a pre-push hook of your own."""
+    from swerepo import hook
+
+    root, state = _repository(path, "hook install")
+    try:
+        done, message = hook.install(root, state.values.get("privacy_command") if state else None)
+    except hook.HookError as error:
+        raise _fail(error, 1, "hook install") from error
+    typer.echo(message)
+    if not done:
+        raise typer.Exit(1)
 
 
 def main() -> None:

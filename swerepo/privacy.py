@@ -14,6 +14,7 @@ import subprocess
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from swerepo.globs import compile_all
 
@@ -152,12 +153,13 @@ def _plural(kind: str, count: int) -> str:
     return f"{count} {kind}es" if kind.endswith("ss") else f"{count} {kind}s"
 
 
-def summary(hits: list[Hit], *, shown: int = 10) -> str:
-    """One line: counts by kind, then where, never what (`2 email addresses, 1 home-folder path …: a.md:3, …`)."""
+def summary(hits: list[Any], *, shown: int = 10, place: str = "tracked files") -> str:
+    """One line: counts by kind, then where, never what (`2 email addresses, 1 home-folder path …: a.md:3, …`).
+    `hits`: anything with a `kind` and a `where` (`Hit`, or the pre-push hook's `PushHit`)."""
     counts: dict[str, int] = {}
     for hit in hits:
         counts[hit.kind] = counts.get(hit.kind, 0) + 1
     kinds = ", ".join(_plural(kind, n) for kind, n in counts.items())
     places = list(dict.fromkeys(hit.where for hit in hits))
     more = f", and {len(places) - shown} more" if len(places) > shown else ""
-    return f"{kinds} in tracked files ({', '.join(places[:shown])}{more})"
+    return f"{kinds} in {place} ({', '.join(places[:shown])}{more})"

@@ -139,6 +139,7 @@ class Context:
     detection: Detection
     state: State | None
     hub: github.GitHub | None = None  # GitHub through gh, when asked for and reachable (never with --ci)
+    local: bool = False  # run on a person's machine, not in CI: local git hooks are worth reporting
 
     def exists(self, path: str) -> bool:
         return (self.root / path).is_file()
@@ -621,6 +622,27 @@ def _secret_scanning(ctx: Context) -> list[Finding]:
     return [_ok(c, item, "secret scanning and push protection on")]
 
 
+def _pre_push_hook(ctx: Context) -> Finding:
+    """The local pre-push privacy hook (ADR-20261123-24e0): reported on a person's machine, never in CI, and never
+    blocking. Reads the hooks folder only."""
+    from swerepo import hook
+
+    c, item = "security", "security.pre-push-hook"
+    try:
+        found = hook.status(ctx.root)
+    except hook.HookError:
+        return Finding(c, item, UNKNOWN, "pre-push privacy hook: can't tell (git didn't answer)")
+    if found == "installed":
+        return _ok(c, item, "pre-push privacy hook installed")
+    if found == "not executable":  # git skips it without a word (review H55-F01)
+        return _missing(c, item, "pre-push privacy hook isn't executable, so git skips it (swerepo hook install)",
+                        blocking=False)  # fmt: skip
+    if found == "other":
+        line = 'swerepo privacy --pre-push --remote "${1:-}"'  # the remote, too (review H55-F03)
+        return _missing(c, item, f"a pre-push hook of your own: add `{line}` to it to scan pushes", blocking=False)
+    return _missing(c, item, "pre-push privacy hook not installed (swerepo hook install)", blocking=False)
+
+
 def _security(ctx: Context) -> list[Finding]:
     c = "security"
     policy = ctx.detection.documents.get("security") or ("SECURITY.md" if ctx.exists("SECURITY.md") else None)
@@ -641,6 +663,8 @@ def _security(ctx: Context) -> list[Finding]:
     else:
         found.append(_block_finding(c, "security.gitignore", ".gitignore", text))
     found.extend(_secret_scanning(ctx))
+    if ctx.local:
+        found.append(_pre_push_hook(ctx))
     hits = privacy.scan(ctx.root, ctx.state.privacy_allow_paths if ctx.state else [])
     if hits:
         found.append(_missing(c, "security.privacy-scan", privacy.summary(hits), hits[0].path))
@@ -1006,6 +1030,7 @@ def run_check(
     store: TemplateStore | None = None,
     exclude: tuple[str, ...] = (),
     read_github: bool = False,
+    local: bool = False,
 ) -> Report:
     """Check the repository at `root`. `exclude`: components to leave out (`--no-<component>`), from `only`
     or, without it, from the chosen ones. Raises UsageError for wrong usage (exit 2)."""
@@ -1041,7 +1066,7 @@ def run_check(
         message = "a folder inside a git repository: files are looked for here, not at the repository's top"
         findings.append(Finding("repository", "repository.git", UNKNOWN, message))
     hub = github.GitHub.connect(root) if read_github else None  # read-only GET requests (ADR-20261123-4e40)
-    ctx = Context(root=root, detection=detection, state=state, hub=hub)
+    ctx = Context(root=root, detection=detection, state=state, hub=hub, local=local and detection.git.is_work_tree)
 
     chosen = chosen_components(state, detection)
     for component in COMPONENTS:

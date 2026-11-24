@@ -1,0 +1,34 @@
+{
+  "schema_version": "1",
+  "id": "inv_960b67a8",
+  "title": "The pre-push privacy hook refuses a push adding a secret, says where not what, and never replaces your hook",
+  "assertion": "After `swerepo hook install`, a real `git push`, run through this checkout's `swerepo`, is refused when its new commits add an AWS access key, a GitHub token, a personal email address or a home-folder path. That holds on an existing branch, on a new branch, and when the secret sits in an earlier commit with clean commits after it. What the push prints, on either stream, names the kind, the commit and `file:line`, and contains neither the matched text nor a piece of it (the user name, the email's domain, the file name in the path, the middle of a key or token). Nothing reaches the remote. Clean pushes go through, the first push of a branch and a later one alike, and the later commit arrives on the remote. `swerepo hook install` never replaces a pre-push hook of the person's own: it exits 1, leaves that hook byte for byte (CRLF line endings) with its mode, and names the full line to add: `swerepo privacy --pre-push --remote \"${1:-}\"`. A hook that is a link is the person's too, even when it points to text that looks like SWERepo's: the link and what it points to stay as they were.",
+  "scope": {
+    "paths": [
+      "swerepo/hook.py",
+      "swerepo/privacy.py",
+      "swerepo/cli.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "The owner's decision (2026-11-23) and ADR-20261123-24e0: leaks are caught locally before a push, in a pre-push hook because SeamSpec owns the pre-commit hook. Findings name where, never what, as everywhere in the privacy scan (inv_5e3b5ef3, inv_ab57c6ff). Tightened after SeamSpec's reviewer: pieces of the email and path checked too, a clean later push confirmed on the remote, a secret in an earlier commit and on a new branch, and the push pinned to this checkout's swerepo. Marked critical after the hook's review (H55-F04). Final polish at the owner's request: stdout checked too, the person's hook checked byte for byte with its mode and as a link, and the full hint with --remote.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_960b67a8.py",
+    "harness_sha256": "a3694798844b2665bc1faa60076d418ab3bbee9636a42066643cebe2d76abce8",
+    "assertion_sha256": "fb80dec6e0b3f302ee1ca4e982fa3c82f9d058e0cf29a991cc33271e3b8e0adf"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-24T02:34:39.084243Z",
+  "approved_at": "2026-11-24T03:37:37.582110Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}
