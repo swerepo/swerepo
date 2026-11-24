@@ -2,11 +2,11 @@
 
 # Spec: what this code guarantees
 
-15 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
+16 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
 
 ## Rules in force
 
-### `swerepo` (13 rules)
+### `swerepo` (14 rules)
 
 #### A fingerprint ignores only line endings, trailing whitespace, trailing blank lines and a BOM
 
@@ -137,6 +137,16 @@ In the `swerepo-ci.yml` that `swerepo init` writes when the ruleset requests Cop
 - **Test:** `.seamspec/tests/test_inv_faa5bef5.py` (pytest)
 - **Critical:** always shown to the agent in full
 - **Id:** `inv_faa5bef5`
+
+#### The pre-push privacy hook refuses a push adding a secret, says where not what, and never replaces your hook
+
+After `swerepo hook install`, a real `git push`, run through this checkout's `swerepo`, is refused when its new commits add an AWS access key, a GitHub token, a personal email address or a home-folder path. That holds on an existing branch, on a new branch, and when the secret sits in an earlier commit with clean commits after it. What the push prints, on either stream, names the kind, the commit and `file:line`, and contains neither the matched text nor a piece of it (the user name, the email's domain, the file name in the path, the middle of a key or token). Nothing reaches the remote. Clean pushes go through, the first push of a branch and a later one alike, and the later commit arrives on the remote. `swerepo hook install` never replaces a pre-push hook of the person's own: it exits 1, leaves that hook byte for byte (CRLF line endings) with its mode, and names the full line to add: `swerepo privacy --pre-push --remote "${1:-}"`. A hook that is a link is the person's too, even when it points to text that looks like SWERepo's: the link and what it points to stay as they were.
+
+- **Applies to:** `swerepo/hook.py`, `swerepo/privacy.py`, `swerepo/cli.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-24, in the terminal
+- **Test:** `.seamspec/tests/test_inv_960b67a8.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_960b67a8`
 
 ### `(repository root)` (2 rules)
 

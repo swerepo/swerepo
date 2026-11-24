@@ -4,11 +4,11 @@ What is being built now and next. The log of what each change did is in [progres
 
 ## Now
 
-**Dogfooding `github`:** SWERepo set up this repository's GitHub settings itself (ADR-20261123-e2f8): merge settings as code (squash only), Dependabot, PR and issue templates, Copilot's review instructions, and `ci-ok` waiting for Copilot's review. Phase 5 is done ([PR #10](https://github.com/swerepo/swerepo/pull/10)); 15 SeamSpec rules in force.
+**Secrets caught before a push:** `swerepo hook install` adds a pre-push privacy hook (ADR-20261123-24e0), so a key, a personal email address or a home-folder path is refused before it reaches GitHub. SWERepo sets up this repository's GitHub settings itself since [PR #11](https://github.com/swerepo/swerepo/pull/11); 16 SeamSpec rules in force.
 
 ## Next
 
-- **Owner, on GitHub:** secret scanning and push protection are off for this repository (`check` reports it; free on public repositories).
+- **Owner, on GitHub:** secret scanning and push protection are on (2026-11-23); Dependabot security updates are still off (Settings → Advanced Security).
 - **Phase 6:** `update`, three-way merge, `diff`, `status`. Also: explain `delete_branch_on_merge` in `init`'s plan, or ask about it, for teams that keep merged branches (release branches merged by pull request would be deleted); today it is changed by editing `repo-settings.json` (owner, 2026-11-23: keep it on here).
 - **Owner:** pin the repository on your profile; delete the merged `phase-0/skeleton` branch on GitHub. Decided so far: license Apache-2.0 (ADR-20261119-7384), name SWERepo and hosting `swerepo/swerepo` (ADR-20261120-1a27), SeamSpec inside `swerepo-ci.yml` and private vulnerability reporting (2026-11-22); `solo` mode, own login as code owner, squash only, merges wait for Copilot (2026-11-23).
 - **PyPI name:** claimed with the placeholder `swerepo 0.0.1` (ADR-20261119-d68b). Yank it and delete `tools/pypi-placeholder/` after the first real release (Phase 8).
