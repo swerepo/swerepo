@@ -4,7 +4,7 @@ What is being built now and next. The log of what each change did is in [progres
 
 ## Now
 
-**Secrets caught before a push:** `swerepo hook install` adds a pre-push privacy hook (ADR-20261123-24e0), so a key, a personal email address or a home-folder path is refused before it reaches GitHub. SWERepo sets up this repository's GitHub settings itself since [PR #11](https://github.com/swerepo/swerepo/pull/11); 16 SeamSpec rules in force.
+**Dependabot's pull requests can merge:** Dependabot's own pull requests no longer wait for a Copilot review that never comes, and Dependabot proposes a version once it is a week old (ADR-20261123-cc8d). Before that: secrets are caught before a push ([PR #15](https://github.com/swerepo/swerepo/pull/15)); 17 SeamSpec rules in force.
 
 ## Next
 

@@ -92,6 +92,13 @@ def _dependencies(text: str | None) -> tuple[set[str], list[str]]:
     return names, bad
 
 
+def _only_commits_by(ctx: Context, merge_base: str, author: str) -> bool:
+    """Whether every commit after the merge base (merges aside) was authored by `author`, as git records a bot's
+    name (`dependabot[bot]`). Read-only; a git error counts as no, so the rules apply (review DB-F02)."""
+    names = ctx.git("log", "--no-merges", "--format=%an", f"{merge_base}..HEAD")
+    return names is not None and all(name == author for name in names.splitlines() if name)
+
+
 def pr_findings(ctx: Context, *, base: str, author: str | None, skip_progress: bool) -> list[Finding]:
     c = "pr"
     if not ctx.detection.git.is_work_tree:
@@ -104,7 +111,8 @@ def pr_findings(ctx: Context, *, base: str, author: str | None, skip_progress: b
     state = ctx.state
     enforce = state.pr_enforce if state else True
     exempt = state.exempt_authors if state else list(DEFAULT_EXEMPT_AUTHORS)
-    if author and author in exempt:
+    # an exempt bot, alone on its branch: someone else's commit on it means the rules apply (review DB-F02)
+    if author and author in exempt and _only_commits_by(ctx, merge_base, author):
         return [Finding(c, "pr.skipped", NOT_CHOSEN, f"pull-request rules skipped: {author} is an exempt author")]
     changes = _changes(ctx, merge_base)
     if changes is None:

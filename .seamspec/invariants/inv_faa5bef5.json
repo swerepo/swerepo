@@ -13,7 +13,7 @@
     ],
     "tags": []
   },
-  "status": "LOCKED",
+  "status": "SUPERSEDED",
   "origin": {
     "type": "manual",
     "text": "The owner's decision (2026-11-23) and ADR-20261123-a359: merges wait for Copilot's review, because PR #3 was merged before its review arrived. Tightened after SeamSpec's reviewer and a second review: the fake gh answers only the reviews address with --paginate, the review arrives on a second ask, the job's env: and if: are checked, drafts don't ask at all, and the opt-out runs through the real flag. Tightened again at the owner's request before locking: GH_TOKEN must reach gh, the job's read-only permission, the trigger's place under pull_request, and turning the wait off on a later run. Then, after SeamSpec's reviewer: the permissions block must hold only pull-requests: read.",
@@ -21,7 +21,7 @@
   },
   "verification": {
     "runner": "pytest",
-    "harness_path": ".seamspec/tests/test_inv_faa5bef5.py",
+    "harness_path": ".seamspec/retired/inv_faa5bef5/test_inv_faa5bef5.py",
     "harness_sha256": "a41cc685eb0824c2c9d28ba227eb525ba2fc84b149c16d725a1de1a026c42c65",
     "assertion_sha256": "632c81b3f188a30b25c85d53a9524357ec322c48a7748a01dd2ed4e15149f435"
   },
@@ -29,8 +29,8 @@
   "created_at": "2026-11-23T10:01:38.716743Z",
   "approved_at": "2026-11-24T00:54:57.864093Z",
   "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
-  "superseded_by": null,
-  "status_reason": null,
+  "superseded_by": "inv_78f19f51",
+  "status_reason": "Dependabot's first pull requests (#12–#14) were all blocked: GitHub requests Copilot's review only for authors who have Copilot, so the wait timed out and ci-ok failed on every dependency update. The owner decided (ADR-20261123-cc8d) that pull requests opened by dependabot[bot] or renovate[bot] pass the wait at once; their tests and dependency-review still run and the person merging reviews them. The job now reads the pull request's author, which the old test doesn't know. inv_78f19f51 keeps everything inv_faa5bef5 locked and adds the bot cases, including look-alike names and other bots that still wait.",
   "decided_via": "terminal",
   "critical": true
 }

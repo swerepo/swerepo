@@ -794,3 +794,22 @@ class TestCopilotReviewPR11:
         assert "what you gave (--code-owner) isn't in it" in action(plan, github.RULESET_FILE).note
         plan = plan_for(project, mode="team", code_owner="@dev")
         assert "isn't in it" not in action(plan, github.RULESET_FILE).note
+
+
+class TestDependencyBots:
+    """Dependency bots' pull requests and Dependabot's cooldown (ADR-20261123-cc8d)."""
+
+    def test_every_update_waits_a_week_for_new_versions(self, project: Path):
+        apply(plan_for(project), project)
+        text = (project / ".github/dependabot.yml").read_text()
+        entries = text.split("  - package-ecosystem: ")[1:]
+        assert [e.split("\n", 1)[0] for e in entries] == ["github-actions", "uv"]
+        for entry in entries:  # under each update, next to its schedule
+            assert "\n    schedule:\n      interval: weekly\n    cooldown:\n      default-days: 7\n" in entry + "\n"
+
+    def test_the_wait_reads_the_author_from_its_env_block(self, project: Path):
+        apply(make_plan(project, only=["ci", "github"], today=TODAY, hosts=[]), project)
+        job = (project / WORKFLOW).read_text().split("\n  copilot-review:\n", 1)[1].split("\n  ci-ok:\n", 1)[0]
+        assert "AUTHOR: ${{ github.event.pull_request.user.login }}" in job  # never ${{ }} inside the script
+        script = job.split("run: |", 1)[1]
+        assert "${{" not in script and '"dependabot[bot]")' in script and "renovate" not in script

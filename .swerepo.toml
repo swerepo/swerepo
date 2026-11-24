@@ -62,8 +62,8 @@ written = "ad040e9fa0090b65580cb4ef8eb115bc0b4ccd1b6e340bb5b319c5ab5ec537ed"
 
 [files.".github/workflows/swerepo-ci.yml"]
 template = "ci/workflow@2"
-rendered = "2bf2b4a2ddb485f47719dd696415d04ad83305072c345a2d1ffcd449679650cc"
-written = "2bf2b4a2ddb485f47719dd696415d04ad83305072c345a2d1ffcd449679650cc"
+rendered = "3ad935fde8996685b60a4d304d07802b2e1bba39ef7e85979ed99d889250ef71"
+written = "3ad935fde8996685b60a4d304d07802b2e1bba39ef7e85979ed99d889250ef71"
 
 [files.".github/workflows/swerepo-privacy.yml"]
 template = "security/privacy-workflow@1"
@@ -77,8 +77,8 @@ written = "fa29587e8e320051443c3e58d94ea843cf8dace25857fc772ff53262af16a134"
 
 [files.".github/dependabot.yml"]
 template = "github/dependabot@1"
-rendered = "2c421c9903623cef839d2ca4f61e2e9b4f67e88f9b2996ab4d70f1f9b716af81"
-written = "2c421c9903623cef839d2ca4f61e2e9b4f67e88f9b2996ab4d70f1f9b716af81"
+rendered = "914685618795734c10bcb54b0b9be984c69635b1f79848a4c0e33ace6c165ca7"
+written = "914685618795734c10bcb54b0b9be984c69635b1f79848a4c0e33ace6c165ca7"
 
 [files.".github/pull_request_template.md"]
 template = "github/pr-template@1"

@@ -2,7 +2,7 @@
 
 # Spec: what this code guarantees
 
-16 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
+17 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
 
 ## Rules in force
 
@@ -128,16 +128,6 @@ With a repository on GitHub and `gh` logged in (a fake `gh` that logs every call
 - **Critical:** always shown to the agent in full
 - **Id:** `inv_ef31cc79`
 
-#### Pull requests wait for Copilot's review inside ci-ok
-
-In the `swerepo-ci.yml` that `swerepo init` writes when the ruleset requests Copilot's review (also when github is applied on its own after ci), `ci-ok` waits for a `copilot-review` job that runs on pull requests only and whose `permissions:` block grants `pull-requests: read` and nothing else, and the `pull_request` trigger lists `types: [opened, synchronize, reopened, ready_for_review]`, so a draft marked ready runs again. Run as written, with the values its own `env:` block maps from GitHub (`GH_TOKEN` included; the fake `gh` refuses without it), the job asks GitHub for exactly `repos/<repository>/pulls/<number>/reviews` with `--paginate`. It passes once that list holds a review by `copilot-pull-request-reviewer[bot]`, asking again when the first answer has none. It fails when none comes or only others reviewed (look-alike names included), and fails at once on a draft, without asking. `ci-ok`'s step fails on a pull request whose `copilot-review` didn't succeed, and on a push where it ran. With `--no-copilot-review` (also on a later run that turns the wait off) or a committed ruleset without Copilot review, there is no such job.
-
-- **Applies to:** `swerepo/ci.py`, `swerepo/init.py`, `swerepo/github.py`, `swerepo/cli.py`, `swerepo/templates/ci/`
-- **Approved by:** Vamshidhar Pandrapagada, 2026-11-24, in the terminal
-- **Test:** `.seamspec/tests/test_inv_faa5bef5.py` (pytest)
-- **Critical:** always shown to the agent in full
-- **Id:** `inv_faa5bef5`
-
 #### The pre-push privacy hook refuses a push adding a secret, says where not what, and never replaces your hook
 
 After `swerepo hook install`, a real `git push`, run through this checkout's `swerepo`, is refused when its new commits add an AWS access key, a GitHub token, a personal email address or a home-folder path. That holds on an existing branch, on a new branch, and when the secret sits in an earlier commit with clean commits after it. What the push prints, on either stream, names the kind, the commit and `file:line`, and contains neither the matched text nor a piece of it (the user name, the email's domain, the file name in the path, the middle of a key or token). Nothing reaches the remote. Clean pushes go through, the first push of a branch and a later one alike, and the later commit arrives on the remote. `swerepo hook install` never replaces a pre-push hook of the person's own: it exits 1, leaves that hook byte for byte (CRLF line endings) with its mode, and names the full line to add: `swerepo privacy --pre-push --remote "${1:-}"`. A hook that is a link is the person's too, even when it points to text that looks like SWERepo's: the link and what it points to stay as they were.
@@ -147,6 +137,29 @@ After `swerepo hook install`, a real `git push`, run through this checkout's `sw
 - **Test:** `.seamspec/tests/test_inv_960b67a8.py` (pytest)
 - **Critical:** always shown to the agent in full
 - **Id:** `inv_960b67a8`
+
+#### Pull requests wait for Copilot's review inside ci-ok; Dependabot's holds only its own commits
+
+In the `swerepo-ci.yml` that `swerepo init` writes when the ruleset requests Copilot's review (also when github is applied on its own after ci), `ci-ok` waits for a `copilot-review` job that runs on pull requests only and whose `permissions:` block grants `pull-requests: read` and nothing else, and the `pull_request` trigger lists `types: [opened, synchronize, reopened, ready_for_review]`, so a draft marked ready runs again. Run as written, with the values its own `env:` block maps from GitHub (`GH_TOKEN`, the pull request's author and its branch's repository included; the fake `gh` refuses without the token), the job asks GitHub for exactly `repos/<repository>/pulls/<number>/reviews` with `--paginate`. It passes once that list holds a review by `copilot-pull-request-reviewer[bot]`, asking again when the first answer has none. It fails when none comes or only others reviewed (look-alike names included). A draft fails at once, without asking, whoever opened it, Dependabot included. A pull request opened by `dependabot[bot]` passes at once, without asking for reviews, when its branch is in this repository and every commit on it (`repos/<repository>/pulls/<number>/commits`, `--paginate`) is authored by Dependabot, verified, and committed by GitHub itself (`web-flow`), so a commit in Dependabot's name signed with someone else's key doesn't pass. Any other Dependabot pull request fails at once, even with Copilot's review in, without pausing or asking for reviews: one with another author's commit, one linked to no account, an unverified commit, a commit with another committer or none, one from a fork, or one with no commits listed. Changes by people or agents go in a pull request of their own. Every other author waits, asking for reviews exactly 40 times with a pause after each, and fails without a review: people, look-alike names (`dependabot`, `dependabotb`, `dependabot[bot]x`, `xdependabot[bot]`), and other bots, Renovate and a coding agent included. `ci-ok`'s step fails on a pull request whose `copilot-review` didn't succeed, and on a push where it ran. With `--no-copilot-review` (also on a later run that turns the wait off) or a committed ruleset without Copilot review, there is no such job.
+
+- **Applies to:** `swerepo/ci.py`, `swerepo/init.py`, `swerepo/github.py`, `swerepo/cli.py`, `swerepo/templates/ci/`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-24, in the terminal
+- **Test:** `.seamspec/tests/test_inv_78f19f51.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Replaces:** Pull requests wait for Copilot's review inside ci-ok (`inv_faa5bef5`)
+- **Id:** `inv_78f19f51`
+
+### `swerepo/templates/github/dependabot` (1 rule)
+
+#### Dependabot's version updates wait a week, and SWERepo's settings turn auto-merge off
+
+In what `swerepo init --only github` writes, for a uv project and a pip project alike and in solo and team mode: `.github/dependabot.yml` holds under `updates:` only two entries, one for `github-actions` and one for the project's Python ecosystem (`uv` with a `uv.lock`, else `pip`), with nothing after the last entry. Each entry has exactly one `cooldown:`, holding `default-days: 7` and nothing else (no shorter wait for some updates, no exclusions), so Dependabot proposes a version update only once the new version is a week old. `.github/swerepo/repo-settings.json` has `"allow_auto_merge": false`.
+
+- **Applies to:** `swerepo/templates/github/dependabot/`, `swerepo/github.py`, `swerepo/init.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-24, in the terminal
+- **Test:** `.seamspec/tests/test_inv_abcc9759.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_abcc9759`
 
 ### `(repository root)` (2 rules)
 
@@ -179,6 +192,9 @@ These were approved once and are no longer checked.
 - **A .swerepo.toml from a newer SWERepo or standard loads, but an older SWERepo never overwrites it** (`inv_070db19c`): A .swerepo.toml written by a newer SWERepo version, or in a newer standard, loads even when it names components this version doesn't know, but this older SWERepo refuses to save over it and leaves the file unchanged.
   - Retired because: GitHub Copilot's review of PR #2 showed the rule's promise (an older SWERepo never overwrites a newer file) was broken for a new or stale state saved over a newer file on disk, a path the test didn't exercise. Code fixed in b827f00; the replacement's test covers loaded, new and stale states.
   - Replaced by An older SWERepo never replaces a .swerepo.toml from a newer SWERepo or standard, loaded, new or stale (`inv_71e4b33d`).
+- **Pull requests wait for Copilot's review inside ci-ok** (`inv_faa5bef5`): In the `swerepo-ci.yml` that `swerepo init` writes when the ruleset requests Copilot's review (also when github is applied on its own after ci), `ci-ok` waits for a `copilot-review` job that runs on pull requests only and whose `permissions:` block grants `pull-requests: read` and nothing else, and the `pull_request` trigger lists `types: [opened, synchronize, reopened, ready_for_review]`, so a draft marked ready runs again. Run as written, with the values its own `env:` block maps from GitHub (`GH_TOKEN` included; the fake `gh` refuses without it), the job asks GitHub for exactly `repos/<repository>/pulls/<number>/reviews` with `--paginate`. It passes once that list holds a review by `copilot-pull-request-reviewer[bot]`, asking again when the first answer has none. It fails when none comes or only others reviewed (look-alike names included), and fails at once on a draft, without asking. `ci-ok`'s step fails on a pull request whose `copilot-review` didn't succeed, and on a push where it ran. With `--no-copilot-review` (also on a later run that turns the wait off) or a committed ruleset without Copilot review, there is no such job.
+  - Retired because: Dependabot's first pull requests (#12–#14) were all blocked: GitHub requests Copilot's review only for authors who have Copilot, so the wait timed out and ci-ok failed on every dependency update. The owner decided (ADR-20261123-cc8d) that pull requests opened by dependabot[bot] or renovate[bot] pass the wait at once; their tests and dependency-review still run and the person merging reviews them. The job now reads the pull request's author, which the old test doesn't know. inv_78f19f51 keeps everything inv_faa5bef5 locked and adds the bot cases, including look-alike names and other bots that still wait.
+  - Replaced by Pull requests wait for Copilot's review inside ci-ok; Dependabot's holds only its own commits (`inv_78f19f51`).
 
 ## Tried and failed
 

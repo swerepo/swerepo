@@ -153,6 +153,18 @@ class TestWhoIsSkipped:
         findings = pr(repo, author="dependabot[bot]")
         assert list(findings) == ["pr.skipped"] and findings["pr.skipped"].status == NOT_CHOSEN
 
+    def test_an_exempt_authors_branch_with_someone_elses_commit_follows_the_rules(self, repo: Path):
+        """Review DB-F02: the exemption holds only while every commit on the branch is the bot's own."""
+        bot = "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>"
+        make(repo, {"app.py": "print('bump')\n"})
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "Bump", f"--author={bot}")
+        assert list(pr(repo, author="dependabot[bot]")) == ["pr.skipped"]  # the bot's commits only
+        make(repo, {"app.py": "print('bump, and more')\n"})
+        commit(repo, "a person's change on the bot's branch")
+        findings = pr(repo, author="dependabot[bot]")
+        assert "pr.skipped" not in findings and findings["pr.progress"].status == MISSING
+
     def test_exempt_authors_from_the_state_file(self, repo: Path):
         (repo / FILE_NAME).write_text('standard = 1\nswerepo = "0.0.1"\n[pr]\nexempt_authors = ["renovate[bot]"]\n')
         assert "pr.skipped" in pr(repo, author="renovate[bot]")
