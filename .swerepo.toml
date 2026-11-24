@@ -1,7 +1,8 @@
 # Written by SWERepo (SWEREPO-SPEC §9). Commit this file. Settings may be edited; fingerprints may not.
 standard = 1
 swerepo = "0.1.0.dev0"
-components = ["docs", "agents", "ci", "security"]
+components = ["docs", "agents", "ci", "security", "github"]
+mode = "solo"
 
 [values]
 project = "swerepo"
@@ -16,6 +17,8 @@ python = ["3.11", "3.12", "3.13", "3.14"]
 ci_install = "uv sync --locked"
 lint = "ruff"
 governance_command = "uv run --locked swerepo"
+ci_copilot_review = "true"
+code_owner = "@vamshidhar-pandrapagada"
 
 [agents]
 hosts = ["claude", "antigravity"]
@@ -37,6 +40,11 @@ written = "43dca72e73e2b799d5a93075eef031b4279518e5d6336627e6d3fd95d35eabf1"
 template = "security/gitignore@1"
 rendered = "ab6e322c5609af224e19b118e3c953fd1ece1b4152c3d61ce7dc095795fa19cd"
 written = "ab6e322c5609af224e19b118e3c953fd1ece1b4152c3d61ce7dc095795fa19cd"
+
+[blocks.".github/copilot-instructions.md"]
+template = "github/copilot-instructions@1"
+rendered = "30d2b2334fb0a494b9c9902b93880c15b8e8022739afda88b051a7604a7a2378"
+written = "30d2b2334fb0a494b9c9902b93880c15b8e8022739afda88b051a7604a7a2378"
 [files."docs/agents/prepare-pr.md"]
 template = "agents/prepare-pr@1"
 rendered = "ccc42d0b97064ad270cb457bb87e65dff002c13ca45b3bb116f2c5dc081f7fcb"
@@ -53,14 +61,32 @@ rendered = "ad040e9fa0090b65580cb4ef8eb115bc0b4ccd1b6e340bb5b319c5ab5ec537ed"
 written = "ad040e9fa0090b65580cb4ef8eb115bc0b4ccd1b6e340bb5b319c5ab5ec537ed"
 
 [files.".github/workflows/swerepo-ci.yml"]
-template = "ci/workflow@1"
-rendered = "0ce4d854c672bb0f95cce261b16c0084fb22265d2331521110282f1e34ddd842"
-written = "0ce4d854c672bb0f95cce261b16c0084fb22265d2331521110282f1e34ddd842"
+template = "ci/workflow@2"
+rendered = "2bf2b4a2ddb485f47719dd696415d04ad83305072c345a2d1ffcd449679650cc"
+written = "2bf2b4a2ddb485f47719dd696415d04ad83305072c345a2d1ffcd449679650cc"
 
 [files.".github/workflows/swerepo-privacy.yml"]
 template = "security/privacy-workflow@1"
 rendered = "afb771184aff3ab818976c221c9548d2de7b6c8b4ff854ecb31f2c3a36dff843"
 written = "afb771184aff3ab818976c221c9548d2de7b6c8b4ff854ecb31f2c3a36dff843"
 
+[files.".github/swerepo/repo-settings.json"]
+template = "github/repo-settings@1"
+rendered = "fa29587e8e320051443c3e58d94ea843cf8dace25857fc772ff53262af16a134"
+written = "fa29587e8e320051443c3e58d94ea843cf8dace25857fc772ff53262af16a134"
+
+[files.".github/dependabot.yml"]
+template = "github/dependabot@1"
+rendered = "2c421c9903623cef839d2ca4f61e2e9b4f67e88f9b2996ab4d70f1f9b716af81"
+written = "2c421c9903623cef839d2ca4f61e2e9b4f67e88f9b2996ab4d70f1f9b716af81"
+
+[files.".github/pull_request_template.md"]
+template = "github/pr-template@1"
+rendered = "b26a98e82ad4778f617a2c3dbf84c1b91d1570252cff3acd18b2bc7a6a43cd5f"
+written = "b26a98e82ad4778f617a2c3dbf84c1b91d1570252cff3acd18b2bc7a6a43cd5f"
 [tools]
 seamspec = "0.1.2"
+
+[github]
+copilot_review = true
+applied = true

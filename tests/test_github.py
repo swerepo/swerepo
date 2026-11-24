@@ -726,3 +726,33 @@ class TestCopilotReviewPR10:
         plan.github_apply["settings"] = github.BUILDERS["github/repo-settings@1"](settings)
         apply_github(plan, project, ["ruleset", "settings"])
         assert State.load(project).github["applied"] is False
+
+
+class TestDogfoodGithub:
+    """Found by applying github to SWERepo's own repository: the plan asked to edit files that already held the
+    choices given."""
+
+    def _kept(self, project: Path, settings: github.Settings, owner_line: str) -> None:
+        make(project, {
+            ".github/swerepo/ruleset.json": github.as_text(github.BUILDERS["github/ruleset@1"](settings)),
+            ".github/CODEOWNERS": f"# owners\n# swerepo:begin (by hand)\n/.github/   {owner_line}\n"
+                                  f"/AGENTS.md  {owner_line}\n# swerepo:end\n",
+        })  # fmt: skip
+
+    def test_no_edit_asked_when_the_kept_files_hold_the_choices(self, project: Path):
+        self._kept(project, github.Settings("solo", "@dev"), "@dev")
+        plan = plan_for(project, mode="solo", code_owner="@dev")
+        assert action(plan, ".github/swerepo/ruleset.json").note == "yours: SWERepo didn't write it"
+        assert "isn't in it" not in action(plan, ".github/CODEOWNERS").note
+
+    def test_the_edit_names_only_what_the_kept_files_lack(self, project: Path):
+        self._kept(project, github.Settings("solo", "@dev"), "@dev")
+        plan = plan_for(project, mode="team", code_owner="@other", copilot_review=True)
+        note = action(plan, ".github/swerepo/ruleset.json").note
+        assert "what you gave (--mode, --code-owner) isn't in it" in note  # Copilot review: already there
+        assert "the code owner you gave isn't in it" in action(plan, ".github/CODEOWNERS").note
+        plan = plan_for(project, mode="solo", copilot_review=False)
+        assert "what you gave (--no-copilot-review) isn't in it" in action(plan, ".github/swerepo/ruleset.json").note
+        make(project, {".github/swerepo/ruleset.json": "[not an object]"})
+        plan = plan_for(project, mode="solo")
+        assert "what you gave (--mode) isn't in it" in action(plan, ".github/swerepo/ruleset.json").note

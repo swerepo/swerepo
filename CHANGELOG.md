@@ -19,7 +19,7 @@ All notable changes to this project are documented here. The format is based on 
 - `swerepo check`: the Python matrix against `requires-python`, `ci-ok` waiting for every job, monorepo project coverage, kept linters skipping `.seamspec`, and the privacy scan.
 - `swerepo init` for the `github` component: the ruleset and merge settings as code (`.github/swerepo/`), applied through `gh` after they are shown (a hand-made `swerepo` ruleset is adopted), Copilot review instructions, PR and issue templates, Dependabot and CODEOWNERS; `--mode`, `--code-owner`, `--no-copilot-review`. Pull requests wait for Copilot's review inside `ci-ok`.
 - `swerepo threads <pr>`: the open review threads of a pull request, read-only.
-- `swerepo check` reads GitHub through `gh` (never with `--ci`): the live ruleset and merge settings against the committed files, secret scanning and push protection, and the dependency graph. A renamed ruleset or settings beyond merging are never applied, and `check` reports them.
+- `swerepo check` reads GitHub through `gh` (never with `--ci`): the live ruleset and merge settings against the committed files, secret scanning and push protection, and the dependency graph. A renamed ruleset or settings beyond merging are never applied, and `check` reports them. `init` asks to edit a kept ruleset or CODEOWNERS block only for the choices it lacks.
 
 ### Fixed
 
