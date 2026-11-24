@@ -255,3 +255,50 @@ class TestReviewH55:
         globs = [name.replace("\\", "?") for name in names]  # allow_paths reads a backslash as a folder separator
         assert hook.pushed_hits(repo, push_input(head(repo), before), globs) == []  # allow_paths matches each name
         assert hook._path_name('"b/caf\\303\\251 \\"x\\" \\\\ \\t.py"\t') == 'b/café "x" \\ \t.py'
+
+
+class TestCopilotReviewPR15:
+    """Copilot's review of PR #15, each reproduced before the fix."""
+
+    def test_a_hooks_path_ending_in_a_space_is_kept_as_git_gives_it(self, repo: Path):
+        git(repo, "config", "core.hooksPath", ".githooks ")
+        hook.install(repo, None)
+        assert (repo / ".githooks /pre-push").is_file() and not (repo / ".githooks").exists()
+        assert hook.status(repo) == "installed"
+
+    def test_a_hook_turned_to_crlf_is_rewritten(self, repo: Path):
+        hook.install(repo, None)
+        path = repo / ".git/hooks/pre-push"
+        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))  # `/bin/sh\r`: git can't run it
+        path.chmod(0o755)
+        done, message = hook.install(repo, None)
+        assert done and message != "pre-push hook: already installed"
+        assert b"\r" not in path.read_bytes() and os.access(path, os.X_OK)
+
+    def test_files_marked_not_to_diff_are_still_scanned(self, repo: Path):
+        before = head(repo)
+        make(repo, {".gitattributes": "settings.txt -diff\n*.dat binary\n", "settings.txt": f"a\nkey={KEY}\n"})
+        (repo / "real.dat").write_bytes(b"\0\1\2" + KEY.encode() + b"\0")  # a true binary is still skipped
+        commit(repo, "attributes")
+        hits = hook.pushed_hits(repo, push_input(head(repo), before), [])
+        assert [(h.path, h.line) for h in hits] == [("settings.txt", 2)]
+
+    def test_diff_prefixes_from_the_persons_config_dont_matter(self, repo: Path):
+        before = head(repo)
+        make(repo, {"settings.txt": f"key={KEY}\n"})
+        commit(repo, "settings")
+        for setting in ("diff.noprefix", "diff.mnemonicPrefix"):
+            git(repo, "config", setting, "true")
+            hits = hook.pushed_hits(repo, push_input(head(repo), before), [])
+            assert [(h.path, h.line) for h in hits] == [("settings.txt", 1)], setting
+
+    def test_a_carriage_return_splits_lines_as_in_ci(self, repo: Path):
+        before = head(repo)
+        (repo / "mixed.txt").write_bytes(f"first\nsafe # swerepo: allow-privacy\rkey={KEY}\n".encode())
+        (repo / "crlf.txt").write_bytes(f"one\r\nkey={KEY}\r\n".encode())
+        commit(repo, "carriage returns")
+        hits = hook.pushed_hits(repo, push_input(head(repo), before), [])
+        assert sorted((h.path, h.line) for h in hits) == [("crlf.txt", 2), ("mixed.txt", 3)]  # the CI scan's lines
+        from swerepo import privacy
+
+        assert sorted(h.where for h in privacy.scan(repo)) == ["crlf.txt:2", "mixed.txt:3"]

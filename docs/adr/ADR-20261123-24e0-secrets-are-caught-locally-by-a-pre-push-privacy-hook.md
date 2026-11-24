@@ -35,6 +35,11 @@ Spec §19 question 5 asked whether to add a local scanner. Its proposal was "Git
    - **Same rules as CI:** `privacy.line_kinds`, with the project's declared emails, `[privacy] allow_paths` and the `swerepo: allow-privacy` marker.
    - **What it reports:** the kind, the commit and `file:line`, never the matched text, as everywhere else (inv_5e3b5ef3, inv_ab57c6ff).
    - **Every file name:** names with spaces, quotes, backslashes, tabs or non-ASCII letters are read as git writes them, without its trailing tab and with its C-quoting undone (review H55-F06).
+   - **Read as CI reads it** (Copilot's review of PR #15):
+     - a `-diff` or `binary` attribute doesn't hide a text file (`--text`), while a file with a NUL byte, or larger than the CI scan reads, is still skipped;
+     - a lone carriage return splits a line, numbered as CI numbers it, so a `swerepo: allow-privacy` marker covers only its own line;
+     - diff prefixes are fixed, whatever the person's settings.
+   - **Installed where git looks:** the hooks folder is kept as git gives it, a name ending in a space included. The hook is compared as bytes, so a copy turned to CRLF, which `/bin/sh` can't run, is rewritten.
    - **Not scanned:** deleted refs, deleted lines and binary files.
    - **Found where uv lives:** the hook adds `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin` to `PATH`, since GUI git clients often start hooks without them (review H55-F05).
 4. **It fails closed.** When SWERepo can't run, the push is refused with the reason. `git push --no-verify` skips the hook on purpose, as git allows for every hook. CI's privacy workflow remains the guard on GitHub.

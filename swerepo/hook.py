@@ -61,7 +61,8 @@ def hooks_dir(root: Path) -> Path:
     done = _git(root, "rev-parse", "--git-path", "hooks")
     if done.returncode != 0:
         raise HookError("not a git repository")
-    folder = Path(done.stdout.decode("utf-8", errors="surrogateescape").strip())
+    # only git's own line end: a folder name may itself end in a space (Copilot on PR #15)
+    folder = Path(done.stdout.decode("utf-8", errors="surrogateescape").removesuffix("\n"))
     return folder if folder.is_absolute() else (root / folder)
 
 
@@ -89,7 +90,9 @@ exec "$@" privacy --pre-push --remote "$remote"
 """
 
 
-def is_ours(text: str) -> bool:
+def is_ours(text: str | bytes) -> bool:
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", errors="replace")
     lines = text.splitlines()
     return len(lines) > 1 and lines[1].startswith(SIGNATURE)
 
@@ -103,10 +106,10 @@ def status(root: Path) -> str:
     if not path.is_file():
         return "missing"
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        data = path.read_bytes()
     except OSError:
         return "other"
-    if not is_ours(text):
+    if not is_ours(data):
         return "other"
     return "installed" if os.access(path, os.X_OK) else "not executable"
 
@@ -115,11 +118,13 @@ def install(root: Path, recorded_command: object) -> tuple[bool, str]:
     """Write SWERepo's pre-push hook. Returns (done, message): a hook of someone else's is never replaced."""
     folder = hooks_dir(root)
     path = folder / NAME
-    wanted = script(command(recorded_command))
+    wanted = script(command(recorded_command)).encode("utf-8")  # as bytes: LF only, as /bin/sh needs
     shown = f"{NAME} hook"
     if path.exists() or path.is_symlink():
         try:
-            current = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+            # compared as bytes: reading text would turn CRLF into LF and call a hook git can't run current
+            # (`#!/bin/sh\r`; Copilot on PR #15)
+            current = path.read_bytes() if path.is_file() else b""
         except OSError as error:
             raise HookError(f"{shown}: can't read it ({error.strerror or type(error).__name__})") from error
         if not is_ours(current) or path.is_symlink():
@@ -137,7 +142,7 @@ def install(root: Path, recorded_command: object) -> tuple[bool, str]:
             return True, f"{shown}: made executable again (git skipped it)"
     try:
         folder.mkdir(parents=True, exist_ok=True)
-        path.write_text(wanted, encoding="utf-8")
+        path.write_bytes(wanted)
         path.chmod(0o755)
     except OSError as error:
         raise HookError(f"{shown}: can't write it ({error.strerror or type(error).__name__})") from error
@@ -213,8 +218,10 @@ def _added_lines(root: Path, commit: str) -> list[tuple[str, int, str]]:
     and for a merge, the lines no parent had, such as a conflict resolved by hand (`--cc`, review H55-F02). Lines a
     merge takes from one parent come from that parent's own commits, which are scanned in turn. Binary files aren't
     listed."""
-    done = _git(root, "diff-tree", "--cc", "-U0", "--no-commit-id", "--root", "--no-renames", "--no-ext-diff",
-                "--no-color", "--no-textconv", "-r", commit)  # fmt: skip
+    # --text: a `-diff` or `binary` attribute must not hide a text file (real binaries are dropped below, as the CI
+    # scan drops them); the prefixes are fixed whatever the person's diff settings (Copilot on PR #15)
+    done = _git(root, "diff-tree", "--cc", "-U0", "--text", "--src-prefix=a/", "--dst-prefix=b/", "--no-commit-id",
+                "--root", "--no-renames", "--no-ext-diff", "--no-color", "--no-textconv", "-r", commit)  # fmt: skip
     if done.returncode != 0:
         raise HookError(f"can't read commit {commit[:7]}")
     found: list[tuple[str, int, str]] = []
@@ -240,6 +247,32 @@ def _added_lines(root: Path, commit: str) -> list[tuple[str, int, str]]:
     return found
 
 
+def _logical_lines(root: Path, commit: str, path: str) -> dict[int, list[tuple[int, str]]]:
+    """For a file whose lines hold a lone carriage return: each git line (split at `\\n`) mapped to the lines the CI
+    scan sees (split at CRLF, CR or LF) with their numbers, from the file as the commit has it (Copilot on PR #15)."""
+    done = _git(root, "cat-file", "blob", f"{commit}:{path}")
+    if done.returncode != 0:
+        raise HookError(f"can't read a file of commit {commit[:7]}")
+    mapping: dict[int, list[tuple[int, str]]] = {}
+    logical = 1
+    for number, line in enumerate(done.stdout.decode("utf-8", errors="replace").split("\n"), start=1):
+        pieces = line.removesuffix("\r").split("\r")
+        mapping[number] = [(logical + offset, piece) for offset, piece in enumerate(pieces)]
+        logical += len(pieces)
+    return mapping
+
+
+def _scanned_lines(root: Path, commit: str, path: str, added: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """The added lines as the CI scan reads them: none for a binary file (a NUL, as `privacy` tests) or one larger
+    than it reads, and a line holding a lone carriage return split there, numbered as CI numbers it."""
+    if any("\0" in text for _, text in added) or sum(len(text) for _, text in added) > privacy.MAX_BYTES:
+        return []
+    if not any("\r" in text.removesuffix("\r") for _, text in added):
+        return [(number, text.removesuffix("\r")) for number, text in added]
+    mapping = _logical_lines(root, commit, path)
+    return [piece for number, _ in added for piece in mapping.get(number, [])]
+
+
 def pushed_hits(
     root: Path, updates: list[tuple[str, str, str, str]], allow_paths: list[str], remote_name: str | None = None
 ) -> list[PushHit]:
@@ -257,8 +290,12 @@ def pushed_hits(
             if commit in seen:
                 continue
             seen.add(commit)
+            by_file: dict[str, list[tuple[int, str]]] = {}
             for path, number, line in _added_lines(root, commit):
+                by_file.setdefault(path, []).append((number, line))
+            for path, added in by_file.items():
                 if any(glob.matches(path, contents=True) for glob in allowed):
                     continue
-                hits += [PushHit(kind, commit, path, number) for kind in privacy.line_kinds(path, line, declared)]
+                for number, line in _scanned_lines(root, commit, path, added):
+                    hits += [PushHit(kind, commit, path, number) for kind in privacy.line_kinds(path, line, declared)]
     return hits

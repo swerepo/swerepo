@@ -25,6 +25,9 @@
   - `inv_960b67a8` is proposed as critical (F04);
   - Homebrew's folders are on the hook's `PATH`, and git's input is read strictly (F05).
 - **Review round 2 (H55-F06):** files whose names hold a space, a quote, a backslash or a tab were skipped or kept a trailing tab; they are read as git writes them now. Noted: `[privacy] allow_paths` reads a backslash as a folder separator, so such a name is allowed only through `?` or `*` (as before, in CI too).
+- **Copilot's review of PR #15:** five findings (`TestCopilotReviewPR15`):
+  - fixed: a hooks folder ending in a space, a hook turned to CRLF, files marked `-diff`, and lone carriage returns;
+  - didn't reproduce: `diff.noprefix` (`git diff-tree` ignores it), but the prefixes are now fixed explicitly and a test covers it.
 - **SeamSpec:** the owner approved `inv_960b67a8` (critical), so 16 rules are locked; `docs/EARNED_SPEC.md` regenerated.
 - **Tests:** `tests/test_hook.py`, including a real `git push` to a local bare repository that the hook refuses, with nothing reaching the remote. Spec v0.12 answers open question 5.
 
