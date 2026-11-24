@@ -15,3 +15,23 @@ SWERepo is a model-free Python CLI that sets up and checks repositories against 
 - Formatting, import order, line length or naming style: ruff enforces them in CI.
 - Files under `.seamspec/`: locked rule tests can't be changed except by superseding the rule.
 - Wording in Markdown documents, unless it states something false.
+
+<!-- swerepo:begin -->
+# Review instructions for Copilot
+
+Every comment you leave must be answered before this pull request can merge, so comment only where it changes something.
+
+**Skip:**
+- style that ruff or the project's own linters already check (formatting, import order, line length, naming);
+- wording in comments and documentation, unless it is wrong;
+- suggestions that only restate what the code does.
+
+**Do comment on:**
+- a change to behaviour without a test that covers it;
+- a missing progress entry in `docs/progress/`, or a design, process or dependency change without an ADR in `docs/adr/`;
+- changes to locked SeamSpec rules (`.seamspec/`) or to CI workflows (`.github/workflows/`): say what they weaken;
+- security problems: secrets, injection, unsafe defaults, personal data in tracked files;
+- bugs: wrong results, crashes, missed edge cases.
+
+Say what is wrong, where, and how to reproduce it.
+<!-- swerepo:end -->

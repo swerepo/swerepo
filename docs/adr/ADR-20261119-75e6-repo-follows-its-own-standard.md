@@ -17,7 +17,7 @@ The spec says SWERepo's repository is set up by SWERepo (§5 principle 12, §18)
 
 ## Decision
 
-*Since ADR-20261121-d0f5, SWERepo applies the `docs` and `agents` components to this repository itself, and since ADR-20261123-d27b `ci` and `security` too; `github` and `seamspec` are still by hand.*
+*Since ADR-20261121-d0f5, SWERepo applies the `docs` and `agents` components to this repository itself, since ADR-20261123-d27b `ci` and `security`, and since ADR-20261123-e2f8 `github`; `seamspec` is still by hand.*
 
 1. **Hand-written now, regenerated later.** `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `docs/PROGRESS.md`, `docs/progress/` and `docs/adr/` follow spec §6.5 and §6.6 by hand. When a component can generate them, it is run on this repository in that phase's PR, and the hand-written versions are adopted or replaced through SWERepo's own rules (an existing file is the person's file).
 2. **Agent rules in `AGENTS.md`; `CLAUDE.md` imports it** (spec §6.6). No `GEMINI.md`: Gemini reviews and reads files directly, and SeamSpec would read a `GEMINI.md` as Antigravity being in use.
