@@ -20,6 +20,10 @@
 - **The agents templates:** `agents/block@2` and `agents/address-review@2` name `swerepo threads`.
 - **Tests:** a fake `gh` (`tests/fake_gh.py`) answers from canned data and logs every call, so the tests prove what reaches GitHub. Spec v0.11.
 - **Review:** Gemini's 14 findings (`P5-F01`–`P5-F14`) are all accepted with regression tests; Gemini signed off in round 4.
+- **Copilot's review of PR #10:** 4 inline findings, all reproduced and fixed with regression tests (`TestCopilotReviewPR10`):
+  - a renamed ruleset and settings beyond merging are never applied;
+  - the next steps on GitHub without `gh` keep the pull request;
+  - `[github] applied` turns true only after both files were compared.
 - **SeamSpec:** the owner approved two critical rules, so 15 are locked (`docs/EARNED_SPEC.md` regenerated):
   - `inv_ef31cc79`: `check`, `init`'s plan and `threads` only read GitHub; `init` changes only the `swerepo` ruleset and the merge settings, and only after a yes;
   - `inv_faa5bef5`: pull requests wait for Copilot's review inside `ci-ok`.

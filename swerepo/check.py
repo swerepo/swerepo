@@ -696,6 +696,10 @@ def _github_live(ctx: Context) -> list[Finding]:
         if committed is None:
             found.append(Finding(c, item, UNKNOWN, f"can't compare with GitHub: {path} isn't readable JSON", path))
             continue
+        problem = github.not_applicable(kind or "repo-settings", committed)
+        if problem:  # init refuses to apply it, so it never matches GitHub (PR #10 review)
+            found.append(_missing(c, item, f"{path}: {problem}: swerepo init won't apply it", path))
+            continue
         try:
             live = ctx.hub.find_ruleset() if kind else ctx.hub.repo()
         except github.GitHubError as error:

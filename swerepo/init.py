@@ -86,6 +86,10 @@ class Plan:
     github_ask: dict[str, str] = field(default_factory=dict)  # what to ask ("mode", "code_owner") and its default
     github_apply: dict[str, dict[str, Any]] = field(default_factory=dict)  # "ruleset", "settings": JSON to apply
     github_slug: str | None = None  # owner/name, when the repository is on GitHub and gh is logged in
+    github_remote: str | None = None  # owner/name of the github.com remote, with or without gh (PR #10 review)
+    # GitHub read and compared: None when it couldn't be read; False when read but a settings file couldn't be
+    # compared (missing, not JSON, or not applicable); True when both files were compared (PR #10 review)
+    github_compared: bool | None = None
 
     @property
     def changes(self) -> list[Action]:
@@ -821,6 +825,12 @@ class _SettingsFiles:
     actions: list[Action]
     rendered: dict[str, dict[str, Any] | None]  # what is applied: the committed file, or this run's build
     ruleset_verb: str  # CREATE, REWRITE or CURRENT: the ruleset holds this run's settings
+    refused: set[str] = field(default_factory=set)  # files read but never applied (github.not_applicable)
+
+    @property
+    def applicable(self) -> dict[str, dict[str, Any] | None]:
+        """What may be sent to GitHub: the rendered files, without the refused ones."""
+        return {name: None if name in self.refused else data for name, data in self.rendered.items()}
 
     @property
     def copilot_review(self) -> bool | None:
@@ -840,6 +850,7 @@ def _settings_files(ctx: _Context, choice: _GitHubChoice, explicit: bool) -> _Se
     source of truth and is what gets applied (P5-F02)."""
     c, actions = "github", []
     rendered: dict[str, dict[str, Any] | None] = {}
+    refused: set[str] = set()
     ruleset_verb = KEEP
     for name, path in (("ruleset", github.RULESET_FILE), ("repo-settings", github.SETTINGS_FILE)):
         render = github.render(name, choice.settings)
@@ -860,7 +871,10 @@ def _settings_files(ctx: _Context, choice: _GitHubChoice, explicit: bool) -> _Se
             rendered[name] = committed if isinstance(committed, dict) else None
             if rendered[name] is None:
                 actions.append(Action(c, NOTE, None, f"{path} isn't a JSON object: nothing applied from it"))
-    return _SettingsFiles(actions, rendered, ruleset_verb)
+            elif problem := github.not_applicable(name, rendered[name]):
+                refused.add(name)  # never sent: a renamed ruleset, or settings beyond merging (PR #10 review)
+                actions.append(Action(c, NOTE, None, f"{path}: {problem}: nothing applied from it"))
+    return _SettingsFiles(actions, rendered, ruleset_verb, refused)
 
 
 def _github(ctx: _Context, choice: _GitHubChoice, plan: Plan, files: _SettingsFiles) -> list[Action]:
@@ -869,7 +883,7 @@ def _github(ctx: _Context, choice: _GitHubChoice, plan: Plan, files: _SettingsFi
     source = " (from the committed ruleset.json)" if shown != settings.mode or files.ruleset_verb == KEEP else ""
     note = f"mode: {shown} ({MODE_MEANING[shown]}){source}"
     actions = [Action(c, NOTE, None, note), *files.actions]
-    rendered = files.rendered
+    rendered = files.applicable
     instructions = ".github/copilot-instructions.md"
     if ctx.exists(instructions) and not (ctx.state and instructions in ctx.state.files()):
         actions.append(_managed_block(ctx, c, instructions, "github/copilot-instructions"))
@@ -917,8 +931,12 @@ def _github_apply(
 ) -> list[Action]:
     """The ruleset and merge settings to apply through gh, compared with what GitHub has now (read-only)."""
     c, hub = "github", choice.hub
+    plan.github_remote = hub.slug if hub is not None else github.repository(ctx.root)
     if hub is None:
-        note = "ruleset and merge settings: waiting: no GitHub repository (or gh isn't logged in)"
+        if plan.github_remote is None:
+            note = "ruleset and merge settings: waiting: no GitHub repository yet"
+        else:  # on GitHub, but gh is missing or not logged in (PR #10 review)
+            note = "ruleset and merge settings: waiting: gh isn't installed or logged in (gh auth login)"
         return [Action(c, WAITING, None, note)]
     plan.github_slug = hub.slug
     actions = []
@@ -928,6 +946,7 @@ def _github_apply(
     except github.GitHubError as error:
         return [Action(c, NOTE, None, f"can't read GitHub's settings ({error}): nothing applied")]
     wanted, settings = rendered["ruleset"], rendered["repo-settings"]
+    plan.github_compared = wanted is not None and settings is not None
     if wanted is None:
         ruleset_changes = []
     else:
@@ -970,7 +989,7 @@ def apply_github(plan: Plan, root: Path, which: list[str]) -> list[str]:
             done.append("merge settings applied")
     except github.GitHubError as error:
         raise InitError(f"GitHub: {error}") from error
-    if set(plan.github_apply) <= set(which):
+    if plan.github_compared and set(plan.github_apply) <= set(which):  # both files compared, all applied
         state = State.load(root.resolve())
         if state is not None and state.github.get("applied") is not True:
             state.set_github("applied", True)
@@ -1191,10 +1210,13 @@ def _new_state(
             copilot = settings.copilot_review
         if state.github.get("copilot_review") != copilot:
             state.set_github("copilot_review", copilot)
-        # applied: GitHub was read and has nothing left to apply; kept as it was when GitHub couldn't be read (P5-F02)
-        applied_now = not plan.github_apply and choice.hub is not None
-        known = choice.hub is not None or "applied" not in state.github
-        if known and state.github.get("applied") != applied_now:
+        # applied: GitHub was read, both files were compared, and nothing is left to apply; kept as it was when
+        # GitHub couldn't be read (P5-F02, PR #10 review); false when nothing is recorded yet
+        if plan.github_compared is not None:
+            applied_now = plan.github_compared and not plan.github_apply
+        else:
+            applied_now = state.github.get("applied", False)
+        if state.github.get("applied") != applied_now:
             state.set_github("applied", applied_now)
     if ctx.state is None:  # spec §10: an existing repository starts with warn-only pull-request rules
         if _has_commits(ctx.root):

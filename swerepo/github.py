@@ -156,6 +156,29 @@ def ruleset_mode(ruleset: dict[str, Any]) -> str | None:
     return None
 
 
+# What `repo-settings.json` may hold: the repository's merge settings, nothing else (spec §12). A field outside it
+# (`private`, `visibility`, `name`, ...) would make applying the file change more than merging (PR #10 review).
+MERGE_SETTINGS = frozenset({
+    "allow_squash_merge", "allow_merge_commit", "allow_rebase_merge", "allow_auto_merge", "allow_update_branch",
+    "delete_branch_on_merge", "squash_merge_commit_title", "squash_merge_commit_message", "merge_commit_title",
+    "merge_commit_message", "use_squash_pr_title_as_default",
+})  # fmt: skip
+
+
+def not_applicable(name: str, data: dict[str, Any]) -> str | None:
+    """Why a committed `ruleset` or `repo-settings` file can't be applied as it is, or None: a ruleset must keep the
+    name `swerepo` (renamed, later runs couldn't find it and would make another), and the settings may hold merge
+    settings only (PR #10 review)."""
+    if name == "ruleset":
+        if data.get("name") != RULESET_NAME:
+            return f'its name is {json.dumps(data.get("name"))[:60]}, not "{RULESET_NAME}"'
+        return None
+    others = sorted(key for key in data if key not in MERGE_SETTINGS)
+    if others:
+        return "it holds fields that aren't merge settings (" + ", ".join(k[:40] for k in others[:5]) + ")"
+    return None
+
+
 def ruleset_changes(differences: list[str]) -> list[str]:
     """`ruleset_differences` read from the side of applying the committed file: a rule only GitHub has will be
     removed by the update, so say so (review P5-F01 question 3)."""
@@ -253,7 +276,11 @@ class GitHub:
 
     # changing (after the person's yes)
     def apply_ruleset(self, ruleset: dict[str, Any]) -> str:
-        """Update the ruleset named `swerepo`, or create it. Other rulesets are never touched."""
+        """Update the ruleset named `swerepo`, or create it. Other rulesets are never touched, and a ruleset by
+        another name is never sent."""
+        problem = not_applicable("ruleset", ruleset)
+        if problem:
+            raise GitHubError(f"ruleset not sent: {problem}")
         existing = self.find_ruleset()
         if existing is None:
             self._run("POST", f"repos/{self.slug}/rulesets", ruleset)
@@ -262,6 +289,10 @@ class GitHub:
         return "updated"
 
     def apply_settings(self, settings: dict[str, Any]) -> None:
+        """Change the repository's merge settings, and only those."""
+        problem = not_applicable("repo-settings", settings)
+        if problem:
+            raise GitHubError(f"merge settings not sent: {problem}")
         self._run("PATCH", f"repos/{self.slug}", settings)
         self._repo = None
 

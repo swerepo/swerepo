@@ -635,3 +635,94 @@ class TestGeminiReviewRound3:
         assert State.load(project).mode == "solo"
         assert github.ruleset_mode(github.BUILDERS["github/ruleset@1"](github.Settings("team", "@x"))) == "team"
         assert github.ruleset_mode({"rules": [{"type": "deletion"}]}) is None
+
+
+class TestCopilotReviewPR10:
+    """Copilot's review of PR #10, each reproduced before the fix."""
+
+    def _edit(self, project: Path, path: str, **changes) -> None:
+        file = project / path
+        file.write_text(json.dumps({**json.loads(file.read_text()), **changes}))
+
+    def test_a_renamed_ruleset_is_never_sent(self, project: Path, gh: FakeGh):
+        apply(plan_for(project, code_owner="@dev"), project)
+        self._edit(project, github.RULESET_FILE, name="other")
+        plan = plan_for(project)
+        assert "ruleset" not in plan.github_apply and "settings" in plan.github_apply
+        assert any('ruleset.json: its name is "other", not "swerepo": nothing applied' in n for n in notes(plan))
+        apply(plan, project)
+        apply_github(plan, project, ["ruleset", "settings"])
+        assert State.load(project).github["applied"] is False  # the ruleset still isn't on GitHub
+        sent = [c["args"][2:4] for c in gh.calls() if c["args"][2:3] in (["PUT"], ["POST"])]
+        assert sent == []
+        findings = run_check(project, only=["github"], read_github=True).findings
+        assert any(f.status == MISSING and "won't apply it" in f.message and "other" in f.message for f in findings)
+        with pytest.raises(github.GitHubError, match="not sent"):
+            github.GitHub(SLUG).apply_ruleset({"name": "other", "rules": []})
+        assert [c for c in gh.calls() if c["args"][2:3] in (["PUT"], ["POST"])] == []
+
+    def test_settings_beyond_merging_are_never_sent(self, project: Path, gh: FakeGh):
+        apply(plan_for(project, code_owner="@dev"), project)
+        self._edit(project, github.SETTINGS_FILE, private=False, visibility="public")
+        plan = plan_for(project)
+        assert "settings" not in plan.github_apply
+        expected = f"{github.SETTINGS_FILE}: it holds fields that aren't merge settings (private, visibility)"
+        assert any(n.startswith(expected) and n.endswith("nothing applied from it") for n in notes(plan))
+        findings = run_check(project, only=["github"], read_github=True).findings
+        assert any(f.status == MISSING and "private, visibility" in f.message for f in findings)
+        with pytest.raises(github.GitHubError, match="not sent"):
+            github.GitHub(SLUG).apply_settings({"allow_squash_merge": True, "private": False})
+        assert not [c for c in gh.calls() if c["args"][2:3] == ["PATCH"]]
+        # every field the builders write is a merge setting
+        for mode in ("solo", "team"):
+            built = github.BUILDERS["github/repo-settings@1"](
+                github.Settings(mode, "@dev", merge_methods=("squash", "merge"))
+            )
+            assert github.not_applicable("repo-settings", built) is None
+
+    def test_on_github_without_gh_the_next_steps_keep_the_pull_request(self, project: Path, gh: FakeGh):
+        gh.set("logged_in", False)
+        command = ["init", "--path", str(project), "--only", "github", "--yes", "--code-owner", "@dev"]
+        result = CliRunner().invoke(app, command)
+        assert result.exit_code == 0, result.output
+        assert "gh isn't installed or logged in" in result.output
+        assert "commit them on a new branch, open a pull request" in result.output and "gh auth login" in result.output
+        assert "default branch" not in result.output and "gh repo create" not in result.output
+
+    def test_without_a_github_repository_the_next_steps_create_it(self, project: Path):
+        command = ["init", "--path", str(project), "--only", "github", "--yes", "--code-owner", "@dev"]
+        result = CliRunner().invoke(app, command)
+        assert result.exit_code == 0, result.output
+        assert "no GitHub repository yet" in result.output and "gh repo create --source . --push" in result.output
+
+    def test_applied_is_kept_when_github_cant_be_read(self, project: Path, gh: FakeGh):
+        settings = github.Settings("solo", "@dev")
+        gh.set(f"GET repos/{SLUG}/rulesets", [{"id": 7, "name": "swerepo"}])
+        gh.set(f"GET repos/{SLUG}/rulesets/7", {"id": 7, **github.BUILDERS["github/ruleset@1"](settings)})
+        gh.set(f"GET repos/{SLUG}", {"owner": {"login": "dev", "type": "User"},
+                                     **github.BUILDERS["github/repo-settings@1"](settings)})  # fmt: skip
+        apply(plan_for(project, code_owner="@dev"), project)
+        assert State.load(project).github["applied"] is True
+        state = State.load(project)
+        state.set_github("applied", False)
+        state.save(project)
+        del gh.responses[f"GET repos/{SLUG}/rulesets"]  # listing rulesets is refused (a 403, say)
+        gh.save()
+        plan = plan_for(project)
+        assert plan.github_compared is None and not plan.github_apply
+        apply(plan, project)
+        assert State.load(project).github["applied"] is False  # kept, not turned true by an empty plan
+
+    def test_applied_needs_both_files_compared(self, project: Path, gh: FakeGh):
+        settings = github.Settings("solo", "@dev")
+        gh.set(f"GET repos/{SLUG}", {"owner": {"login": "dev", "type": "User"},
+                                     **github.BUILDERS["github/repo-settings@1"](settings)})  # fmt: skip
+        make(project, {github.RULESET_FILE: "[not an object]"})
+        plan = plan_for(project, code_owner="@dev")
+        assert plan.github_compared is False and not plan.github_apply  # the settings already match
+        apply(plan, project)
+        assert State.load(project).github["applied"] is False
+        # and apply_github doesn't record it either, even when what it was asked to apply went through
+        plan.github_apply["settings"] = github.BUILDERS["github/repo-settings@1"](settings)
+        apply_github(plan, project, ["ruleset", "settings"])
+        assert State.load(project).github["applied"] is False

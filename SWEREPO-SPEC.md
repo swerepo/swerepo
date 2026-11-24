@@ -474,7 +474,8 @@ A **monorepo** holds several projects in one repository, for example `services/o
   2. create the repository and push (`gh repo create --source . --push`); SWERepo never creates repositories or pushes;
   3. run `swerepo update --only github` to apply the ruleset and merge settings.
   Until then, `check` reports `✗ ruleset not applied (no GitHub repository yet)`.
-- **Settings as code.** The ruleset and merge settings live in `.github/swerepo/ruleset.json` and `repo-settings.json`. They are the source of truth: a person may edit them (SWERepo then treats them like any edited file), `init`/`update --only github` applies them, and `check` compares the live settings with them.
+- **On GitHub, but without `gh`** (not installed or not logged in): the plan says the settings wait for `gh`, and the next steps are the usual branch and pull request, then `gh auth login` and `swerepo init --only github`.
+- **Settings as code.** The ruleset and merge settings live in `.github/swerepo/ruleset.json` and `repo-settings.json`. They are the source of truth: a person may edit them (SWERepo then treats them like any edited file), `init`/`update --only github` applies them, and `check` compares the live settings with them. Two edits are never applied, and `check` reports them: a ruleset renamed away from `swerepo`, and fields in `repo-settings.json` beyond the merge settings (such as `private`).
 - **The ruleset** is named `swerepo`, so reruns find and update their own ruleset and never touch others. It targets the default branch.
 
 | Rule | `solo` | `team` |

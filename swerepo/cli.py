@@ -252,7 +252,11 @@ def init(
     typer.echo(f"Applied: {created} file(s) created, {blocks} block(s) added{again}.")
     for line in github_lines:
         typer.echo(one_line(line))
-    if any(a.verb == "waiting" for a in plan.actions):
+    if any(a.verb == "waiting" for a in plan.actions) and plan.github_remote:  # on GitHub, gh missing or logged out
+        typer.echo("Next: review the changes (git status, git diff), commit them on a new branch, open a pull request.")
+        typer.echo("Then, with gh installed and logged in (gh auth login), apply the ruleset and merge settings:")
+        typer.echo("  swerepo init --only github")
+    elif any(a.verb == "waiting" for a in plan.actions):
         typer.echo("Next, as there is no GitHub repository yet (spec §12):")
         typer.echo("  1. commit these files on the default branch (the one commit straight to it)")
         typer.echo("  2. create the repository and push: gh repo create --source . --push")

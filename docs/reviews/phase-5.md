@@ -579,3 +579,18 @@ Round 4 found nothing new and accepted P5-F10 and P5-F14, so all 14 findings are
   SeamSpec's reviewer read both as sound to approve, and the owner approved them. Now 15 rules are locked, and all pass. `seamspec spec --check` is clean after regenerating `docs/EARNED_SPEC.md`.
 - **Noted for later:** `GitHub.find_ruleset` reads only the first 100 rulesets (`per_page=100`). A repository with more could get a second `swerepo` ruleset instead of an update. This is outside both rules.
 - **Next:** the pull request for Phase 5, then a separate pull request that applies `github` to this repository.
+
+---
+
+## Copilot's review of PR #10
+
+Copilot left 4 inline comments and a summary. Each was reproduced on the PR's code before any change, and each is fixed with a regression test in `TestCopilotReviewPR10` (`tests/test_github.py`). For each fix I put the bug back and saw a test fail (six breakages in all). No locked rule changed; all 15 pass.
+
+| Thread | Finding | Response |
+|---|---|---|
+| `swerepo/github.py` `apply_ruleset` | A `ruleset.json` edited to another `name` was created or renamed on GitHub, and later runs couldn't find it | **Fix:** `github.not_applicable` refuses it: the plan says why and applies only the settings, `check` reports it as missing, and `apply_ruleset` refuses such a payload before sending |
+| `swerepo/github.py` `apply_settings` | Every key of `repo-settings.json` was sent, so `"private": false` could make a private repository public | **Fix:** an allow-list of merge settings (`github.MERGE_SETTINGS`); other fields refuse the file the same way, and `apply_settings` refuses such a payload before sending |
+| `swerepo/cli.py` next steps | On GitHub without `gh` (or logged out), the next steps said to commit on the default branch and create the repository | **Fix:** the plan tells the two apart (`Plan.github_remote`): on GitHub, the next steps keep the branch and pull request, then `gh auth login` and `swerepo init --only github` |
+| `swerepo/init.py` `[github] applied` | A refused ruleset listing, or a settings file that isn't JSON, left an empty plan and recorded `applied = true` | **Fix:** `Plan.github_compared` records whether GitHub was read and both files compared; `applied` is true only then with nothing left to apply, kept when GitHub can't be read, and `apply_github` records it on the same condition |
+
+ADR-20261123-4e40 point 6 and spec §12 are updated.
