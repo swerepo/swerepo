@@ -199,7 +199,9 @@ jobs:
               fi
               others=$(printf '%s\n' "$commits" \
                 | awk 'NF && ($1 != "dependabot[bot]" || $2 != "true" || $3 != "web-flow")' | wc -l)
-              if [ -n "$commits" ] && [ "$others" -eq 0 ]; then
+              # GitHub lists at most 250 commits of a pull request: a list that long may hide others, so it fails
+              listed=$(printf '%s\n' "$commits" | awk 'NF' | wc -l)
+              if [ -n "$commits" ] && [ "$listed" -lt 250 ] && [ "$others" -eq 0 ]; then
                 echo "Opened by Dependabot, every commit its own: dependency updates don't wait for Copilot's review."
                 exit 0
               fi

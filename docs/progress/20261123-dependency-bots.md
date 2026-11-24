@@ -22,6 +22,9 @@
   - a bot's draft fails like any draft;
   - the cooldown block must be exactly `default-days: 7`, with nothing after the last entry;
   - both rules say only what the workflow and the files do.
+- **Copilot's review of PR #16**, both fixed:
+  - a person's merge on Dependabot's branch now counts for the pull-request rules; only GitHub's own checkout merge is left out;
+  - a list of 250 commits, GitHub's limit, fails closed.
 - **Tests:** `TestDependencyBots`; the replacement rule's test catches a too-broad name match, every-bot matching, and a missing bot check.
 
 ## Next

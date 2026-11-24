@@ -92,10 +92,19 @@ def _dependencies(text: str | None) -> tuple[set[str], list[str]]:
     return names, bad
 
 
-def _only_commits_by(ctx: Context, merge_base: str, author: str) -> bool:
-    """Whether every commit after the merge base (merges aside) was authored by `author`, as git records a bot's
-    name (`dependabot[bot]`). Read-only; a git error counts as no, so the rules apply (review DB-F02)."""
-    names = ctx.git("log", "--no-merges", "--format=%an", f"{merge_base}..HEAD")
+def _pull_request_head(ctx: Context, base: str) -> str:
+    """The pull request's own tip. In CI the checkout is GitHub's merge of the pull request into its base (first
+    parent the base, second the pull request): that merge is GitHub's, not a commit on the pull request."""
+    parents = (ctx.git("rev-list", "--parents", "-n", "1", "HEAD") or "").split()
+    base_commit = (ctx.git("rev-parse", "--verify", "--quiet", f"{base}^{{commit}}") or "").strip()
+    return parents[2] if len(parents) == 3 and base_commit and parents[1] == base_commit else "HEAD"
+
+
+def _only_commits_by(ctx: Context, merge_base: str, base: str, author: str) -> bool:
+    """Whether every commit on the pull request, merges included, was authored by `author`, as git records a bot's
+    name (`dependabot[bot]`): a person's merge on the bot's branch counts, and can carry changes of its own
+    (Copilot on PR #16). Read-only; a git error counts as no, so the rules apply (review DB-F02)."""
+    names = ctx.git("log", "--format=%an", f"{merge_base}..{_pull_request_head(ctx, base)}")
     return names is not None and all(name == author for name in names.splitlines() if name)
 
 
@@ -112,7 +121,7 @@ def pr_findings(ctx: Context, *, base: str, author: str | None, skip_progress: b
     enforce = state.pr_enforce if state else True
     exempt = state.exempt_authors if state else list(DEFAULT_EXEMPT_AUTHORS)
     # an exempt bot, alone on its branch: someone else's commit on it means the rules apply (review DB-F02)
-    if author and author in exempt and _only_commits_by(ctx, merge_base, author):
+    if author and author in exempt and _only_commits_by(ctx, merge_base, base, author):
         return [Finding(c, "pr.skipped", NOT_CHOSEN, f"pull-request rules skipped: {author} is an exempt author")]
     changes = _changes(ctx, merge_base)
     if changes is None:

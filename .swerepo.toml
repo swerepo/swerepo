@@ -62,8 +62,8 @@ written = "ad040e9fa0090b65580cb4ef8eb115bc0b4ccd1b6e340bb5b319c5ab5ec537ed"
 
 [files.".github/workflows/swerepo-ci.yml"]
 template = "ci/workflow@2"
-rendered = "3ad935fde8996685b60a4d304d07802b2e1bba39ef7e85979ed99d889250ef71"
-written = "3ad935fde8996685b60a4d304d07802b2e1bba39ef7e85979ed99d889250ef71"
+rendered = "c354b763b230d5aecaac25cfc5b9788885693e1b74083632827fcfd8b941088a"
+written = "c354b763b230d5aecaac25cfc5b9788885693e1b74083632827fcfd8b941088a"
 
 [files.".github/workflows/swerepo-privacy.yml"]
 template = "security/privacy-workflow@1"
