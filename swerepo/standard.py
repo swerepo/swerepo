@@ -34,8 +34,6 @@ GITHUB_FILES = (
 
 # Checks a later phase adds: shown as "?" until then, never silently left out (ADR-20261120-fc5a point 4).
 LATER = {
-    "security": (("security.secret-scanning", "GitHub secret scanning and push protection", 5),),
-    "github": (("github.live", "ruleset and merge settings on GitHub match .github/swerepo/", 5),),
     "seamspec": (("seamspec.health", "SeamSpec health, CI pin and hygiene rules", 7),),
     "release": (("release.environment", "protected release environment", 8),),
 }

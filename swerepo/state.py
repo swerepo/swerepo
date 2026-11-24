@@ -194,6 +194,12 @@ class State:
         return [] if privacy is None else [str(p) for p in privacy.get("allow_paths", [])]
 
     @property
+    def github(self) -> dict[str, Any]:
+        """`[github]`: applied, copilot_review, extra_required_checks (spec §9, §12)."""
+        table = self.doc.get("github")
+        return {} if table is None else table.unwrap()
+
+    @property
     def tools(self) -> dict[str, str]:
         """Versions of other tools the workflows pin (`[tools]`), e.g. `seamspec`."""
         table = self.doc.get("tools")
@@ -301,6 +307,18 @@ class State:
                     entry.add(name, value)
             table.add(folder, entry)
         self._table("projects")["inputs"] = table
+
+    def set_github(self, name: str, value: bool | list[str]) -> None:
+        """Set one `[github]` setting: `applied` or `copilot_review` (true or false), `extra_required_checks`."""
+        if name in ("applied", "copilot_review") and isinstance(value, bool):
+            self._table("github")[name] = value
+        elif name == "extra_required_checks":
+            _text_list(value, key="github.extra_required_checks")
+            array = tomlkit.array()
+            array.extend(value)  # type: ignore[arg-type]
+            self._table("github")[name] = array
+        else:
+            raise StateError(f"github.{name}: not a setting SWERepo writes")
 
     def set_tool(self, name: str, version: str) -> None:
         """Record the version of another tool a workflow pins (`[tools] seamspec`)."""
@@ -470,6 +488,14 @@ def _validate(doc: TOMLDocument, running: str = __version__) -> None:
             raise StateError(f"projects.{key}: must be a list of folders")
         for folder in folders:
             check_path(folder, key=f"projects.{key}")
+    github = data.get("github", {})
+    if not isinstance(github, dict):
+        raise StateError("github: must be a table")
+    for key in ("applied", "copilot_review"):
+        if key in github and not isinstance(github[key], bool):
+            raise StateError(f"github.{key}: must be true or false")
+    if "extra_required_checks" in github:
+        _text_list(github["extra_required_checks"], key="github.extra_required_checks")
     privacy = data.get("privacy", {})
     if not isinstance(privacy, dict):
         raise StateError("privacy: must be a table")

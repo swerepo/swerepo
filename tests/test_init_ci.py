@@ -65,6 +65,7 @@ class TestWorkflow:
     def test_check_then_finds_ci_complete_and_a_rerun_changes_nothing(self, project: Path):
         init(project, only=["ci"])
         findings = ci_findings(project)
+        assert findings.pop("ci.dependency-graph").status == "unknown"  # only gh can tell, and tests never call it
         assert all(f.status == OK for f in findings.values()), [f.message for f in findings.values()]
         assert findings["ci.python-matrix"].message == "tests Python 3.12–3.14, as the project declares"
         before = snapshot(project)
@@ -79,7 +80,7 @@ class TestWorkflow:
         inputs = ci.Inputs(values["default_branch"], values["ci_install"], values["python"], values["lint"],
                            swerepo=values["governance_command"], seamspec=state.tools["seamspec"])  # fmt: skip
         template_id, text = ci.render_workflow(TemplateStore(), inputs)
-        assert state.files()[WORKFLOW].template == template_id == "ci/workflow@1"
+        assert state.files()[WORKFLOW].template == template_id == "ci/workflow@2"
         assert (project / WORKFLOW).read_text() == text  # `update` can rebuild it from what's recorded
 
     def test_no_lock_file_no_python_declared_and_missing_tools(self, tmp_path: Path):

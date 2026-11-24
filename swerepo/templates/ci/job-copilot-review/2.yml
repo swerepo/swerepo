@@ -1,0 +1,35 @@
+  # Merges wait for Copilot's review of the pull request, of any commit (ADR-20261123-a359): asked every 30
+  # seconds for up to 20 minutes; a later push passes at once. Re-run the job if the review came later.
+  copilot-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      pull-requests: read
+    steps:
+      - name: wait for Copilot's review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          set -euo pipefail  # a failing gh call stops the job with its own error, not a 20-minute wait
+          if [ "${DRAFT:-false}" = "true" ]; then
+            # the ruleset doesn't request Copilot's review on drafts: don't wait for one that won't come
+            echo "A draft: Copilot reviews it once it is marked ready for review, and this job runs again then."
+            exit 1
+          fi
+          for attempt in $(seq 1 40); do
+            # one line per review by Copilot, on any page of the list
+            reviewed=$(gh api "repos/$REPOSITORY/pulls/$NUMBER/reviews" --paginate \
+              --jq '.[] | select(.user.login == "copilot-pull-request-reviewer[bot]") | .id' | wc -l)
+            if [ "$reviewed" -gt 0 ]; then
+              echo "Copilot has reviewed this pull request."
+              exit 0
+            fi
+            echo "Waiting for Copilot's review ($attempt of 40)."
+            sleep 30
+          done
+          echo "No review from Copilot after 20 minutes: request it from the Reviewers box, then re-run this job."
+          exit 1

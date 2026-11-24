@@ -15,6 +15,7 @@ Two kinds of files:
 from __future__ import annotations
 
 import datetime
+import json
 import re
 import subprocess
 import tomllib
@@ -22,17 +23,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from swerepo import __version__, ci, privacy, standard
+from swerepo import __version__, ci, github, privacy, standard
 from swerepo.adr import AdrError, list_adrs, with_index
-from swerepo.blocks import ADR_INDEX, append_block, file_fingerprint, inside, read_exact, wrap
+from swerepo.blocks import ADR_INDEX, append_block, file_fingerprint, inside, read_exact, replace_block_content, wrap
 from swerepo.check import _UNRELEASED, UsageError, one_line
 from swerepo.detect import KNOWN_PYTHONS, Detection, detect
 from swerepo.fingerprint import HTML, BlockError, comment_style, find_block, fingerprint
 from swerepo.render import TemplateStore
 from swerepo.state import COMPONENTS, FILE_NAME, Record, State, StateError
 
-AVAILABLE = ("docs", "agents", "ci", "security")  # components this version of init applies
-LATER = {"github": 5, "seamspec": 7, "openspec": 8, "release": 8}
+AVAILABLE = ("docs", "agents", "ci", "security", "github")  # components this version of init applies
+LATER = {"seamspec": 7, "openspec": 8, "release": 8}
 HOSTS = ("claude", "cursor", "vscode", "antigravity", "gemini")
 HOST_NAMES = {
     "claude": "Claude Code", "cursor": "Cursor", "vscode": "VS Code Copilot", "antigravity": "Antigravity",
@@ -41,9 +42,10 @@ HOST_NAMES = {
 RECORDED_VALUES = ("project", "adr_dir", "progress_dir", "commands", "test_inline")  # managed templates use these
 
 CREATE, ADD_BLOCK, GIT_INIT, WRITE_STATE, REWRITE = "create", "add block", "git init", "write", "rewrite"
+APPLY, WAITING = "apply", "waiting"  # GitHub settings, applied through gh after the files (ADR-20261123-4e40)
 KEEP, CURRENT, CHANGED, OUTDATED = "keep", "current", "changed", "outdated"
 ADOPT, NOTE, LATER_VERB = "adopt", "note", "later"
-CHANGING = (CREATE, ADD_BLOCK, GIT_INIT, WRITE_STATE, REWRITE)
+CHANGING = (CREATE, ADD_BLOCK, GIT_INIT, WRITE_STATE, REWRITE, APPLY)
 
 
 class InitError(RuntimeError):
@@ -80,6 +82,10 @@ class Plan:
     state_before: str | None = None  # .swerepo.toml as the plan read it (None: there was none)
     lint_question: bool = False  # other linters found and nothing recorded: keep them, or move to ruff gradually
     contact_question: bool = False  # SECURITY.md to create: who to report vulnerabilities to
+    github_question: bool = False  # the github component with its mode or code owner neither given nor recorded
+    github_ask: dict[str, str] = field(default_factory=dict)  # what to ask ("mode", "code_owner") and its default
+    github_apply: dict[str, dict[str, Any]] = field(default_factory=dict)  # "ruleset", "settings": JSON to apply
+    github_slug: str | None = None  # owner/name, when the repository is on GitHub and gh is logged in
 
     @property
     def changes(self) -> list[Action]:
@@ -463,6 +469,19 @@ def _rewrite_if_asked(ctx: _Context, action: Action, render: tuple[str, str], as
                   record=Record(template_id, rendered, rendered), kind="file", expect=record.written)  # fmt: skip
 
 
+def _rewrite_block_if_asked(ctx: _Context, action: Action, render: tuple[str, str], asked: bool) -> Action:
+    """SWERepo's block, rewritten in place when the person asked for its new content in this run (`--code-owner`)
+    and nobody changed the block since SWERepo wrote it (review P5-F10). Anything else stays as it is."""
+    record = ctx.state.blocks().get(action.path or "") if ctx.state else None
+    if not asked or action.verb != OUTDATED or record is None:
+        return action
+    template_id, content = render
+    rendered = fingerprint(content)
+    note = "SWERepo block unchanged since it was written: rewritten with what you asked for"
+    return Action(action.component, REWRITE, action.path, note, content=content,
+                  record=Record(template_id, rendered, rendered), kind="block", expect=record.written)  # fmt: skip
+
+
 WRITTEN = (CREATE, REWRITE, CURRENT)  # a workflow's recorded inputs match it after this run
 
 
@@ -613,7 +632,16 @@ def _coverage_notes(ctx: _Context, listed: list[str]) -> list[Action]:
     return notes
 
 
-def _ci(ctx: _Context, shared: _Workflows, lint_mode: tuple[str, list[str]], projects: list[str] | None) -> _CiResult:
+def _ci(
+    ctx: _Context,
+    shared: _Workflows,
+    lint_mode: tuple[str, list[str]],
+    projects: list[str] | None,
+    copilot: bool = False,
+    *,
+    asked: bool = False,
+) -> _CiResult:
+    """`asked`: the github component runs now, so its Copilot wait may rewrite an unchanged workflow."""
     c = "ci"
     actions: list[Action] = []
     install, install_note = ci.install_command(ctx.root)
@@ -628,16 +656,22 @@ def _ci(ctx: _Context, shared: _Workflows, lint_mode: tuple[str, list[str]], pro
     if recorded_install in ci.INSTALLS:  # only the commands standard 1 writes (P4-F03)
         install = str(recorded_install)
     lint, linters = lint_mode
+    recorded_copilot = _recorded(ctx, standard.CI_WORKFLOW, "ci_copilot_review")
+    recorded_wait = recorded_copilot == "true"  # a version 1 workflow recorded none: it doesn't wait
+    if not asked and recorded_copilot in ("true", "false"):  # its own recorded flag: renders stay the recorded ones
+        copilot = recorded_wait
+    # the github component asks for a rewrite only when the wait itself changes (review P5-F12)
+    asked = asked and (copilot != recorded_wait or standard.CI_WORKFLOW not in (ctx.state.files() if ctx.state else {}))
     listed = _listed_projects(ctx, projects)
     project_actions, project_inputs = _project_inputs(ctx, listed)
     seamspec = ci.seamspec_pin(ctx.state.tools.get("seamspec") if ctx.state else None)
     governance, governance_note = _command(ctx, shared, "governance_command")
     inputs = ci.Inputs(shared.default_branch, install, python, lint, linters, governance, seamspec,
-                       project_inputs)  # fmt: skip
+                       project_inputs, copilot)  # fmt: skip
     versions = f"{python[0]}–{python[-1]}" if len(python) > 1 else python[0]
     render = ci.render_workflow(ctx.store, inputs)
     workflow = _managed_file(ctx, c, standard.CI_WORKFLOW, ci.WORKFLOW, render=render)
-    workflow = _rewrite_if_asked(ctx, workflow, render, projects is not None or shared.with_governance)
+    workflow = _rewrite_if_asked(ctx, workflow, render, projects is not None or shared.with_governance or asked)
     if workflow.verb == CREATE:
         how = {"ruff": "ruff", "kept": ", ".join(linters) + " (kept)", "gradual": "ruff on changed files"}[lint]
         workflow.note = f"Python {versions}; lint: {how}"
@@ -653,6 +687,9 @@ def _ci(ctx: _Context, shared: _Workflows, lint_mode: tuple[str, list[str]], pro
     if missing and workflow.verb == CREATE:
         actions.append(Action(c, NOTE, None, missing))
     others = [w.path for w in ctx.detection.workflows if w.path != standard.CI_WORKFLOW]
+    if workflow.verb == CREATE:  # the gap PR #9 found (ADR-20261123-4e40 point 8)
+        note = "dependency-review needs GitHub's dependency graph turned on (Settings → Advanced Security)"
+        actions.append(Action(c, NOTE, None, note))
     if others and workflow.verb == CREATE:
         audit = "uvx zizmor==1.32.0 --offline .github/workflows"
         note = f"workflow-audit also audits {', '.join(others)}: run `{audit}` before merging"
@@ -666,8 +703,8 @@ _CONTACT_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
 
 
 def has_github_remote(root: Path) -> bool:
-    url = ci._git(root, "remote", "get-url", "origin") or ""
-    return "github.com" in url
+    """Whether `origin` is on github.com itself (the same anchored test as the github component; P5-F06)."""
+    return github.repository(root) is not None
 
 
 def contact_text(contact: str) -> str:
@@ -724,6 +761,223 @@ def _security(ctx: _Context, shared: _Workflows, contact: str | None) -> tuple[l
     return actions, written
 
 
+# --- github (ADR-20261123-4e40) --------------------------------------------------------------------------
+
+
+MODE_MEANING = {
+    "solo": "pull requests only, ci-ok required, Copilot review, threads resolved; no approval needed",
+    "team": "solo's rules, plus one approval, stale approvals dismissed and code-owner review",
+}
+
+
+@dataclass
+class _GitHubChoice:
+    settings: github.Settings
+    hub: github.GitHub | None
+    ask_mode: bool  # neither given nor recorded: a terminal asks, with `settings.mode` as the default
+    ask_owner: bool  # likewise for the code owner, with `settings.code_owner` (or none) as the default
+    owner_none: bool = False  # the person said "none": no CODEOWNERS, and the repository owner isn't proposed
+    owner_given: bool = False  # --code-owner (or its question) answered in this run
+
+
+def _github_choice(
+    ctx: _Context, mode: str | None, code_owner: str | None, copilot_review: bool | None
+) -> _GitHubChoice:
+    """The mode, code owner and Copilot review: given now, else recorded, else the defaults (spec §12)."""
+    state = ctx.state
+    hub = github.GitHub.connect(ctx.root)
+    owner_login, owner_type = ("", "")
+    if hub is not None:
+        try:
+            owner_login, owner_type = hub.owner_login()
+        except github.GitHubError:
+            hub = None
+    recorded_mode = state.mode if state else None
+    chosen = mode or recorded_mode or ("team" if owner_type == "Organization" else "solo")
+    if chosen not in ("solo", "team"):
+        raise UsageError(f"--mode {chosen}: solo or team")
+    if code_owner is not None and code_owner != github.NO_OWNER and not github.valid_owner(code_owner):
+        raise UsageError("--code-owner: a GitHub @login or @org/team, or none")
+    recorded_owner = state.values.get("code_owner") if state else None
+    given = code_owner if code_owner is not None else recorded_owner
+    owner_none = given == github.NO_OWNER  # said once, kept: never replaced by the repository owner (P5-F04)
+    owner = given if github.valid_owner(given) else None
+    if owner is None and not owner_none and owner_type == "User" and github.valid_owner(f"@{owner_login}"):
+        owner = f"@{owner_login}"
+    recorded_copilot = state.github.get("copilot_review") if state else None
+    copilot = copilot_review if copilot_review is not None else recorded_copilot is not False
+    extra = tuple(str(c) for c in (state.github.get("extra_required_checks") or [])) if state else ()
+    ask_mode = mode is None and recorded_mode is None
+    ask_owner = code_owner is None and recorded_owner is None
+    settings = github.Settings(chosen, owner, copilot, extra)
+    return _GitHubChoice(settings, hub, ask_mode, ask_owner, owner_none, code_owner is not None)
+
+
+@dataclass
+class _SettingsFiles:
+    """`ruleset.json` and `repo-settings.json` as this run leaves them, decided before the CI workflow so the
+    workflow follows the ruleset (review P5-F10)."""
+
+    actions: list[Action]
+    rendered: dict[str, dict[str, Any] | None]  # what is applied: the committed file, or this run's build
+    ruleset_verb: str  # CREATE, REWRITE or CURRENT: the ruleset holds this run's settings
+
+    @property
+    def copilot_review(self) -> bool | None:
+        ruleset = self.rendered.get("ruleset")
+        return github.has_copilot_review(ruleset) if isinstance(ruleset, dict) else None
+
+    @property
+    def mode(self) -> str | None:
+        """The mode the ruleset applied in this run is in (review P5-F14)."""
+        ruleset = self.rendered.get("ruleset")
+        return github.ruleset_mode(ruleset) if isinstance(ruleset, dict) else None
+
+
+def _settings_files(ctx: _Context, choice: _GitHubChoice, explicit: bool) -> _SettingsFiles:
+    """The settings files: created when missing; an unchanged ruleset.json SWERepo wrote is rewritten when the person
+    gives --mode, --code-owner or --copilot-review in this run (review P5-F10); otherwise the committed file is the
+    source of truth and is what gets applied (P5-F02)."""
+    c, actions = "github", []
+    rendered: dict[str, dict[str, Any] | None] = {}
+    ruleset_verb = KEEP
+    for name, path in (("ruleset", github.RULESET_FILE), ("repo-settings", github.SETTINGS_FILE)):
+        render = github.render(name, choice.settings)
+        action = _managed_file(ctx, c, path, render[0], render=render)
+        if name == "ruleset":
+            action = _rewrite_if_asked(ctx, action, render, explicit)
+            ruleset_verb = action.verb
+            if action.verb in (CHANGED, KEEP, OUTDATED) and explicit:
+                action.note += "; what you gave (--mode, --code-owner, --copilot-review) isn't in it: edit it yourself"
+        actions.append(action)
+        if action.verb in (CREATE, REWRITE):
+            rendered[name] = json.loads(render[1])
+        else:
+            try:
+                committed = json.loads(ctx.read(path)) if ctx.exists(path) else None
+            except json.JSONDecodeError:
+                committed = None
+            rendered[name] = committed if isinstance(committed, dict) else None
+            if rendered[name] is None:
+                actions.append(Action(c, NOTE, None, f"{path} isn't a JSON object: nothing applied from it"))
+    return _SettingsFiles(actions, rendered, ruleset_verb)
+
+
+def _github(ctx: _Context, choice: _GitHubChoice, plan: Plan, files: _SettingsFiles) -> list[Action]:
+    c, settings = "github", choice.settings
+    shown = files.mode if files.ruleset_verb not in (CREATE, REWRITE) and files.mode else settings.mode
+    source = " (from the committed ruleset.json)" if shown != settings.mode or files.ruleset_verb == KEEP else ""
+    note = f"mode: {shown} ({MODE_MEANING[shown]}){source}"
+    actions = [Action(c, NOTE, None, note), *files.actions]
+    rendered = files.rendered
+    instructions = ".github/copilot-instructions.md"
+    if ctx.exists(instructions) and not (ctx.state and instructions in ctx.state.files()):
+        actions.append(_managed_block(ctx, c, instructions, "github/copilot-instructions"))
+    else:
+        actions.append(_managed_file(ctx, c, instructions, "github/copilot-instructions"))
+    ecosystem = "uv" if (ctx.root / "uv.lock").is_file() else "pip"
+    dependabot = ctx.store.latest("github", "dependabot")
+    render = (dependabot.id, dependabot.render({"python_ecosystem": ecosystem}))
+    actions.append(_managed_file(ctx, c, ".github/dependabot.yml", "github/dependabot", render=render))
+    existing_template = ctx.detection.documents.get("pr_template")
+    if existing_template and not (ctx.state and existing_template in ctx.state.files()):  # SWERepo's own: compared
+        actions.append(Action(c, KEEP, existing_template, "yours"))
+    else:
+        test = ctx.values.get("test_lines", "uv run pytest").splitlines()[0]
+        values = {**ctx.values, "test_command": test}
+        template = ctx.store.latest("github", "pr-template")
+        render = (template.id, template.render(values))
+        actions.append(_managed_file(ctx, c, ".github/pull_request_template.md", "github/pr-template", render=render))
+    if any(p.is_file() for p in (ctx.root / ".github/ISSUE_TEMPLATE").glob("*")):
+        actions.append(Action(c, KEEP, ".github/ISSUE_TEMPLATE", "yours"))
+    else:
+        for name, kind in (("bug", "issue-bug"), ("feature", "issue-feature")):
+            actions.append(_starter(ctx, c, f".github/ISSUE_TEMPLATE/{name}.md", f"github/{kind}", ctx.values))
+    if settings.code_owner:
+        path = ctx.detection.documents.get("codeowners") or github.CODEOWNERS
+        template = ctx.store.latest("github", "codeowners")
+        lines = github.codeowners_lines(settings.code_owner, openspec=ctx.detection.openspec)
+        render = (template.id, template.render({"lines": lines}))
+        block = _managed_block(ctx, c, path, "github/codeowners", render=render)
+        block = _rewrite_block_if_asked(ctx, block, render, choice.owner_given)
+        if block.verb in (CHANGED, KEEP, OUTDATED) and choice.owner_given:
+            block.note += "; the code owner you gave isn't in it: edit it yourself"
+        actions.append(block)
+    elif choice.owner_none:
+        actions.append(Action(c, NOTE, None, "CODEOWNERS not written: no code owner, as you chose"))
+    else:
+        note = "CODEOWNERS not written: name the code owner (--code-owner @login or @org/team)"
+        actions.append(Action(c, NOTE, None, note))
+    actions += _github_apply(ctx, choice, rendered, plan)
+    return actions
+
+
+def _github_apply(
+    ctx: _Context, choice: _GitHubChoice, rendered: dict[str, dict[str, Any] | None], plan: Plan
+) -> list[Action]:
+    """The ruleset and merge settings to apply through gh, compared with what GitHub has now (read-only)."""
+    c, hub = "github", choice.hub
+    if hub is None:
+        note = "ruleset and merge settings: waiting: no GitHub repository (or gh isn't logged in)"
+        return [Action(c, WAITING, None, note)]
+    plan.github_slug = hub.slug
+    actions = []
+    try:
+        live_ruleset = hub.find_ruleset()
+        live_repo = hub.repo()
+    except github.GitHubError as error:
+        return [Action(c, NOTE, None, f"can't read GitHub's settings ({error}): nothing applied")]
+    wanted, settings = rendered["ruleset"], rendered["repo-settings"]
+    if wanted is None:
+        ruleset_changes = []
+    else:
+        ruleset_changes = github.ruleset_differences(wanted, live_ruleset) if live_ruleset else ["new"]
+    if ruleset_changes and wanted is not None:
+        plan.github_apply["ruleset"] = wanted
+        what = "create" if live_ruleset is None else "update: " + ", ".join(github.ruleset_changes(ruleset_changes))
+        actions.append(Action(c, APPLY, None, f'ruleset "{github.RULESET_NAME}" on the default branch ({what})'))
+    else:
+        actions.append(Action(c, CURRENT, None, f'ruleset "{github.RULESET_NAME}" on GitHub'))
+    settings_changes = github.settings_differences(settings, live_repo) if settings is not None else []
+    if settings_changes and settings is not None:
+        plan.github_apply["settings"] = settings
+        actions.append(Action(c, APPLY, None, "merge settings (" + ", ".join(settings_changes) + ")"))
+    elif settings is not None:
+        actions.append(Action(c, CURRENT, None, "merge settings on GitHub"))
+    try:
+        graph = live_repo.get("private") is True or hub.dependency_graph()
+    except github.GitHubError:
+        graph = True  # can't tell: check says so; the plan doesn't guess
+    if not graph:
+        note = "GitHub's dependency graph is off: dependency-review needs it (Settings → Advanced Security)"
+        actions.append(Action(c, NOTE, None, note))
+    return actions
+
+
+def apply_github(plan: Plan, root: Path, which: list[str]) -> list[str]:
+    """Apply the GitHub settings the person said yes to ("ruleset", "settings"), then record
+    `[github] applied` when nothing is left to apply. Returns what was done, one line each."""
+    hub = github.GitHub.connect(root)
+    if hub is None or hub.slug != plan.github_slug:
+        raise InitError("GitHub isn't reachable as it was when the plan was made: nothing applied; run init again")
+    done = []
+    try:
+        if "ruleset" in which and "ruleset" in plan.github_apply:
+            how = hub.apply_ruleset(plan.github_apply["ruleset"])
+            done.append(f'ruleset "{github.RULESET_NAME}" {how}')
+        if "settings" in which and "settings" in plan.github_apply:
+            hub.apply_settings(plan.github_apply["settings"])
+            done.append("merge settings applied")
+    except github.GitHubError as error:
+        raise InitError(f"GitHub: {error}") from error
+    if set(plan.github_apply) <= set(which):
+        state = State.load(root.resolve())
+        if state is not None and state.github.get("applied") is not True:
+            state.set_github("applied", True)
+            state.save(root.resolve())
+    return done
+
+
 def _has_commits(root: Path) -> bool:
     try:
         done = subprocess.run(
@@ -747,6 +1001,9 @@ def make_plan(
     projects: list[str] | None = None,
     lint: str | None = None,
     contact: str | None = None,
+    mode: str | None = None,
+    code_owner: str | None = None,
+    copilot_review: bool | None = None,
 ) -> Plan:
     """What `swerepo init` would do. Writes nothing. `lint`: "kept" or "gradual" when other linters are found
     (spec §6.3); `contact`: "github", "placeholder" or an email address for SECURITY.md (ADR-20261122-a48e)."""
@@ -780,8 +1037,8 @@ def make_plan(
     adr_dir, adopted = _adr_dir(ctx)
     progress_dir = str((state.adopted.get("progress_dir") if state else None) or standard.PROGRESS_DIR)
     # The lint choice first, so the commands the agents block lists match the CI it gets (P4-F07).
-    mode, kept, lint_question = _lint_mode(ctx, lint)
-    computed = compute_values(root, detection, adr_dir, progress_dir, kept, mode)
+    lint_mode, kept, lint_question = _lint_mode(ctx, lint)
+    computed = compute_values(root, detection, adr_dir, progress_dir, kept, lint_mode)
     ctx.values = {**computed, **{k: str(recorded[k]) for k in RECORDED_VALUES if isinstance(recorded.get(k), str)}}
 
     hosts_recorded = bool(state and state.hosts_chosen)
@@ -791,18 +1048,42 @@ def make_plan(
 
     if not detection.git.is_work_tree:
         plan.actions.append(Action("repository", GIT_INIT, None, "not a git repository yet: git init"))
+    choice = _github_choice(ctx, mode, code_owner, copilot_review) if "github" in components else None
+    # Merges wait for Copilot's review where the github component turns it on (ADR-20261123-a359). Applying
+    # github alone also brings a recorded, unchanged swerepo-ci.yml along (review P5-F01).
+    explicit = mode is not None or code_owner is not None or copilot_review is not None
+    files = _settings_files(ctx, choice, explicit) if choice is not None else None
+    if choice is not None and files is not None:
+        if choice.ask_mode:  # a kept ruleset's own mode is the default, not the owner-type guess (P5-F14)
+            from_file = files.ruleset_verb not in (CREATE, REWRITE) and files.mode is not None
+            plan.github_ask["mode"] = files.mode if from_file and files.mode else choice.settings.mode
+        if choice.ask_owner:
+            plan.github_ask["code_owner"] = choice.settings.code_owner or github.NO_OWNER
+        plan.github_question = bool(plan.github_ask)
+    if files is not None and files.copilot_review is not None:
+        copilot = files.copilot_review  # the ruleset the repository commits decides (P5-F10)
+    elif choice is not None:
+        copilot = choice.settings.copilot_review
+    else:
+        copilot = bool(state and state.github.get("copilot_review"))
+    ci_along = (choice is not None and "ci" not in components and "ci" not in skip
+                and state is not None and "ci" in state.components)  # fmt: skip
+    if ci_along:
+        components = [c for c in COMPONENTS if c in {*components, "ci"}]
     shared = _workflows(ctx, with_governance=with_governance) if {"ci", "security"} & set(components) else None
     ci_result: _CiResult | None = None
     privacy: tuple[str, str] | None = None  # the privacy workflow's command and Python version, when written
     for component in components:
         if component == "ci" and shared is not None:
-            ci_result = _ci(ctx, shared, (mode, kept), projects)
+            ci_result = _ci(ctx, shared, (lint_mode, kept), projects, copilot, asked=choice is not None)
             plan.actions += ci_result.actions
             plan.lint_question = lint_question and ci_result.inputs is not None
         elif component == "security" and shared is not None:
             security_actions, privacy = _security(ctx, shared, contact)
             plan.actions += security_actions
             plan.contact_question = any(a.path == "SECURITY.md" and a.verb == CREATE for a in plan.actions)
+        elif component == "github" and choice is not None and files is not None:
+            plan.actions += _github(ctx, choice, plan, files)
         elif component == "docs":
             plan.actions += _docs(ctx, adr_dir, adopted)
         elif component == "agents":
@@ -817,7 +1098,8 @@ def make_plan(
     applied = [
         c for c in components if c in AVAILABLE and not (c == "ci" and (ci_result is None or not ci_result.inputs))
     ]
-    plan.state_text = _new_state(ctx, plan, applied, adr_dir if adopted else None, shared, ci_result, privacy)
+    plan.state_text = _new_state(ctx, plan, applied, adr_dir if adopted else None, shared, ci_result, privacy, choice,
+                                 files)  # fmt: skip
     if "docs" in applied and any(a.changes for a in plan.actions):  # writing .swerepo.toml counts
         _progress_entry(ctx, plan, applied, progress_dir)
     return plan
@@ -846,6 +1128,8 @@ def _new_state(
     shared: _Workflows | None = None,
     ci_result: _CiResult | None = None,
     privacy: tuple[str, str] | None = None,
+    choice: _GitHubChoice | None = None,
+    files: _SettingsFiles | None = None,
 ) -> str | None:
     """The `.swerepo.toml` after this run, or None when it wouldn't change. A workflow's inputs are recorded only
     when it is created, rewritten or current, so they always rebuild what was written (P4-F02)."""
@@ -869,7 +1153,8 @@ def _new_state(
         values.update(privacy_command=privacy[0], privacy_python=privacy[1])
     if inputs is not None:  # each workflow's own snapshot (review: Copilot on PR #8)
         values.update(python=inputs.python, ci_install=inputs.install, lint=inputs.lint,
-                      governance_command=inputs.swerepo)  # fmt: skip
+                      governance_command=inputs.swerepo,
+                      ci_copilot_review="true" if inputs.copilot_review else "false")  # fmt: skip
     for name, value in values.items():
         if state.values.get(name) != value:
             state.set_value(name, value)
@@ -884,6 +1169,33 @@ def _new_state(
             state.set_project_inputs(project_inputs)
         if state.tools.get("seamspec") != inputs.seamspec:
             state.set_tool("seamspec", inputs.seamspec)
+    if choice is not None and "github" in applied:
+        settings = choice.settings
+        # The choices are recorded only where the files carry them: the mode and Copilot review when ruleset.json
+        # was written with them (or nothing is recorded yet), the code owner when CODEOWNERS was. Copilot review is
+        # what the committed ruleset says (review P5-F10).
+        written = files is not None and files.ruleset_verb in (CREATE, REWRITE, CURRENT)
+        mode_now = settings.mode if written else (files.mode if files is not None and files.mode else None)
+        if mode_now is None and state.mode is None:
+            mode_now = settings.mode
+        if mode_now and state.mode != mode_now:
+            state.set_mode(mode_now)
+        owner = settings.code_owner or (github.NO_OWNER if choice.owner_none else None)
+        path = ctx.detection.documents.get("codeowners") or github.CODEOWNERS  # by path: kind is set on writes only
+        codeowners = [a for a in plan.actions if a.component == "github" and a.path == path]
+        owner_written = not codeowners or codeowners[0].verb in (CREATE, ADD_BLOCK, CURRENT, REWRITE)
+        if owner and state.values.get("code_owner") != owner and (owner_written or "code_owner" not in state.values):
+            state.set_value("code_owner", owner)
+        copilot = files.copilot_review if files is not None and files.copilot_review is not None else None
+        if copilot is None:
+            copilot = settings.copilot_review
+        if state.github.get("copilot_review") != copilot:
+            state.set_github("copilot_review", copilot)
+        # applied: GitHub was read and has nothing left to apply; kept as it was when GitHub couldn't be read (P5-F02)
+        applied_now = not plan.github_apply and choice.hub is not None
+        known = choice.hub is not None or "applied" not in state.github
+        if known and state.github.get("applied") != applied_now:
+            state.set_github("applied", applied_now)
     if ctx.state is None:  # spec §10: an existing repository starts with warn-only pull-request rules
         if _has_commits(ctx.root):
             state.set_pr_rules(enforce=False, warn_since=ctx.today)
@@ -949,8 +1261,15 @@ def _check_unchanged(action: Action, target: Path) -> None:
         text = read_exact(target, errors="surrogateescape")
     except OSError as error:
         raise InitError(f"{action.path}: can't read it ({error.strerror or type(error).__name__})") from error
-    template = action.record.template if action.record else ""
-    if target.is_symlink() or file_fingerprint(text, template) != action.expect:
+    if action.kind == "block":
+        try:
+            block = find_block(text, style=comment_style(action.path or ""))
+        except BlockError:
+            block = None
+        seen = fingerprint(block.content) if block is not None else None
+    else:
+        seen = file_fingerprint(text, action.record.template if action.record else "")
+    if target.is_symlink() or seen != action.expect:
         raise InitError(f"{action.path} changed since the plan was made: nothing written; run init again")
 
 
@@ -992,7 +1311,13 @@ def apply(plan: Plan, root: Path) -> None:
                     handle.write(action.content)
             elif action.verb == REWRITE:
                 _check_unchanged(action, target)  # again, just before writing
-                target.write_text(action.content, encoding="utf-8", newline="")
+                if action.kind == "block":  # only the block's lines change; the person's text stays byte for byte
+                    text = read_exact(target, errors="surrogateescape")
+                    style = comment_style(action.path)
+                    updated = replace_block_content(text, action.content, style=style, marker="swerepo")
+                    target.write_text(updated, encoding="utf-8", newline="", errors="surrogateescape")
+                else:
+                    target.write_text(action.content, encoding="utf-8", newline="")
             else:
                 text = read_exact(target, errors="surrogateescape")
                 try:

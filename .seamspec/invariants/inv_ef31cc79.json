@@ -1,0 +1,36 @@
+{
+  "schema_version": "1",
+  "id": "inv_ef31cc79",
+  "title": "check, init's plan and threads only read GitHub; init changes the swerepo ruleset and merge settings only after a yes",
+  "assertion": "With a repository on GitHub and `gh` logged in (a fake `gh` that logs every call and its request body), `swerepo check` (text and `--json`, before and after the ruleset files exist), `swerepo init --dry-run` and `swerepo threads` only read: REST calls use GET only, and GraphQL sends a query, never a mutation (in its arguments or on stdin, with `--input -` or `--input=-`). Every other `gh` call counts as a change, however it is spelled: `-X PUT`, `-XPUT`, `--method PUT`, `--method=PUT`, or a body (`-f`, `-F`, `--field`, `--raw-field`, `--input`, attached or not) with no method. `swerepo check --ci` doesn't call `gh` at all, with or without the ruleset files. `swerepo init --only github` changes nothing on GitHub: without `--yes` and without a terminal, when the person says no at \"Apply?\", or when they are asked about the ruleset and the merge settings and say no to both. With `--yes` it changes only the repository's merge settings and the ruleset named `swerepo`: it updates that ruleset in place, or creates it when there is none, and never touches another ruleset. What it sends is exactly the committed `ruleset.json` and `repo-settings.json`.",
+  "scope": {
+    "paths": [
+      "swerepo/github.py",
+      "swerepo/threads.py",
+      "swerepo/check.py",
+      "swerepo/init.py",
+      "swerepo/cli.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261123-4e40 (Phase 5): check is read-only and never needs GitHub in CI (spec §15); threads only reads (spec §17); init shows the ruleset and settings first and changes GitHub only after the person's yes, never touching other rulesets (spec §12). Tightened at the owner's request before locking: request bodies equal the committed files, check --json and --ci after the files exist, saying no in a terminal, and attached or = spellings of methods, bodies and GraphQL mutations. Tightened again after SeamSpec's reviewer: the fake gh logs stdin for --input=- too, a mutation goes through the fake both ways, and the terminal test sees both GitHub questions asked.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_ef31cc79.py",
+    "harness_sha256": "ded49055b575976267d663b5ddfbeb754096cce502a7ce76e61cdca758db4a7a",
+    "assertion_sha256": "3d23a7eb15f7b56fe4584fdc72d941db4fca3bdf9da71b8433f83f26530db3db"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-23T10:01:07.608489Z",
+  "approved_at": "2026-11-24T00:54:38.922737Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

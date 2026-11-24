@@ -75,7 +75,8 @@ def test_a_repository_that_meets_the_standard(repo: Path):
     assert report.count(MISSING) == 0
     assert {f.status for f in report.findings} <= {OK, UNKNOWN, NOT_CHOSEN}
     later = [f.message for f in report.findings if f.status == UNKNOWN]
-    assert later and all("checked from Phase" in m for m in later)  # honest about what isn't checked yet
+    # honest about what isn't checked: a later phase's check, or GitHub that only gh can read (never in tests)
+    assert later and all("checked from Phase" in m or "can't tell (needs gh" in m for m in later)
     assert by_item(report)["openspec.chosen"].status == NOT_CHOSEN
     assert report.next_step() is None
 

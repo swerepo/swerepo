@@ -1,0 +1,3 @@
+# Governance files: changes need the code owner's review in team mode (SWEREPO-SPEC §6.1).
+# Kept last in this file, since the last matching line wins.
+@@lines@@

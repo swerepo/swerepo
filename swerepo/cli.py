@@ -17,7 +17,16 @@ from swerepo import __version__, standard
 from swerepo.adr import AdrError, new_adr, write_index
 from swerepo.blocks import inside
 from swerepo.check import UsageError, in_github_actions, one_line, run_check
-from swerepo.init import HOSTS, InitError, apply, has_github_remote, make_plan, noreply_warning
+from swerepo.init import (
+    HOSTS,
+    MODE_MEANING,
+    InitError,
+    apply,
+    apply_github,
+    has_github_remote,
+    make_plan,
+    noreply_warning,
+)
 from swerepo.progress import report
 from swerepo.state import COMPONENTS, State, StateError
 
@@ -87,8 +96,9 @@ def check(
         if components is not None and components and not [c for c in components if c not in skipped]:
             raise UsageError("nothing left to check after the --no- flags")
         result = run_check(
-            path, only=components, base=base, author=author, skip=tuple(skip or ()), exclude=tuple(skipped)
-        )
+            path, only=components, base=base, author=author, skip=tuple(skip or ()), exclude=tuple(skipped),
+            read_github=not ci,  # CI never needs GitHub access (spec §15)
+        )  # fmt: skip
     except UsageError as error:
         raise _fail(error, 2, "check") from error
     if as_json:
@@ -134,6 +144,37 @@ def _ask_contact(root: Path) -> str:
     return typer.prompt("Security contact", default=default).strip()
 
 
+def _ask_github(ask: dict[str, str]) -> dict[str, object]:
+    """The mode and the code owner (spec §12), each only when neither given nor recorded, with the default init
+    detected (`team` for an organisation's repository, the owner's login for a user's; review P5-F04)."""
+    answers: dict[str, object] = {}
+    if "mode" in ask:
+        typer.echo("Mode for the ruleset:")
+        for mode, meaning in MODE_MEANING.items():
+            typer.echo(f"  {mode}: {meaning}")
+        typer.echo("Nobody can approve their own pull request, so team mode needs a second person or identity.")
+        answers["mode"] = typer.prompt("Mode (solo, team)", default=ask["mode"]).strip().lower()
+    if "code_owner" in ask:
+        prompt = "Code owner for governance files (@login or @org/team, or none)"
+        answers["code_owner"] = typer.prompt(prompt, default=ask["code_owner"]).strip()
+    return answers
+
+
+def _apply_github(plan, path: Path, yes: bool) -> list[str]:
+    """Show each GitHub change as JSON and apply what the person says yes to (all of them with --yes)."""
+    labels = {"ruleset": 'Apply ruleset "swerepo" on the default branch?', "settings": "Apply merge settings?"}
+    chosen = []
+    for name, data in plan.github_apply.items():
+        if not yes:
+            typer.echo(json.dumps(data, indent=2))
+            if not typer.confirm(labels[name], default=False):
+                continue
+        chosen.append(name)
+    if not chosen:
+        return ["GitHub: nothing applied (run `swerepo init --only github` again to apply)"]
+    return [f"GitHub: {line}" for line in apply_github(plan, path, chosen)]
+
+
 @app.command(context_settings=EXTRA_ARGS, epilog=SHORTHAND)
 def init(
     ctx: typer.Context,
@@ -144,18 +185,27 @@ def init(
     with_governance: Annotated[
         bool, typer.Option("--with-governance", help="Add the governance CI job even from an unreleased SWERepo.")
     ] = False,
+    mode: Annotated[str | None, typer.Option("--mode", help="github: solo or team (spec §12).")] = None,
+    code_owner: Annotated[
+        str | None, typer.Option("--code-owner", help="github: governance files' code owner, @login or @org/team.")
+    ] = None,
+    copilot_review: Annotated[
+        bool | None,
+        typer.Option("--copilot-review/--no-copilot-review", help="github: request Copilot's review, and wait for it."),
+    ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Print the plan and stop.")] = False,
     yes: Annotated[bool, typer.Option("--yes", help="Apply without asking (for scripts).")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Print one JSON result instead of text.")] = False,
     path: Annotated[Path, typer.Option("--path", help="The repository to set up.")] = Path("."),
 ) -> None:
     """Set the repository up to the standard: print the plan, then apply it. Never replaces your files.
-    This version applies `docs`, `agents`, `ci` and `security`; the other components come in later phases."""
+    This version applies `docs`, `agents`, `ci`, `security` and `github`; the others come in later phases."""
     interactive = _interactive() and not as_json and not yes
     try:
         components, skipped = _selection(only, ctx.args)
         listed = [p.strip() for p in projects.split(",") if p.strip()] if projects is not None else None
-        options = {"only": components, "skip": skipped, "with_governance": with_governance, "projects": listed}
+        options = {"only": components, "skip": skipped, "with_governance": with_governance, "projects": listed,
+                   "mode": mode, "code_owner": code_owner, "copilot_review": copilot_review}  # fmt: skip
         plan = make_plan(path, **options)
         if interactive and not dry_run:
             asked: dict[str, object] = {}
@@ -165,8 +215,10 @@ def init(
                 asked["lint"] = _ask_lint()
             if plan.contact_question:
                 asked["contact"] = _ask_contact(path.resolve())
+            if plan.github_question:
+                asked.update(_ask_github(plan.github_ask))  # asks only what no flag or record decided
             if asked:
-                plan = make_plan(path, **options, **asked)
+                plan = make_plan(path, **{**options, **asked})
     except UsageError as error:
         raise _fail(error, 2, "init") from error
     except InitError as error:
@@ -187,17 +239,26 @@ def init(
         raise typer.Exit(0)
     try:
         apply(plan, path)
+        github_lines = _apply_github(plan, path, yes) if plan.github_apply else []
     except InitError as error:
         raise _fail(error, 1, "init") from error
     if as_json:
-        typer.echo(json.dumps(plan.to_dict(applied=True), indent=2, ensure_ascii=False))
+        typer.echo(json.dumps({**plan.to_dict(applied=True), "github": github_lines}, indent=2, ensure_ascii=False))
         raise typer.Exit(0)
     created = sum(1 for a in plan.changes if a.verb == "create")
     blocks = sum(1 for a in plan.changes if a.verb == "add block")
     rewritten = sum(1 for a in plan.changes if a.verb == "rewrite")
     again = f", {rewritten} rewritten" if rewritten else ""
     typer.echo(f"Applied: {created} file(s) created, {blocks} block(s) added{again}.")
-    typer.echo("Next: review the changes (git status, git diff), commit them on a new branch, open a pull request.")
+    for line in github_lines:
+        typer.echo(one_line(line))
+    if any(a.verb == "waiting" for a in plan.actions):
+        typer.echo("Next, as there is no GitHub repository yet (spec §12):")
+        typer.echo("  1. commit these files on the default branch (the one commit straight to it)")
+        typer.echo("  2. create the repository and push: gh repo create --source . --push")
+        typer.echo("  3. apply the ruleset and merge settings: swerepo init --only github")
+    else:
+        typer.echo("Next: review the changes (git status, git diff), commit them on a new branch, open a pull request.")
     warning = noreply_warning(path.resolve())
     if warning:
         typer.echo(warning)
@@ -268,6 +329,32 @@ def progress(
     root, state = _repository(path, "progress")
     adopted = state.adopted.get("progress_dir") if state else None
     typer.echo(report(root, progress_dir=str(adopted) if adopted else None, count=count), nl=False)
+
+
+@app.command()
+def threads(
+    number: Annotated[int, typer.Argument(help="The pull request's number.")],
+    as_json: Annotated[bool, typer.Option("--json", help="Print one JSON result instead of text.")] = False,
+    path: Annotated[Path, typer.Option("--path", help="The repository.")] = Path("."),
+) -> None:
+    """The open review threads of a pull request, through gh. Only reads: never replies or resolves."""
+    from swerepo.github import GitHub, GitHubError
+    from swerepo.threads import open_threads, render_text, to_dict
+
+    if number < 1:
+        raise _fail(UsageError("a pull request's number is 1 or more"), 2, "threads")
+    root, _ = _repository(path, "threads")
+    hub = GitHub.connect(root)
+    if hub is None:
+        raise _fail(UsageError("needs a GitHub remote (origin) and gh, logged in"), 2, "threads")
+    try:
+        found = open_threads(hub, number)
+    except GitHubError as error:
+        raise _fail(error, 1, "threads") from error
+    if as_json:
+        typer.echo(json.dumps(to_dict(number, found), indent=2, ensure_ascii=False))
+    else:
+        typer.echo("\n".join(one_line(line) for line in render_text(number, found).splitlines()))
 
 
 def main() -> None:
