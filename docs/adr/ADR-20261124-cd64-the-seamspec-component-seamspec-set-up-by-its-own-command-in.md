@@ -49,7 +49,7 @@ The owner accepted the recommendations below on 2026-11-24 and added four watcho
    - **No PyPI lookup.** SWERepo makes no network call except through `gh`. This changes spec §13, which said SWERepo asks before installing, and that `-u --seamspec` reads the latest version on PyPI if allowed.
 3. **SeamSpec's own workflow, when one is needed** (the `seamspec` component without `ci`, or strict mode):
    - **SWERepo writes `.github/workflows/seamspec.yml` itself,** as a managed file from its own template `seamspec/workflow@1`, before running `seamspec init`. Since SeamSpec never overwrites an existing workflow, it keeps SWERepo's.
-     - The file runs the same two commands, `seamspec doctor --ci` and `seamspec verify --all --ci`.
+     - The file runs the same steps as `swerepo-ci.yml`'s `seamspec` job: `seamspec doctor --ci` (against the pull request's base, or the commits a push brought), `seamspec verify --all --ci`, and `seamspec spec --check docs/EARNED_SPEC.md` when the file exists. Without the last one, a rule approved or superseded without regenerating the earned spec would pass CI, against point 7 (Copilot's review of PR #19).
      - Actions are pinned to commits, credentials aren't kept, and uv and SeamSpec are pinned.
      - So it passes the workflow audit, Dependabot keeps its pins current, and `update` maintains it like any other managed file.
      - This refines the owner's point 3 (`--ci` without `ci`): the flag is still passed, and the file SeamSpec then keeps is SWERepo's pinned one.
@@ -85,7 +85,7 @@ The owner accepted the recommendations below on 2026-11-24 and added four watcho
    - **Filling `[seamspec.adopted]`:** in a terminal, `init` asks once for each missing hygiene rule whether a locked rule covers it, listing the locked rules; the default is to propose a new one. `--adopt <name>=<id>` does the same without a terminal.
    - **`check`** reports an adopted id that isn't locked as `✗`.
    - **Here:** adopt `privacy = "inv_62d51113"` and `changelog = "inv_b2000e40"`, and propose `adr-index` and `ci-tests`.
-7. **`docs/EARNED_SPEC.md`** stays as spec §13 says. It is written with `seamspec spec --out` after the person's first review (with the rules approved so far if they postpone it), and checked in CI with `seamspec spec --check`.
+7. **`docs/EARNED_SPEC.md`** stays as spec §13 says. It is written with `seamspec spec --out` after the person's first review (with the rules approved so far if they postpone it), and checked in CI with `seamspec spec --check`: by `swerepo-ci.yml`'s `seamspec` job, or by SWERepo's `seamspec.yml` when there is no `ci` component (point 3).
 8. **`swerepo -u --seamspec`:**
    - **The versions:** reports the installed SeamSpec against the CI pin, and tells the person to run `uv tool upgrade seamspec` themselves.
    - **`seamspec init`:** reruns it in the person's terminal, with point 1's flags, and printed only without a terminal.

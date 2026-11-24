@@ -247,7 +247,7 @@ Designed so that parallel branches don't collide: each PR adds its own files, an
 
 ### 6.8 Locked rules (component `seamspec`)
 
-- SeamSpec set up through its own command (§13), in enforced mode, its locked rules run by the `seamspec` job in `swerepo-ci.yml` (§6.2; ADR-20261122-4a06). When SeamSpec needs a workflow of its own (the component without `ci`, or strict mode), SWERepo writes `.github/workflows/seamspec.yml` from its own template, with actions pinned to commits, so it passes the workflow audit (ADR-20261124-cd64).
+- SeamSpec set up through its own command (§13), in enforced mode, its locked rules run by the `seamspec` job in `swerepo-ci.yml` (§6.2; ADR-20261122-4a06). When SeamSpec needs a workflow of its own (the component without `ci`, or strict mode), SWERepo writes `.github/workflows/seamspec.yml` from its own template, with actions pinned to commits, so it passes the workflow audit. It runs the same steps as the `seamspec` job, `seamspec spec --check` included (ADR-20261124-cd64).
 - **`docs/EARNED_SPEC.md`**: the rules SeamSpec enforces today, written by `seamspec spec --out docs/EARNED_SPEC.md` and checked in CI with `seamspec spec --check docs/EARNED_SPEC.md`. Reviewers see a change to the enforced rules as a readable diff, next to what `openspec/specs/` says was planned.
 - The **hygiene rule pack** proposed as SeamSpec rules, for the person to approve, each only when its component is set up (ADR-20261124-cd64):
   1. `hygiene/privacy`: no personal email addresses or home-folder paths in tracked files (same allowances as §6.4, `[privacy] allow_paths` included). With `security`.
@@ -526,7 +526,7 @@ SWERepo uses SeamSpec only through its public command line; SeamSpec needs no ch
   1. `init --only seamspec` runs `seamspec init`, then proposes the hygiene rules;
   2. it offers to run `seamspec review` in the person's terminal now (the person approves or rejects each rule; SWERepo never answers for them);
   3. after the review, it writes `docs/EARNED_SPEC.md` with `seamspec spec --out`. If the person postpones the review, it writes the file with the rules approved so far (none yet) and says to run `swerepo update --only seamspec` after reviewing, which regenerates it.
-  The `governance` CI job runs `seamspec spec --check` at the pinned SeamSpec version. Whenever `seamspec review` later approves or supersedes rules, the same PR regenerates the file; CI fails if it doesn't.
+  CI runs `seamspec spec --check` at the pinned SeamSpec version: the `seamspec` job in `swerepo-ci.yml` (§6.2), or SWERepo's `seamspec.yml` without the `ci` component (§6.8). Whenever `seamspec review` later approves or supersedes rules, the same PR regenerates the file; CI fails if it doesn't.
 - **The hygiene rule pack** (§6.8) is proposed with `seamspec propose --json -`, each rule with its test bundled in SWERepo (`hygiene/<name>@<version>`, recorded as the rule's origin reference), using only the standard library and pytest, linted, and checked to pass on the repository before proposing. A hygiene rule already covered by a locked rule of the repository's own is adopted instead: asked once per rule in a terminal, or given with `--adopt NAME=ID`, and recorded under `[seamspec.adopted]`. SWERepo never approves: the person runs `seamspec review`, ideally after the agent's `/seamspec:explain`.
 - **`swerepo -u --seamspec`** brings a repository to the installed SeamSpec version:
   1. reports the installed SeamSpec version against the CI pin (no PyPI lookup: SWERepo makes no network call except through `gh`);
