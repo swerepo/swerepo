@@ -1,0 +1,37 @@
+{
+  "schema_version": "1",
+  "id": "inv_60788941",
+  "title": "update changes a file a person edited only with a deliberate yes, and never writes conflict markers",
+  "assertion": "In a repository set up by `swerepo init` whose AGENTS.md has a line of the person's after SWERepo's block, whose AGENTS.md block was written by an older template (`agents/block@1`) and then edited by the person, and whose `docs/agents/address-review.md` was written by an older template (`agents/address-review@1`) and left as written: `swerepo update` without `--yes` and without a terminal exits 2, says nothing was applied, and changes no file; in a terminal, asked \"Apply?\", answering no exits 0 and changes no file; `swerepo update --yes` exits 0, rewrites `address-review.md` to the new template and leaves AGENTS.md byte for byte, saying the merge waits for `--merge`. A deliberate yes merges the update into AGENTS.md's block, keeping the person's line and bringing in the new template's text, with the text before and after the block (the person's line after it included) unchanged and no conflict markers: answering yes in a terminal, or `swerepo update --yes --merge` (exit 0). A whole file the person edited (`address-review.md` with a line of theirs) is likewise left byte for byte by `--yes` and merged by `--yes --merge`. When the person's edit touches a line the update changes too, `update --yes --merge` exits 0, reports a conflict and leaves the file byte for byte, and no file in the repository holds a `<<<<<<<`, `=======` or `>>>>>>>` line. When the earlier render can't be rebuilt to the record's fingerprint, `update --yes --merge` exits 0, reports that it can't merge and leaves the file byte for byte.",
+  "scope": {
+    "paths": [
+      "swerepo/init.py",
+      "swerepo/merge.py",
+      "swerepo/rebuild.py",
+      "swerepo/cli.py",
+      "swerepo/state.py",
+      "swerepo/blocks.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261124-7afa (Phase 6), the owner's decisions on 2026-11-24: merges into a person's edits need a terminal's yes or `--yes --merge`, never `--yes` alone; a conflict leaves the file as it is and conflict markers are never written; a merge is never made against an earlier render that doesn't rebuild to the record's fingerprint. Tightened after SeamSpec's reviewer and the owner (2026-11-24): the no-yes and terminal paths, exit codes, an unedited whole file that `--yes` does rewrite, a whole-file edit, the text around the block with a line of the person's after it, and all three marker kinds.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_60788941.py",
+    "harness_sha256": "938a12bbd9906f11f28bb4fea2012317fae0c7b1e6df18a206560f16c4973671",
+    "assertion_sha256": "4d456f268456aa9200e3ff5868b2dc3efeb802f74ba9ceee82003f8e27ee05af"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-24T09:11:17.931738Z",
+  "approved_at": "2026-11-24T20:41:38.248598Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

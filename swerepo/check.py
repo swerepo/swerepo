@@ -15,7 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-from swerepo import __version__, ci, github, privacy, standard
+from swerepo import __version__, ci, github, merge, privacy, rebuild, standard
 from swerepo.blocks import file_fingerprint
 from swerepo.detect import Detection, detect
 from swerepo.fingerprint import HASH, HTML, BlockError, comment_style, find_block, fingerprint
@@ -980,8 +980,11 @@ def _record(ctx: Context, kind: str, path: str, record: Record, component: str, 
             return _missing(component, item, f"{path}: SWERepo block removed", path)
         text = block.content
     seen = file_fingerprint(text, record.template) if kind == "file" else fingerprint(text)
+    pins = ""
     if seen != record.written:
-        return Finding(component, item, CHANGED, f"{label} changed by you (kept)", path)
+        if not (kind == "file" and path.startswith(".github/workflows/") and _only_newer_pins(store, record, text)):
+            return Finding(component, item, CHANGED, f"{label} changed by you (kept)", path)
+        pins = ", newer action pins"
     try:
         _, name, version = parse_id(record.template)
         if github.is_builder(record.template):  # JSON built in Python, versioned like a template (ADR-4e40)
@@ -995,7 +998,22 @@ def _record(ctx: Context, kind: str, path: str, record: Record, component: str, 
     if latest[-1] > version:
         message = f"{label}: {record.template} → @{latest[-1]} available (swerepo update)"
         return Finding(component, item, OUTDATED, message, path)
-    return _ok(component, item, f"{label} (current)", path)
+    return _ok(component, item, f"{label} (current{pins})", path)
+
+
+def _only_newer_pins(store: TemplateStore, record: Record, text: str) -> bool:
+    """Whether the workflow differs from SWERepo's render only by action pins moved to newer versions (Dependabot's;
+    ADR-20261123-f571 point 3): the render rebuilt exactly from the record's inputs, with update's own code. Also
+    after an `update` kept a newer pin, where `written` differs from `rendered` (P6-F03): any edit of the person's
+    beyond pins still counts. Reads nothing but the templates."""
+    if record.inputs is None:
+        return False
+    base = rebuild.rebuild(store, record.template, record.inputs)
+    return (
+        base is not None
+        and file_fingerprint(base, record.template) == record.rendered
+        and merge.pins_only_newer(base, text)
+    )
 
 
 def _without_repeats(findings: list[Finding], records: list[Finding]) -> list[Finding]:

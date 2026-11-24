@@ -43,3 +43,4 @@ None; the ruleset is enforced by GitHub. `swerepo check` (Phase 2 and 5) will co
 - Every pull request waits for Copilot's review and for its threads to be resolved before merging.
 - Copilot's review uses the owner's AI credits, once per pull request.
 - If the owner's Copilot access lapses, the rule simply doesn't request a review; the rest of the ruleset is unaffected.
+- *Amended by ADR-20261124-023e:* point 4's "the developer never resolves them" is replaced. The agent never resolves a thread on its own; it asks the owner, and resolves only the threads the owner says yes to.
