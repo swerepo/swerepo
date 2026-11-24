@@ -41,7 +41,10 @@ The owner's choices (2026-11-23):
    - the squash commit takes the pull request's title and body.
 
    The ruleset was already current.
-4. **Fixed while applying it:** the plan asked the person to edit `ruleset.json` and CODEOWNERS even though both already held the choices given. The note now names only the flags a kept file lacks (`--mode`, `--code-owner`, `--copilot-review`), and it is left off CODEOWNERS when its SWERepo block already names the owner on every line (ADR-20261123-4e40 point 6).
+4. **Fixed while applying it:** the plan asked the person to edit `ruleset.json` and CODEOWNERS even though both already held the choices given. The note now names only the flags a kept file lacks (`--mode`, `--code-owner`, `--copilot-review`), and it is left off CODEOWNERS when its SWERepo block already names the owner on every line (ADR-20261123-4e40 point 6). After Copilot's review of PR #11:
+   - the flag is named as given (`--no-copilot-review`);
+   - code-owner review is compared in the kept ruleset's own mode when no `--mode` is given, and `--code-owner none` counts as a choice too;
+   - a file that links out of the repository is kept and never read, as elsewhere in `init`.
 
 **Alternatives considered:**
 - **Replace the hand-made ruleset with SWERepo's build.** It would add `allowed_merge_methods: ["squash"]`, which the merge settings already enforce. It would also replace a file the owner wrote for nothing. Running `init --only github --mode solo` again after deleting the file would do it.

@@ -16,7 +16,7 @@
   - the squash commit takes the PR's title and body.
 
   `swerepo check` confirms that the ruleset and the merge settings on GitHub match the committed files.
-- **Fixed while dogfooding:** the plan asked to edit `ruleset.json` and CODEOWNERS although both already held the choices given. It now names only what a kept file lacks (`TestDogfoodGithub`).
+- **Fixed while dogfooding:** the plan asked to edit `ruleset.json` and CODEOWNERS although both already held the choices given. It now names only what a kept file lacks (`TestDogfoodGithub`). Copilot's four findings on PR #11 about that note are fixed (`TestCopilotReviewPR11`): the flag as given, the kept ruleset's mode, `--code-owner none`, and links out of the repository never read.
 
 ## Next
 

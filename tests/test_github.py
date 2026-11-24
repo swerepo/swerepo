@@ -756,3 +756,41 @@ class TestDogfoodGithub:
         make(project, {".github/swerepo/ruleset.json": "[not an object]"})
         plan = plan_for(project, mode="solo")
         assert "what you gave (--mode) isn't in it" in action(plan, ".github/swerepo/ruleset.json").note
+
+
+class TestCopilotReviewPR11:
+    """Copilot's review of PR #11, each reproduced before the fix."""
+
+    def _ruleset(self, project: Path, ruleset) -> None:
+        text = ruleset if isinstance(ruleset, str) else github.as_text(ruleset)
+        make(project, {".github/swerepo/ruleset.json": text})  # hand-written, never recorded
+
+    def test_links_out_of_the_repository_are_kept_not_read(self, project: Path, tmp_path: Path):
+        (project / ".github/swerepo").mkdir(parents=True)
+        (project / ".github/CODEOWNERS").symlink_to(tmp_path / "missing-codeowners")
+        (project / ".github/swerepo/ruleset.json").symlink_to(tmp_path / "missing-ruleset.json")
+        result = CliRunner().invoke(app, ["init", "--path", str(project), "--only", "github", "--dry-run",
+                                          "--mode", "solo", "--code-owner", "@dev"])  # fmt: skip
+        assert result.exit_code == 0, result.output
+        assert result.output.count("a link out of the repository") == 2 and "isn't in it" not in result.output
+
+    def test_the_fallback_keeps_the_flag_as_given(self, project: Path):
+        self._ruleset(project, "[not an object]")
+        note = action(plan_for(project, copilot_review=False), github.RULESET_FILE).note
+        assert "what you gave (--no-copilot-review) isn't in it" in note
+
+    def test_the_kept_rulesets_mode_decides_when_none_is_given(self, project: Path):
+        team = github.BUILDERS["github/ruleset@1"](github.Settings("team", None))  # no code-owner review
+        self._ruleset(project, team)
+        note = action(plan_for(project, code_owner="@dev"), github.RULESET_FILE).note  # a user's repo: solo default
+        assert "what you gave (--code-owner) isn't in it" in note
+
+    def test_no_code_owner_is_compared_too(self, project: Path):
+        self._ruleset(project, github.BUILDERS["github/ruleset@1"](github.Settings("team", None)))
+        plan = plan_for(project, mode="team", code_owner="none")
+        assert "isn't in it" not in action(plan, github.RULESET_FILE).note  # already without code-owner review
+        self._ruleset(project, github.BUILDERS["github/ruleset@1"](github.Settings("team", "@dev")))
+        plan = plan_for(project, mode="team", code_owner="none")
+        assert "what you gave (--code-owner) isn't in it" in action(plan, github.RULESET_FILE).note
+        plan = plan_for(project, mode="team", code_owner="@dev")
+        assert "isn't in it" not in action(plan, github.RULESET_FILE).note

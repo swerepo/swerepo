@@ -844,28 +844,50 @@ class _SettingsFiles:
         return github.ruleset_mode(ruleset) if isinstance(ruleset, dict) else None
 
 
+def _flag(name: str, value: Any) -> str:
+    """The flag a choice was given with: `--no-copilot-review` for Copilot review turned off (PR #11 review)."""
+    if name == "copilot_review":
+        return "--copilot-review" if value else "--no-copilot-review"
+    return f"--{name.replace('_', '-')}"
+
+
 def _not_held(ruleset: object, settings: github.Settings, given: dict[str, Any]) -> list[str]:
     """The choices given in this run that a kept ruleset doesn't hold, as their flags: the plan asks the person to
     edit it only for those (found by dogfooding, ADR-20261123-4e40 point 6)."""
     if not isinstance(ruleset, dict):
-        return [f"--{name.replace('_', '-')}" for name, value in given.items() if value is not None]
+        return [_flag(name, value) for name, value in given.items() if value is not None]
     lacking = []
     if given.get("mode") is not None and github.ruleset_mode(ruleset) != settings.mode:
         lacking.append("--mode")
     if given.get("copilot_review") is not None and github.has_copilot_review(ruleset) != settings.copilot_review:
-        lacking.append("--copilot-review" if settings.copilot_review else "--no-copilot-review")
-    if given.get("code_owner") is not None and settings.mode == "team":  # only team mode puts the owner in it
+        lacking.append(_flag("copilot_review", settings.copilot_review))
+    if given.get("code_owner") is not None:
+        # The ruleset asks for code-owner review only in team mode, with a code owner named ("none" names nobody).
+        # The mode is the one given, else the kept ruleset's own (PR #11 review).
+        mode = settings.mode if given.get("mode") is not None else github.ruleset_mode(ruleset) or settings.mode
+        wanted = mode == "team" and settings.code_owner is not None
         rules = [r for r in ruleset.get("rules") or [] if isinstance(r, dict) and r.get("type") == "pull_request"]
         held = bool(rules) and (rules[0].get("parameters") or {}).get("require_code_owner_review") is True
-        if not held:
+        if held != wanted:
             lacking.append("--code-owner")
     return lacking
+
+
+def _kept_text(ctx: _Context, path: str) -> str | None:
+    """A kept file's text, or None when it can't be read here: a link out of the repository is never read, and a
+    missing or unreadable file has nothing to compare (PR #11 review)."""
+    if not inside(ctx.root, ctx.root / path) or not ctx.exists(path):
+        return None
+    try:
+        return ctx.read(path)
+    except InitError:
+        return None
 
 
 def _owner_in_block(ctx: _Context, path: str, owner: str | None) -> bool:
     """Whether SWERepo's block in CODEOWNERS already names this owner on every governance line."""
     try:
-        block = find_block(ctx.read(path) or "", style=comment_style(path))
+        block = find_block(_kept_text(ctx, path) or "", style=comment_style(path))
     except BlockError:
         return False
     lines = [line.split() for line in (block.content if block else "").splitlines()]
@@ -888,9 +910,9 @@ def _settings_files(ctx: _Context, choice: _GitHubChoice, given: dict[str, Any])
             explicit = any(value is not None for value in given.values())
             action = _rewrite_if_asked(ctx, action, render, explicit)
             ruleset_verb = action.verb
-            if action.verb in (CHANGED, KEEP, OUTDATED) and explicit:
+            if action.verb in (CHANGED, KEEP, OUTDATED) and explicit and action.note != _OUTSIDE:
                 try:
-                    kept = json.loads(ctx.read(path) or "")
+                    kept = json.loads(_kept_text(ctx, path) or "")
                 except json.JSONDecodeError:
                     kept = None
                 if lacking := _not_held(kept, choice.settings, given):
@@ -950,6 +972,7 @@ def _github(ctx: _Context, choice: _GitHubChoice, plan: Plan, files: _SettingsFi
         block = _managed_block(ctx, c, path, "github/codeowners", render=render)
         block = _rewrite_block_if_asked(ctx, block, render, choice.owner_given)
         kept = block.verb in (CHANGED, KEEP, OUTDATED)
+        kept = kept and block.note != _OUTSIDE  # a link out of the repository is kept, never read (PR #11 review)
         if kept and choice.owner_given and not _owner_in_block(ctx, path, settings.code_owner):
             block.note += "; the code owner you gave isn't in it: edit it yourself"
         actions.append(block)
