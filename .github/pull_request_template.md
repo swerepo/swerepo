@@ -11,5 +11,6 @@
 - [ ] Tests pass locally (`uv run pytest`), and lint is clean
 - [ ] A progress entry in `docs/progress/` (or the commit trailer `Progress: none` for a trivial change)
 - [ ] An ADR in `docs/adr/` if this changes the design, the process (CI included) or a runtime dependency
+- [ ] `SWEREPO-SPEC.md` updated if this changes behaviour, CLI flags, APIs or configuration
 - [ ] No personal emails, home-folder paths, keys or passwords in the change
 - [ ] Every review thread answered: fixed with the commit, or a reason given

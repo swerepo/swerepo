@@ -126,8 +126,8 @@ def render(name: str, settings: Settings, template_id: str | None = None) -> tup
     return builder, as_text(BUILDERS[builder](settings))
 
 
-def codeowners_lines(owner: str, *, openspec: bool = False) -> str:
-    paths = [*GOVERNANCE_PATHS, *(["/openspec/specs/"] if openspec else [])]
+def codeowners_lines(owner: str) -> str:
+    paths = list(GOVERNANCE_PATHS)
     width = max(len(p) for p in paths) + 1
     return "\n".join(f"{path:<{width}}{owner}" for path in paths)
 

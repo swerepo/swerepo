@@ -42,6 +42,7 @@ dev = [
     "pytest>=8",
     "ruff>=0.6",
     "seamspec==0.1.2",  # governs this repository (ADR-20261119-6b94); upgrade on purpose
+    "uv_build>=0.9.28,<0.10.0",  # the build backend, so a locked rule builds the wheel offline (ADR-20261124-41e9)
 ]
 
 [build-system]

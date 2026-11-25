@@ -82,7 +82,8 @@ class TestUpdate:
     def test_an_untouched_outdated_block_is_rewritten(self, repo: Path):
         as_older_agents_block(repo)
         found = action(plan(repo), "AGENTS.md")
-        assert found.verb == REWRITE and found.record is not None and found.record.template == "agents/block@2"
+        latest = STORE.latest("agents", "block").id
+        assert found.verb == REWRITE and found.record is not None and found.record.template == latest
         apply(plan(repo), repo)
         assert fingerprint(agents_block(repo)) == State.load(repo).blocks()["AGENTS.md"].written
         assert not plan(repo).changes
@@ -103,7 +104,7 @@ class TestUpdate:
 
     def test_a_conflict_is_reported_and_the_file_left_alone(self, repo: Path):
         old = as_older_agents_block(repo)
-        new = STORE.get("agents/block@2").render(State.load(repo).blocks()["AGENTS.md"].inputs or {})
+        new = STORE.latest("agents", "block").render(State.load(repo).blocks()["AGENTS.md"].inputs or {})
         changed = [a for a, b in zip(old.splitlines(), new.splitlines(), strict=False) if a != b]
         assert changed, "@1 and @2 differ somewhere"
         text = (repo / "AGENTS.md").read_text()
@@ -228,7 +229,7 @@ class TestCommands:
 
     def test_diff_shows_the_change_to_make_by_hand(self, repo: Path):
         old = as_older_agents_block(repo)
-        new = STORE.get("agents/block@2").render(State.load(repo).blocks()["AGENTS.md"].inputs or {})
+        new = STORE.latest("agents", "block").render(State.load(repo).blocks()["AGENTS.md"].inputs or {})
         first = next(a for a, b in zip(old.splitlines(), new.splitlines(), strict=False) if a != b)
         text = (repo / "AGENTS.md").read_text()
         (repo / "AGENTS.md").write_text(text.replace(first, first + " (mine)"))
@@ -257,6 +258,8 @@ class TestCommands:
         state.save(repo)
         result = CliRunner().invoke(app, ["update", "--path", str(repo), "--only", "ci"])
         assert result.exit_code == 2 and "not set up here: ci" in result.output
+        unknown = CliRunner().invoke(app, ["update", "--path", str(repo), "--only", "release"])
+        assert unknown.exit_code == 2 and "unknown component release" in unknown.output  # never "init --only release"
 
 
 class TestCheck:
@@ -450,10 +453,10 @@ class TestReviewP6:
         assert State.load(repo).values["python"] == ["3.13", "3.14"]
         assert not plan(repo).changes
 
-    def test_p6_f06_update_moves_swerepos_own_pin_to_a_release(self, repo: Path, monkeypatch):
+    def test_p6_f06_update_moves_swerepos_own_pin_to_a_release(self, unreleased, repo: Path, monkeypatch):
         from swerepo import ci
 
-        monkeypatch.setattr(ci, "released", lambda: True)
+        monkeypatch.setattr(ci, "released", lambda *_: True)
         found = plan(repo)
         workflow = action(found, WORKFLOW)
         assert workflow.verb == REWRITE and "uvx swerepo==" in (workflow.content or "")

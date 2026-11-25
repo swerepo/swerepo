@@ -1,0 +1,37 @@
+{
+  "schema_version": "1",
+  "id": "inv_4a53ca43",
+  "title": "update --dry-run writes nothing, update writes only what SWERepo wrote, and a second update writes nothing",
+  "assertion": "In a repository with files of the person's own (CLAUDE.md with CRLF line endings, README.md, a hand-made `.github/swerepo/ruleset.json`), set up by `swerepo init`, with a line of the person's after SWERepo's block in AGENTS.md, and whose AGENTS.md block was written by an older template so there is an update to apply: `swerepo update --dry-run` exits 0, names the update, and leaves every file unchanged (none added or removed; modification times, sizes and bytes, `.git` included). `swerepo update --yes` changes AGENTS.md, whose SWERepo block becomes exactly the new template's render while the text before and after the block (the person's line after it included) stays as it was, and changes, adds or removes nothing else but `.swerepo.toml`; the person's files are byte for byte as `init` left them. A second `swerepo update --yes` says \"Nothing to do.\" and leaves every file unchanged.",
+  "scope": {
+    "paths": [
+      "swerepo/init.py",
+      "swerepo/cli.py",
+      "swerepo/merge.py",
+      "swerepo/rebuild.py",
+      "swerepo/state.py",
+      "swerepo/blocks.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261124-7afa (Phase 6): update builds on init's plan, so it keeps init's promises (inv_1002d669, inv_8314036c): a dry run writes nothing, only what SWERepo wrote is updated, files SWERepo didn't write are never touched, and a second run has nothing to do. Tightened after SeamSpec's reviewer and the owner (2026-11-24): AGENTS.md must actually get the new render, deletions count as changes, and the text around the block stays, a line of the person's after it included. Replaces inv_9265607a in Phase 8 (ADR-20261124-4d76, Gemini's design review P8-D02, the owner agreed 2026-11-24): the test takes the latest agents/block version from the template store instead of naming agents/block@2, so a new block version doesn't break it. The assertion is unchanged.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_4a53ca43.py",
+    "harness_sha256": "14bd0ed2d860efed1b06de8eef2be6e19888017993af6b1ce4c13b05365ffe57",
+    "assertion_sha256": "16c8a97807cb7f21c1df5610a111587321ffb487014eb00a96815b4e4f5205e1"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-25T05:33:59.606310Z",
+  "approved_at": "2026-11-25T08:06:39.476551Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

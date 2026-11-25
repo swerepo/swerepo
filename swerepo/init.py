@@ -29,6 +29,7 @@ from typing import Any
 
 from swerepo import __version__, ci, github, merge, privacy, rebuild, standard
 from swerepo import seamspec_component as ssc
+from swerepo import spec as specs
 from swerepo.adr import AdrError, list_adrs, with_index
 from swerepo.blocks import ADR_INDEX, append_block, file_fingerprint, inside, read_exact, replace_block_content, wrap
 from swerepo.check import _UNRELEASED, UsageError, one_line
@@ -37,8 +38,6 @@ from swerepo.fingerprint import HTML, BlockError, comment_style, find_block, fin
 from swerepo.render import TemplateError, TemplateStore, parse_id
 from swerepo.state import COMPONENTS, FILE_NAME, Record, State, StateError
 
-AVAILABLE = ("docs", "agents", "ci", "security", "github", "seamspec")  # components this version of init applies
-LATER = {"openspec": 8, "release": 8}
 HOSTS = ("claude", "cursor", "vscode", "antigravity", "gemini")
 HOST_NAMES = {
     "claude": "Claude Code", "cursor": "Cursor", "vscode": "VS Code Copilot", "antigravity": "Antigravity",
@@ -48,11 +47,12 @@ RECORDED_VALUES = ("project", "adr_dir", "progress_dir", "commands", "test_inlin
 # What `update` takes from the project as it is now, not from `[values]`: each record keeps the values its own render
 # used, so moving these on never loses an earlier render (ADR-20261124-7afa point 10).
 REFRESHED_VALUES = ("commands", "test_inline")
+SPEC_NAMED_BY = ("docs", "agents", "github")  # components whose files name the spec (ADR-20261124-4d76)
 
 CREATE, ADD_BLOCK, GIT_INIT, WRITE_STATE, REWRITE = "create", "add block", "git init", "write", "rewrite"
 APPLY, WAITING = "apply", "waiting"  # GitHub settings, applied through gh after the files (ADR-20261123-4e40)
 KEEP, CURRENT, CHANGED, OUTDATED = "keep", "current", "changed", "outdated"
-ADOPT, NOTE, LATER_VERB = "adopt", "note", "later"
+ADOPT, NOTE = "adopt", "note"
 MERGE, CONFLICT, CANT_MERGE = "merge", "conflict", "can't merge"  # update (ADR-20261124-7afa)
 RUN, PROPOSE = "run", "propose"  # SeamSpec's own commands, after the files (ADR-20261124-cd64)
 CHANGING = (CREATE, ADD_BLOCK, GIT_INIT, WRITE_STATE, REWRITE, APPLY, MERGE, RUN, PROPOSE)
@@ -117,6 +117,7 @@ class Plan:
     seamspec_pin_written: str | None = None  # the SeamSpec version SWERepo's seamspec.yml pins after this run
     seamspec_installed: str | None = None  # the SeamSpec version on this machine, when it could be read
     seamspec_doctor: bool = False  # update: report `seamspec doctor` after applying (ADR-20261124-cd64 point 8)
+    spec_adopt: str | None = None  # an existing spec to record as `[adopted] spec` (ADR-20261124-4d76)
 
     @property
     def changes(self) -> list[Action]:
@@ -210,6 +211,7 @@ def compute_values(
     progress_dir: str,
     adopted_linters: list[str] | None = None,
     lint_mode: str | None = None,
+    spec: str = specs.DEFAULT,
 ) -> dict[str, str]:
     found = commands(root, detection, adopted_linters, lint_mode)
     listed = [
@@ -222,6 +224,7 @@ def compute_values(
         "project": _project_name(root),
         "adr_dir": adr_dir,
         "progress_dir": progress_dir,
+        "spec": spec,  # the spec the agents' rule names (ADR-20261124-4d76)
         "commands": "\n".join(listed),
         "test_inline": _code(found["test"] + found["lint"]),
         "install": "\n".join(found["install"]),
@@ -239,7 +242,7 @@ def resolve_components(only: list[str] | None, skip: list[str] | tuple[str, ...]
         raise UsageError(f"unknown component {', '.join(unknown)} (known: {', '.join(COMPONENTS)})")
     if only is not None and not only:
         raise UsageError(f"--only needs at least one component (known: {', '.join(COMPONENTS)})")
-    chosen = list(only) if only is not None else list(COMPONENTS[:6])
+    chosen = list(only) if only is not None else list(COMPONENTS)
     return [c for c in COMPONENTS if c in chosen and c not in skip]
 
 
@@ -521,6 +524,8 @@ def _starter(ctx: _Context, component: str, path: str, template: str, values: di
         return Action(component, KEEP, path, _OUTSIDE)
     if ctx.exists(path):
         return Action(component, KEEP, path, "yours")
+    if (ctx.root / path).is_symlink():  # a link to nothing: never written through (review P8-F01)
+        return Action(component, KEEP, path, "a link to a file that isn't there: fix it or remove it")
     text = ctx.store.latest(*template.split("/")).render(values)
     return Action(component, CREATE, path, content=text)
 
@@ -554,7 +559,26 @@ def _progress_link(progress_dir: str) -> str:
     return progress_dir.removeprefix("docs/") if progress_dir.startswith("docs/") else f"../{progress_dir}"
 
 
-def _docs(ctx: _Context, adr_dir: str, adopted: bool) -> list[Action]:
+def _spec(ctx: _Context, found: specs.Found) -> Action:
+    """The spec: followed when there is one, written as a starter when there is none, never guessed between several
+    (ADR-20261124-4d76 point 2)."""
+    c = "docs"
+    if found.several:
+        return Action(c, NOTE, None, specs.how_to_choose(found.several))
+    if found.path is None:
+        return _starter(ctx, c, specs.DEFAULT, "docs/spec", ctx.values)
+    if found.adopted:
+        if not inside(ctx.root, ctx.root / found.path):
+            return Action(c, KEEP, found.path, _OUTSIDE)  # `[adopted] spec` through a link out (review P8-F01)
+        if ctx.exists(found.path):
+            return Action(c, KEEP, found.path, "your spec (`[adopted] spec`)")
+        return Action(c, NOTE, None, f"{found.path}: `[adopted] spec` names it, but it isn't there")
+    if found.adopt:
+        return Action(c, ADOPT, found.path, "your spec: followed, recorded as `[adopted] spec`")
+    return Action(c, KEEP, found.path, "yours")
+
+
+def _docs(ctx: _Context, adr_dir: str, adopted: bool, found_spec: specs.Found) -> list[Action]:
     c, d = "docs", ctx.detection
     actions: list[Action] = []
     readme = d.documents.get("readme")
@@ -587,6 +611,7 @@ def _docs(ctx: _Context, adr_dir: str, adopted: bool) -> list[Action]:
         actions.append(Action(c, KEEP, contributing, "yours"))
     else:
         actions.append(_starter(ctx, c, "CONTRIBUTING.md", "docs/contributing", ctx.values))
+    actions.append(_spec(ctx, found_spec))
     if not d.documents.get("license"):
         actions.append(Action(c, NOTE, None, "no LICENSE: init never picks one; add the license you choose"))
     return actions
@@ -1240,7 +1265,7 @@ def _github(ctx: _Context, choice: _GitHubChoice, plan: Plan, files: _SettingsFi
     if settings.code_owner:
         path = ctx.detection.documents.get("codeowners") or github.CODEOWNERS
         template = ctx.store.latest("github", "codeowners")
-        lines = github.codeowners_lines(settings.code_owner, openspec=ctx.detection.openspec)
+        lines = github.codeowners_lines(settings.code_owner)
         render = (template.id, template.render({"lines": lines}))
         block = _managed_block(ctx, c, path, "github/codeowners", render=render, inputs={"lines": lines})
         block = _rewrite_block_if_asked(ctx, block, render, choice.owner_given)
@@ -1538,7 +1563,8 @@ def make_plan(
     progress_dir = str((state.adopted.get("progress_dir") if state else None) or standard.PROGRESS_DIR)
     # The lint choice first, so the commands the agents block lists match the CI it gets (P4-F07).
     lint_mode, kept, lint_question = _lint_mode(ctx, lint)
-    computed = compute_values(root, detection, adr_dir, progress_dir, kept, lint_mode)
+    found_spec = specs.find(root, state.adopted.get("spec") if state else None)
+    computed = compute_values(root, detection, adr_dir, progress_dir, kept, lint_mode, found_spec.name)
     ctx.before = {**computed, **{k: str(recorded[k]) for k in RECORDED_VALUES if isinstance(recorded.get(k), str)}}
     ctx.values = {**ctx.before, **({k: computed[k] for k in REFRESHED_VALUES} if update else {})}
 
@@ -1602,7 +1628,7 @@ def make_plan(
         elif component == "github" and choice is not None and files is not None:
             plan.actions += _github(ctx, choice, plan, files)
         elif component == "docs":
-            plan.actions += _docs(ctx, adr_dir, adopted)
+            plan.actions += _docs(ctx, adr_dir, adopted, found_spec)
         elif component == "agents":
             plan.actions += _agents(ctx, chosen_hosts)
             moved = isinstance(recorded.get("commands"), str) and recorded["commands"] != computed["commands"]
@@ -1611,8 +1637,6 @@ def make_plan(
                 plan.actions.append(Action("agents", NOTE, None, note))
         elif component == "seamspec":
             plan.actions += _seamspec(ctx, plan, components, shared, chosen_hosts, adr_dir)
-        else:
-            plan.actions.append(Action(component, LATER_VERB, None, f"init adds it from Phase {LATER[component]}"))
 
     if ctx.seamspec_pin is not None:
         # the pin moves only when every workflow pinning SeamSpec takes it; otherwise it stays everywhere (P7-F01)
@@ -1626,6 +1650,14 @@ def make_plan(
             note = f"the SeamSpec pin stays at {kept}: {', '.join(stuck)} can't take {ctx.seamspec_pin} yet"
             held.actions.append(Action("seamspec", NOTE, None, note))
             return held
+    named_by = [c for c in components if c in SPEC_NAMED_BY]
+    if found_spec.several and named_by and "docs" not in components:  # docs says so itself (Copilot on PR #22)
+        plan.actions.append(Action(named_by[0], NOTE, None, specs.how_to_choose(found_spec.several)))
+    if found_spec.adopt and named_by:
+        plan.spec_adopt = found_spec.adopt
+        if "docs" not in components:  # docs says so itself; otherwise say it here (review P8-F02)
+            note = "your spec, named in its files: recorded as `[adopted] spec`"
+            plan.actions.append(Action(named_by[0], ADOPT, found_spec.adopt, note))
     if ctx.update and state is not None:
         plan.actions += _dropped(ctx, components, plan.actions)
     # A component counts as applied when init could write it: ci without a workflow isn't recorded as chosen.
@@ -1633,8 +1665,7 @@ def make_plan(
     applied = [
         c
         for c in components
-        if c in AVAILABLE
-        and not (c == "ci" and (ci_result is None or not ci_result.inputs))
+        if not (c == "ci" and (ci_result is None or not ci_result.inputs))
         and not (c == "seamspec" and not plan.seamspec_set_up)
     ]
     plan.state_text = _new_state(ctx, plan, applied, adr_dir if adopted else None, shared, ci_result, privacy, choice,
@@ -1713,6 +1744,10 @@ def _new_state(
         state.set_hosts(plan.hosts)
     if adopted_adr_dir and state.adopted.get("adr_dir") != adopted_adr_dir:
         state.set_adopted("adr_dir", adopted_adr_dir)
+    # recorded whenever a component naming the spec runs, so what its files name stays put (review P8-F02); by
+    # `update` too, so a repository set up before Phase 8 adopts its spec
+    if plan.spec_adopt and set(SPEC_NAMED_BY) & set(applied) and state.adopted.get("spec") != plan.spec_adopt:
+        state.set_adopted("spec", plan.spec_adopt)
     inputs = ci_result.inputs if ci_result and ci_result.written else None
     values: dict[str, str | list[str]] = {}
     if shared is not None and (inputs is not None or privacy is not None):

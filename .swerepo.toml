@@ -27,10 +27,10 @@ hosts = ["claude", "antigravity"]
 enforce = true  # this repository has followed the PR rules from its first PR (ADR-20261121-d0f5)
 
 [blocks."AGENTS.md"]
-template = "agents/block@2"
-rendered = "f8aaa87f9549ddacc7e05cb971e15fc0202b9aedef0f59d40f703917627e2f43"
-written = "f8aaa87f9549ddacc7e05cb971e15fc0202b9aedef0f59d40f703917627e2f43"
-inputs = {adr_dir = "docs/adr", commands = "- Install: `uv sync`\n- Test: `uv run pytest`\n- Lint: `uv run ruff check .` and `uv run ruff format --check .`\n- Check the standard: `swerepo check`", progress_dir = "docs/progress", project = "swerepo"}
+template = "agents/block@3"
+rendered = "cc27f3f32c73ad4cf2f43b403a6c3bf02c7f45b3e2d4cdb3fd992ee98d80f79a"
+written = "cc27f3f32c73ad4cf2f43b403a6c3bf02c7f45b3e2d4cdb3fd992ee98d80f79a"
+inputs = {adr_dir = "docs/adr", commands = "- Install: `uv sync`\n- Test: `uv run pytest`\n- Lint: `uv run ruff check .` and `uv run ruff format --check .`\n- Check the standard: `swerepo check`", progress_dir = "docs/progress", project = "swerepo", spec = "SWEREPO-SPEC.md"}
 
 [blocks."GEMINI.md"]
 template = "agents/gemini@1"
@@ -45,15 +45,15 @@ written = "ab6e322c5609af224e19b118e3c953fd1ece1b4152c3d61ce7dc095795fa19cd"
 inputs = {}
 
 [blocks.".github/copilot-instructions.md"]
-template = "github/copilot-instructions@1"
-rendered = "30d2b2334fb0a494b9c9902b93880c15b8e8022739afda88b051a7604a7a2378"
-written = "30d2b2334fb0a494b9c9902b93880c15b8e8022739afda88b051a7604a7a2378"
-inputs = {adr_dir = "docs/adr", progress_dir = "docs/progress"}
+template = "github/copilot-instructions@2"
+rendered = "c8d443fcda8addfb41b3d38099772f1c681a323736151b91c6bf471fefa4cfaa"
+written = "c8d443fcda8addfb41b3d38099772f1c681a323736151b91c6bf471fefa4cfaa"
+inputs = {adr_dir = "docs/adr", progress_dir = "docs/progress", spec = "SWEREPO-SPEC.md"}
 [files."docs/agents/prepare-pr.md"]
-template = "agents/prepare-pr@1"
-rendered = "ccc42d0b97064ad270cb457bb87e65dff002c13ca45b3bb116f2c5dc081f7fcb"
-written = "ccc42d0b97064ad270cb457bb87e65dff002c13ca45b3bb116f2c5dc081f7fcb"
-inputs = {progress_dir = "docs/progress", test_inline = "`uv run pytest`, `uv run ruff check .` and `uv run ruff format --check .`"}
+template = "agents/prepare-pr@2"
+rendered = "cc06b91b28ffcdf447302b601d08510a68bbd1b03d71f5b051542feae26c5ea1"
+written = "cc06b91b28ffcdf447302b601d08510a68bbd1b03d71f5b051542feae26c5ea1"
+inputs = {progress_dir = "docs/progress", spec = "SWEREPO-SPEC.md", test_inline = "`uv run pytest`, `uv run ruff check .` and `uv run ruff format --check .`"}
 
 [files."docs/agents/address-review.md"]
 template = "agents/address-review@3"
@@ -69,8 +69,8 @@ inputs = {adr_dir = "docs/adr"}
 
 [files.".github/workflows/swerepo-ci.yml"]
 template = "ci/workflow@2"
-rendered = "c354b763b230d5aecaac25cfc5b9788885693e1b74083632827fcfd8b941088a"
-written = "c354b763b230d5aecaac25cfc5b9788885693e1b74083632827fcfd8b941088a"
+rendered = "2112f2a95f035fc3b5e0a10a1905895534b32011909e077d0378c5f6dd13fec4"
+written = "2112f2a95f035fc3b5e0a10a1905895534b32011909e077d0378c5f6dd13fec4"
 inputs = {copilot_review = "true", default_branch = "main", install = "uv sync --locked", lint = "ruff", linters = "", projects = "[]", python = "3.11,3.12,3.13,3.14", seamspec = "0.1.2", swerepo = "uv run --locked swerepo"}
 
 [files.".github/workflows/swerepo-privacy.yml"]
@@ -92,10 +92,16 @@ written = "914685618795734c10bcb54b0b9be984c69635b1f79848a4c0e33ace6c165ca7"
 inputs = {python_ecosystem = "uv"}
 
 [files.".github/pull_request_template.md"]
-template = "github/pr-template@1"
-rendered = "b26a98e82ad4778f617a2c3dbf84c1b91d1570252cff3acd18b2bc7a6a43cd5f"
-written = "b26a98e82ad4778f617a2c3dbf84c1b91d1570252cff3acd18b2bc7a6a43cd5f"
-inputs = {adr_dir = "docs/adr", progress_dir = "docs/progress", test_command = "uv run pytest"}
+template = "github/pr-template@2"
+rendered = "0d1e025453651aa45bad3b81a5b36db97ba0d8e8ec2ccde1bcfee9f8946bdeef"
+written = "0d1e025453651aa45bad3b81a5b36db97ba0d8e8ec2ccde1bcfee9f8946bdeef"
+inputs = {adr_dir = "docs/adr", progress_dir = "docs/progress", spec = "SWEREPO-SPEC.md", test_command = "uv run pytest"}
+
+[files."docs/agents/update-spec.md"]
+template = "agents/update-spec@1"
+rendered = "a2f039987de87d7a50d016da5796e0976d365474daedaff57da757ac4a9f5d3a"
+written = "a2f039987de87d7a50d016da5796e0976d365474daedaff57da757ac4a9f5d3a"
+inputs = {adr_dir = "docs/adr", progress_dir = "docs/progress", project = "swerepo", spec = "SWEREPO-SPEC.md"}
 [tools]
 seamspec = "0.1.2"
 
@@ -109,3 +115,6 @@ initialised = "0.1.2"
 [seamspec.adopted]
 privacy = "inv_62d51113"
 changelog = "inv_b2000e40"
+
+[adopted]
+spec = "SWEREPO-SPEC.md"

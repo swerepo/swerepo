@@ -29,6 +29,16 @@ All notable changes to this project are documented here. The format is based on 
 - `swerepo check` for `seamspec`: the hygiene rules, proposals waiting, strict mode's workflow and CODEOWNERS block, and on a person's machine the CI pin against the installed SeamSpec, `seamspec doctor` and the earned spec. With `--ci` it runs no SeamSpec command.
 - `swerepo update --only seamspec` moves the SeamSpec pin forward to the installed version, never back, with the CI workflow brought along for the pin only.
 - `agents/address-review@3`: ask before resolving review threads, and resolve only on a yes.
+- The project's spec, `SPEC.md`: `docs` writes a starter one or uses the spec a repository already has (a single `docs/SPEC.md` or root `*-SPEC.md` is recorded as `[adopted] spec`; several are listed, never guessed). The agents block, a new `update-spec.md` runbook, `prepare-pr.md`, the PR template, Copilot's review instructions and CONTRIBUTING say a change to behaviour, CLI flags, APIs or configuration updates it. `check` reports `docs.spec`.
+
+### Changed
+
+- Standard 1 has six components: `docs`, `agents`, `ci`, `security`, `github` and `seamspec`. `openspec` and `release` are gone, with their placeholders: SWERepo never sets up package publishing.
+- The `seamspec` CI job and SWERepo's `seamspec.yml` fetch tags, so locked rules can read release tags.
+
+### Fixed
+
+- `swerepo update --only <name>` with a name no component has is wrong usage, instead of advising `swerepo init --only <name>`.
 
 ### Fixed
 

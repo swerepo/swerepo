@@ -14,7 +14,7 @@
     ],
     "tags": []
   },
-  "status": "LOCKED",
+  "status": "SUPERSEDED",
   "origin": {
     "type": "manual",
     "text": "ADR-20261124-7afa (Phase 6): update builds on init's plan, so it keeps init's promises (inv_1002d669, inv_8314036c): a dry run writes nothing, only what SWERepo wrote is updated, files SWERepo didn't write are never touched, and a second run has nothing to do. Tightened after SeamSpec's reviewer and the owner (2026-11-24): AGENTS.md must actually get the new render, deletions count as changes, and the text around the block stays, a line of the person's after it included.",
@@ -22,7 +22,7 @@
   },
   "verification": {
     "runner": "pytest",
-    "harness_path": ".seamspec/tests/test_inv_9265607a.py",
+    "harness_path": ".seamspec/retired/inv_9265607a/test_inv_9265607a.py",
     "harness_sha256": "cb3ed5b216c45a37def384e6f6d53a68c3aeb032a05eef34ad7d1b8711f8e541",
     "assertion_sha256": "16c8a97807cb7f21c1df5610a111587321ffb487014eb00a96815b4e4f5205e1"
   },
@@ -30,8 +30,8 @@
   "created_at": "2026-11-24T09:11:45.035104Z",
   "approved_at": "2026-11-24T20:42:16.453508Z",
   "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
-  "superseded_by": null,
-  "status_reason": null,
+  "superseded_by": "inv_4a53ca43",
+  "status_reason": "Phase 8 adds agents/block@3 (the spec rule, ADR-20261124-4d76). The locked test names agents/block@2 as the version update moves an @1 block to, so it fails now that @3 is the latest, although update behaves exactly as the rule says. The replacement inv_4a53ca43 has the same title and the same assertion word for word; its test takes the latest agents/block version from the template store (and asserts it isn't @1) instead of naming @2, so later block versions don't break it either. Planned in Gemini's design review (P8-D02), and the owner agreed on 2026-11-24. Checked: with block/3.md removed both tests pass; with it, only the replacement does.",
   "decided_via": "terminal",
   "critical": true
 }

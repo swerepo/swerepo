@@ -1,7 +1,7 @@
 """The `swerepo` command line.
 
-Commands arrive phase by phase (docs/PROGRESS.md): `check` since Phase 2; `init` (docs, agents), `adr` and
-`progress` since Phase 3; `init` for ci and security since Phase 4.
+`check`, `init`, `update`, `diff`, `status`, `progress`, `adr`, `threads`, `privacy` and `hook`, for standard 1's six
+components (SWEREPO-SPEC §7).
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ from swerepo.init import (
     has_github_remote,
     make_plan,
     noreply_warning,
+    resolve_components,
     write_earned_spec,
 )
 from swerepo.progress import report
@@ -273,8 +274,7 @@ def init(
     path: Annotated[Path, typer.Option("--path", help="The repository to set up.")] = Path("."),
 ) -> None:
     """Set the repository up to the standard: print the plan, then apply it. Never replaces your files.
-    This version applies `docs`, `agents`, `ci`, `security`, `github` and `seamspec`; the others come in later
-    phases."""
+    The components are `docs`, `agents`, `ci`, `security`, `github` and `seamspec`."""
     interactive = _interactive() and not as_json and not yes
     try:
         components, skipped = _selection(only, ctx.args)
@@ -355,6 +355,7 @@ def _update_plan(path: Path, components: list[str] | None, skipped: list[str], c
     if state is None:
         raise UsageError("SWERepo hasn't set this repository up yet: run swerepo init")
     chosen = components if components is not None else list(state.components)
+    resolve_components(components, skipped)  # a name no component has is wrong usage first (SeamSpec's reviewer)
     missing = [c for c in chosen if c not in state.components]
     if missing:
         raise UsageError(f"not set up here: {', '.join(missing)} (swerepo init --only {','.join(missing)})")

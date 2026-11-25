@@ -27,9 +27,12 @@ from swerepo.render import TEMPLATE_ID
 
 FILE_NAME = ".swerepo.toml"
 SUPPORTED_STANDARD = 1
-COMPONENTS = ("docs", "agents", "ci", "security", "github", "seamspec", "openspec", "release")
+# Standard 1's six components (ADR-20261124-152d): no `openspec`, no `release`.
+COMPONENTS = ("docs", "agents", "ci", "security", "github", "seamspec")
 # The hygiene rules SWERepo proposes as SeamSpec rules (spec §6.8, ADR-20261124-cd64).
 HYGIENE_RULES = ("privacy", "adr-index", "changelog", "ci-tests")
+# `[adopted]` keys that name a repository-relative path: two folders and the spec file (ADR-20261124-4d76).
+ADOPTED_PATHS = ("adr_dir", "progress_dir", "spec")
 _RULE_ID = re.compile(r"^inv_[0-9a-f]{8}$")
 MODES = ("solo", "team")
 DEFAULT_EXEMPT_AUTHORS = ("dependabot[bot]",)
@@ -249,7 +252,7 @@ class State:
 
     @property
     def adopted(self) -> dict[str, Any]:
-        """Existing conventions SWERepo follows (`[adopted]`): adr_dir, progress_dir, linters."""
+        """Existing conventions SWERepo follows (`[adopted]`): adr_dir, progress_dir, spec, linters."""
         table = self.doc.get("adopted")
         return {} if table is None else table.unwrap()
 
@@ -297,9 +300,9 @@ class State:
         self._table("agents")["hosts"] = array
 
     def set_adopted(self, name: str, value: str) -> None:
-        """Record an existing convention SWERepo follows (`[adopted] adr_dir` or `progress_dir`)."""
-        if name not in ("adr_dir", "progress_dir"):
-            raise StateError(f"adopted.{name}: not a folder setting")
+        """Record an existing convention SWERepo follows (`[adopted] adr_dir`, `progress_dir` or `spec`)."""
+        if name not in ADOPTED_PATHS:
+            raise StateError(f"adopted.{name}: not a path setting")
         self._table("adopted")[name] = check_path(value, key=f"adopted.{name}")
 
     def set_adopted_linters(self, linters: list[str]) -> None:
@@ -609,7 +612,7 @@ def _validate_settings(data: dict[str, Any]) -> None:
     agents, adopted, pr = data.get("agents", {}), data.get("adopted", {}), data.get("pr", {})
     if "hosts" in agents:
         _text_list(agents["hosts"], key="agents.hosts")
-    for key in ("adr_dir", "progress_dir"):
+    for key in ADOPTED_PATHS:
         if key in adopted:
             check_path(adopted[key], key=f"adopted.{key}")
     if "linters" in adopted:

@@ -21,7 +21,6 @@ from swerepo.init import (
     CREATE,
     CURRENT,
     KEEP,
-    LATER_VERB,
     OUTDATED,
     InitError,
     apply,
@@ -31,7 +30,7 @@ from swerepo.render import TemplateStore
 from swerepo.state import FILE_NAME, Record, State
 
 TODAY = datetime.date(2026, 11, 21)
-RUNBOOKS = [f"docs/agents/{n}.md" for n in ("prepare-pr", "address-review", "record-adr")]
+RUNBOOKS = [f"docs/agents/{n}.md" for n in ("prepare-pr", "address-review", "record-adr", "update-spec")]
 MANAGED = ["docs/adr/README.md", "docs/adr/TEMPLATE.md", *RUNBOOKS]
 STARTERS = [
     "README.md",
@@ -78,7 +77,7 @@ class TestNewProject:
         report = run_check(new_project, only=["docs", "agents"])
         assert report.count(MISSING) == 0 and report.exit_code == 0
 
-    def test_the_state_file_records_what_was_written(self, new_project: Path):
+    def test_the_state_file_records_what_was_written(self, unreleased, new_project: Path):
         init(new_project, hosts=["claude", "gemini"])
         state = State.load(new_project)
         assert state.components == ["docs", "agents", "ci", "security", "github"]
@@ -205,10 +204,11 @@ class TestChoices:
         plan = make_plan(new_project, skip=["agents"])
         assert "agents" not in {a.component for a in plan.actions}
 
-    def test_components_of_later_phases_are_listed_not_applied(self, new_project: Path):
-        plan = make_plan(new_project, only=["openspec"])
-        assert [(a.component, a.verb) for a in plan.actions] == [("openspec", LATER_VERB)]
-        assert plan.state_text is None and not plan.changes
+    @pytest.mark.parametrize("name", ["openspec", "release"])
+    def test_openspec_and_release_are_not_components(self, new_project: Path, name: str):
+        """Standard 1 has six components, each one init applies (ADR-20261124-152d)."""
+        with pytest.raises(UsageError, match=f"unknown component {name}"):
+            make_plan(new_project, only=[name])
 
     def test_wrong_names_are_usage_errors(self, new_project: Path):
         with pytest.raises(UsageError, match="unknown component lint"):
@@ -379,6 +379,7 @@ class TestGeminiReviewRound1:
         make(tmp_path, {
             "README.md": "# x\n", "docs/adr/README.md": "# Ours\n", "docs/adr/0001-x.md": "# X\n",
             "docs/PROGRESS.md": "p\n", "CHANGELOG.md": "# C\n\n## [Unreleased]\n", "CONTRIBUTING.md": "c\n",
+            "SPEC.md": "s\n",
         })  # fmt: skip
         commit(tmp_path, "start")
         plan = init(tmp_path, only=["docs"])

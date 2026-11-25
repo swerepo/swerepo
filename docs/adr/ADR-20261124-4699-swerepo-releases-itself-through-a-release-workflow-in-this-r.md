@@ -102,4 +102,12 @@ ADR-20261124-41e9 proposes that nothing outside `swerepo/` ships in the wheel, s
 - Once `0.1.0` is on PyPI, SWERepo writes a pinned `uvx swerepo==0.1.0` for other repositories' `governance` and privacy jobs (§15). This repository keeps `uv run swerepo` from its own checkout.
 - Adding `release.yml` changes `.github/workflows/`, so the implementation pull request records the workflow's final shape in this ADR (the `--base` rule counts a changed ADR).
 - Tests that assumed an unreleased SWERepo (no `governance` job, no privacy workflow, `uvx --from git+…`) are made independent of the package's own version in the implementation PR, so the version bump changes no test (P8-D03).
+- **As built in Phase 8's implementation PR:** `.github/workflows/release.yml` follows points 1 and 2, with the release check written as a short inline script (version, dated changelog entry, the notes artifact). Actions are pinned to commits:
+  - `actions/checkout` v7.0.1;
+  - `astral-sh/setup-uv` v10.3.3;
+  - `actions/upload-artifact` v7.0.2 and `actions/download-artifact` v8.0.2;
+  - `actions/attest-build-provenance` v4.2.2;
+  - `pypa/gh-action-pypi-publish` v1.14.3.
+
+  zizmor 1.32.0 reports nothing. The `pypi` environment and the tag ruleset are applied separately, after the owner's yes.
 - Once `v0.1.0` exists it can't be moved or deleted, and a mistake in a release is fixed by a new version, as on PyPI.

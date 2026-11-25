@@ -148,7 +148,6 @@ class Detection:
     linters: tuple[Linter, ...]
     pytest_configured: bool
     seamspec: bool
-    openspec: bool
     errors: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
@@ -191,7 +190,6 @@ def detect(root: Path, *, ignore: tuple[str, ...] | list[str] = ()) -> Detection
         linters=_linters(root, present, pyproject, setup_cfg, tox_ini),
         pytest_configured=_pytest_configured(present, pyproject, setup_cfg, tox_ini),
         seamspec=(root / ".seamspec" / "config.toml").is_file(),
-        openspec=(root / "openspec").is_dir(),
         errors=tuple(errors),
     )
 
@@ -225,6 +223,14 @@ def _git_files(root: Path) -> list[str] | None:
         return None
     names = [n for n in result.stdout.split("\0") if n]
     return sorted({name for name in names if (root / name).is_file()})
+
+
+def list_files(root: Path) -> list[str]:
+    """The files detection reads, relative to `root`: git's (tracked, and untracked but not ignored) where git can
+    list them, else every file under `root` but the usual tool folders. Read-only."""
+    root = root.resolve()
+    files = _git_files(root)
+    return files if files is not None else _walk_files(root)
 
 
 def _walk_files(root: Path) -> list[str]:
