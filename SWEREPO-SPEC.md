@@ -1,6 +1,6 @@
 # SWERepo — Specification
 
-**Status:** draft for the owner's review · **Version:** 0.15 (design) · **Date:** 2026-11-24
+**Status:** draft for the owner's review · **Version:** 0.16 (design) · **Date:** 2026-11-24
 **Name:** SWERepo, command `swerepo`, at `github.com/swerepo/swerepo` (renamed from Golden Repo in v0.6, ADR-20261120-1a27)
 **What changed:** Appendix A. **How the BLUEPRINT's ideas were handled:** Appendix B.
 
@@ -21,7 +21,7 @@
 11. [Monorepos](#11-monorepos)
 12. [GitHub integration](#12-github-integration)
 13. [SeamSpec integration](#13-seamspec-integration)
-14. [OpenSpec integration](#14-openspec-integration)
+14. [Specs: SPEC.md](#14-specs-specmd)
 15. [`swerepo check`](#15-swerepo-check)
 16. [Updating](#16-updating)
 17. [Safety, privacy and trust](#17-safety-privacy-and-trust)
@@ -38,7 +38,7 @@
 
 **SWERepo sets up a repository the way an AI-assisted team should work, and keeps it that way.**
 
-One command, `swerepo init`, brings a new or existing Python repository up to an agent-first engineering standard: strong CI, branch rules with code review, decision records (ADRs) and a progress log, instructions for AI agents (`AGENTS.md`, `CLAUDE.md`), specs (OpenSpec, optional), and rules that agents can't quietly break (SeamSpec). `swerepo check` reports what a repository is missing. `swerepo update` (`-u`) brings it up to the latest standard, one part at a time, merging improvements into files people have edited where it can.
+One command, `swerepo init`, brings a new or existing Python repository up to an agent-first engineering standard: strong CI, branch rules with code review, decision records (ADRs) and a progress log, instructions for AI agents (`AGENTS.md`, `CLAUDE.md`), a spec of what the project does (`SPEC.md`), and rules that agents can't quietly break (SeamSpec). `swerepo check` reports what a repository is missing. `swerepo update` (`-u`) brings it up to the latest standard, one part at a time, merging improvements into files people have edited where it can.
 
 In one line: **a template tells you how to start; SWERepo also tells you where you stand, and brings you back.**
 
@@ -69,7 +69,8 @@ The standard (§6) is the product; the command line is how it is delivered.
 
 **Non-goals**
 
-- **Not a build system, package manager or framework.** It writes configuration and documents and calls other tools' setup commands; it doesn't replace uv, pytest, ruff, OpenSpec or SeamSpec.
+- **Not a build system, package manager or framework.** It writes configuration and documents and calls other tools' setup commands; it doesn't replace uv, pytest, ruff or SeamSpec.
+- **Not a release tool.** It never sets up publishing to PyPI or any other registry: a project that publishes sets that up itself (ADR-20261124-152d).
 - **Not an AI tool.** SWERepo calls no language model. It writes instructions *for* agents; it doesn't run them (like SeamSpec's model-free core).
 - **Not a policy engine for an organisation.** v0.1 works on one repository at a time. Running `check` across many repositories is a later feature (§20).
 - **Not every language.** Python first. TypeScript next (§20).
@@ -97,12 +98,12 @@ The standard (§6) is the product; the command line is how it is delivered.
 2. **Never overwrite what a person changed.** SWERepo records a fingerprint of every file and block it writes (§9). A file nobody changed can be updated; a file someone edited is updated only by a clean three-way merge shown in the plan, and otherwise left alone and reported (§16).
 3. **Add beside, don't edit.** In an existing repository, SWERepo adds its own workflow files and marked blocks; it doesn't rewrite your workflows, your README or your configuration.
 4. **Ask before anything outside the repository.** GitHub settings, installing a tool, a network call to a service: each needs a yes, or an explicit flag. Nothing is ever committed, pushed, published or merged by SWERepo.
-5. **Everything optional.** Each component (§8) can be skipped (`--no-openspec`) or applied alone (`--only seamspec`).
+5. **Everything optional.** Each component (§8) can be skipped (`--no-seamspec`) or applied alone (`--only seamspec`).
 6. **Repeatable.** Running `init` twice changes nothing the second time. `init` on a repository already at the standard is the same as `update`.
 7. **Small, reviewable steps.** On an established repository, the recommended path is one component per pull request (§10).
 8. **Honest reporting.** `check` says "missing", "changed by you", "outdated" or "can't tell (needs GitHub access)", never a vague score. The documentation says plainly what the rules can and can't stop (§17).
 9. **Built for parallel work.** Several agents on several branches at once is the normal case. Nothing in the standard asks every PR to edit the same lines of the same file (§6.5).
-10. **Few tools to install.** Python, uv, git and `gh`. Anything else (SeamSpec, OpenSpec, scanners) belongs to an optional component or runs through `uvx`.
+10. **Few tools to install.** Python, uv, git and `gh`. Anything else (SeamSpec, scanners) belongs to an optional component or runs through `uvx`.
 11. **Model-free, no telemetry.** No language model calls, no usage tracking, no data leaves the machine except the GitHub calls you approve.
 12. **Dogfooded.** SWERepo's own repository is set up by SWERepo, and its CI runs `swerepo check --ci` on itself.
 
@@ -120,6 +121,7 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
 ├── CLAUDE.md                      # @AGENTS.md + SeamSpec's block
 ├── GEMINI.md                      # points to AGENTS.md (only if Antigravity or Gemini is used)
 ├── CHANGELOG.md  CONTRIBUTING.md  SECURITY.md  README.md
+├── SPEC.md                        # what the project does and is for (§6.7)
 ├── .swerepo.toml                   # what SWERepo applied (§9)
 ├── docs/
 │   ├── PROGRESS.md                # Now / Next (edited rarely)
@@ -129,11 +131,10 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
 │   └── adr/                       # README (with generated index), TEMPLATE, ADRs
 ├── .github/
 │   ├── swerepo/                # ruleset.json, repo-settings.json (§12)
-│   ├── workflows/                 # swerepo-ci.yml, swerepo-privacy.yml, (release.yml)
+│   ├── workflows/                 # swerepo-ci.yml, swerepo-privacy.yml
 │   ├── copilot-instructions.md    # what Copilot review should and shouldn't comment on
 │   ├── CODEOWNERS  pull_request_template.md  dependabot.yml  ISSUE_TEMPLATE/
-├── .seamspec/                     # written by SeamSpec (§13)
-└── openspec/                      # written by OpenSpec, if chosen (§14)
+└── .seamspec/                     # written by SeamSpec (§13)
 ```
 
 ### 6.1 Git and GitHub (component `github`)
@@ -142,9 +143,9 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
   - **`solo`**: changes only through pull requests; required status check `ci-ok` (§6.2); no force pushes; no branch deletion; Copilot code review requested on every pull request where the account has it; review threads must be resolved when Copilot review is on.
   - **`team`**: everything in `solo`, plus one approving review, stale approvals dismissed on push, and code-owner review (which, with the CODEOWNERS below, applies to governance files only).
 - **Merge settings:** squash merging only; head branches deleted after merge. Auto-merge stays off (SWERepo never merges, and doesn't make merging unattended).
-- `.github/copilot-instructions.md`: tells Copilot review to skip style that ruff already checks, and to comment on missing ADRs and progress entries, behaviour changes without tests, changes to locked rules or CI, and security problems. Needed because resolved threads are required: every comment blocks the merge until answered.
-- `.github/pull_request_template.md`: what changed, spec and decisions touched, checklist (tests pass locally, progress entry added, ADR if needed, review threads answered).
-- `.github/CODEOWNERS` for governance paths only: `/.github/`, `/.swerepo.toml`, `/AGENTS.md`, `/CLAUDE.md`, `/docs/adr/`, `/docs/agents/`, `/.seamspec/`, `/docs/EARNED_SPEC.md`, and `/openspec/specs/` when OpenSpec is set up. The owner is asked for (default: the repository owner from `gh`), never guessed from git config.
+- `.github/copilot-instructions.md`: tells Copilot review to skip style that ruff already checks, and to comment on missing ADRs and progress entries, behaviour changes without tests or without a spec update (§6.7), changes to locked rules or CI, and security problems. Needed because resolved threads are required: every comment blocks the merge until answered.
+- `.github/pull_request_template.md`: what changed, spec and decisions touched, checklist (tests pass locally, progress entry added, ADR if needed, spec updated when behaviour changed (§6.7), review threads answered).
+- `.github/CODEOWNERS` for governance paths only: `/.github/`, `/.swerepo.toml`, `/AGENTS.md`, `/CLAUDE.md`, `/docs/adr/`, `/docs/agents/`, `/.seamspec/` and `/docs/EARNED_SPEC.md`. The spec (§6.7) is deliberately not among them: feature pull requests update it, without a code owner's review (ADR-20261124-4d76). The owner is asked for (default: the repository owner from `gh`), never guessed from git config.
   - The lines go in a marked block (`# swerepo:begin` … `# swerepo:end`) **at the end of the file**, in a new CODEOWNERS or an existing one, because in CODEOWNERS the last matching line wins. A team's own lines (per-folder owners) stay above the block.
   - If lines are later added below the block, `check` reports `~ CODEOWNERS: lines after the SWERepo block can override governance owners`, naming any that do.
 - `.github/ISSUE_TEMPLATE/` for bugs and features.
@@ -210,13 +211,14 @@ Designed so that parallel branches don't collide: each PR adds its own files, an
   - `docs/progress/YYYYMMDD-<slug>.md`: **one new file per deliverable PR** (what was done, branch or PR, ADRs and locked rules touched, what's next). Never edited by later PRs, so parallel branches never conflict.
   - `swerepo progress` prints Now, Next and the latest entries, for people and agents.
 - `CHANGELOG.md` in the Keep a Changelog format, with an `[Unreleased]` section (fragments instead: §19).
-- `CONTRIBUTING.md`: branches and PRs only, branch naming, the PR template, ADR and progress rules, how reviews are answered, which mode the repository uses and what it means (§17).
+- `CONTRIBUTING.md`: branches and PRs only, branch naming, the PR template, ADR and progress rules, keeping the spec current (§6.7), how reviews are answered, which mode the repository uses and what it means (§17).
+- `SPEC.md` (§6.7): a starter spec when the repository has none.
 - `LICENSE` only when the person adds one: SWERepo never picks a license, and the plan notes when there is none (ADR-20261121-6c3d).
 - **PR rules checked in CI** (`check --base`, §15):
   - every PR adds a progress entry, unless one of its commits carries the trailer `Progress: none` (for typo fixes and other small changes; it works in a local `check` as well as in CI);
   - a PR that adds a runtime dependency (a new name under `[project].dependencies`, not a version change) adds or changes an ADR in the same PR;
   - a PR that changes a CI workflow (`.github/workflows/`) adds or changes an ADR in the same PR, because weakening CI is a change to the process. Changes SWERepo made itself (the file matches the render recorded in `.swerepo.toml`) and changes by bots (Dependabot's action updates) don't count.
-  - Changes to `openspec/specs/` don't need an ADR: OpenSpec's proposal is already the record of that decision.
+  - The spec (§6.7) has no pull-request rule: refactors and bug fixes change code without changing intended behaviour, and a warning on each of them would teach people to ignore warnings (ADR-20261124-4d76).
 
 ### 6.6 Agent instructions (component `agents`)
 
@@ -233,22 +235,26 @@ Designed so that parallel branches don't collide: each PR adds its own files, an
   7. Answer every review thread (fix it and reply with the commit, or reply why not) before asking for a merge; `swerepo threads <pr>` lists the open ones. (The block names `swerepo threads` from the template version that ships with it, Phase 5.)
   8. Never publish a package, approve a deployment or merge without the person's explicit go-ahead.
   9. When a test fails, fix the code; never weaken the test to make it pass (and, with SeamSpec, never edit a locked rule's test: request a supersede).
+  10. A change to behaviour, CLI flags, APIs or configuration updates the spec (`SPEC.md`, or the adopted file, §6.7) in the same PR.
 - **Commands** are listed in the block, so agents never guess them: install (`uv sync`), test (`uv run pytest`), lint (`uv run ruff check` and `uv run ruff format --check`), check (`swerepo check`). They are rendered from what the project uses; an existing Makefile or task runner is listed instead when one is detected.
 - **Runbooks on demand:** step-by-step guides in `docs/agents/`, plain Markdown that every agent can read, so the block stays short. One line in the block points to them:
-  - `prepare-pr.md`: branch, tests, progress entry, ADR if needed, PR template; if the PR approves or supersedes SeamSpec rules, regenerate `docs/EARNED_SPEC.md` in the same PR (`seamspec spec --out docs/EARNED_SPEC.md`);
+  - `prepare-pr.md`: branch, tests, progress entry, ADR if needed, the spec when behaviour changed, PR template; if the PR approves or supersedes SeamSpec rules, regenerate `docs/EARNED_SPEC.md` in the same PR (`seamspec spec --out docs/EARNED_SPEC.md`);
   - `address-review.md`: `swerepo threads`, fix or reply to each thread with the commit, summary comment;
-  - `record-adr.md`: when an ADR is needed, `swerepo adr new`, index, superseding.
+  - `record-adr.md`: when an ADR is needed, `swerepo adr new`, index, superseding;
+  - `update-spec.md`: what belongs in the spec and what doesn't; on an existing codebase, start from the part a change touches instead of describing everything at once.
   Editor-specific skills and slash commands that wrap these runbooks are a later option (§20); the runbooks stay the single source.
 - Wording is kept short (a target of under 40 lines for the block): agents read it every session, and long instructions cost tokens and attention (§19.9).
 
-### 6.7 Specs (component `openspec`, optional)
+### 6.7 Specs (components `docs` and `agents`)
 
-- OpenSpec set up through its own command (§14), for teams that write specs before code.
+- **`SPEC.md`** at the root: what the project does and is for, in short sections (purpose, who it's for, behaviours, out of scope, open questions). `docs` writes it from a starter template when the repository has no spec; it is the person's from then on (§14, ADR-20261124-4d76).
+- **An existing spec is used** instead (§14): a root `SPEC.md` as it is, or a single `docs/SPEC.md` or root `*-SPEC.md` recorded as `[adopted] spec` (§9). When there are several, SWERepo lists them and the person records one.
+- **Kept current by the agents' rule** (§6.6, rule 10), `prepare-pr.md`, `update-spec.md`, the PR template's checklist, Copilot's review instructions and CONTRIBUTING, not by a CI check.
 
 ### 6.8 Locked rules (component `seamspec`)
 
 - SeamSpec set up through its own command (§13), in enforced mode, its locked rules run by the `seamspec` job in `swerepo-ci.yml` (§6.2; ADR-20261122-4a06). When SeamSpec needs a workflow of its own (the component without `ci`, or strict mode), SWERepo writes `.github/workflows/seamspec.yml` from its own template, with actions pinned to commits, so it passes the workflow audit. It runs the same steps as the `seamspec` job, `seamspec spec --check` included, and once written `update` keeps it current, also after `ci` is added; it isn't written when `requires-python` allows no Python version standard 1 knows (ADR-20261124-cd64).
-- **`docs/EARNED_SPEC.md`**: the rules SeamSpec enforces today, written by `seamspec spec --out docs/EARNED_SPEC.md` and checked in CI with `seamspec spec --check docs/EARNED_SPEC.md`. Reviewers see a change to the enforced rules as a readable diff, next to what `openspec/specs/` says was planned.
+- **`docs/EARNED_SPEC.md`**: the rules SeamSpec enforces today, written by `seamspec spec --out docs/EARNED_SPEC.md` and checked in CI with `seamspec spec --check docs/EARNED_SPEC.md`. Reviewers see a change to the enforced rules as a readable diff, next to what `SPEC.md` (§6.7) says was planned.
 - The **hygiene rule pack** proposed as SeamSpec rules, for the person to approve, each only when its component is set up (ADR-20261124-cd64):
   1. `hygiene/privacy`: no personal email addresses or home-folder paths in tracked files (same allowances as §6.4, `[privacy] allow_paths` included). With `security`.
   2. `hygiene/adr-index`: every ADR file is listed in the ADR index (`[adopted] adr_dir` respected). With `docs`, and only when the ADR README has the index markers.
@@ -256,11 +262,6 @@ Designed so that parallel branches don't collide: each PR adds its own files, an
   4. `hygiene/ci-tests`: the CI workflow still runs the test suite (`test`, and `test-<project>` for each listed project) and `ci-ok` still depends on each (so an agent can't quietly weaken CI). With `ci`.
 - A rule the repository already locks for one of these is **adopted** instead of proposed again: `[seamspec.adopted]` in `.swerepo.toml` names it (§9).
 - **The rule tests run in the target repository**, so they use only the Python standard library and pytest: no PyYAML or other packages the project may not have. Rule 4 checks the workflow by matching the text of the job and `needs:` lines SWERepo wrote, not by parsing YAML. The bundled tests pass ruff's check and format before they ship, since a locked test can't be tidied afterwards.
-
-### 6.9 Releases (component `release`, optional, for packages)
-
-- `.github/workflows/release.yml`: on a `v*` tag, checks the tag matches the code and the changelog has a dated entry, runs the tests, builds, and publishes to PyPI through trusted publishing, pausing on a protected environment until a person approves (SeamSpec's release process).
-- **Build provenance:** on public repositories, `actions/attest-build-provenance` signs a record of how each built file was made, so users can check a release came from this workflow. On private repositories it needs a paid GitHub plan; the step is skipped there by a condition in the workflow and `check` says so.
 
 ---
 
@@ -283,7 +284,7 @@ swerepo hook install                 the pre-push privacy hook (never replaces a
 swerepo --version
 ```
 
-- **Components** (`C`): `docs`, `agents`, `ci`, `security`, `github`, `seamspec`, `openspec`, `release`. `--only` selects; `--no-<component>` skips. `--seamspec` alone is shorthand for `--only seamspec` (and so for each component), on `init` and `check`.
+- **Components** (`C`): `docs`, `agents`, `ci`, `security`, `github`, `seamspec` (ADR-20261124-152d). `--only` selects; `--no-<component>` skips. `--seamspec` alone is shorthand for `--only seamspec` (and so for each component), on `init` and `check`.
 - **`--mode`**: `solo` or `team` (§12). Default: `solo` for a repository owned by a user, `team` for one owned by an organisation; always shown in the plan.
 - **`--code-owner`**: the CODEOWNERS owner of governance files, `@login` or `@org/team`, or `none` (§6.1). Default: the repository's owner when that is a user; never guessed from git config. Without one, CODEOWNERS isn't written, and `check` warns without failing.
 - **`--no-copilot-review`**: a ruleset without Copilot review, and no wait for it in CI (§12).
@@ -301,8 +302,9 @@ swerepo --version
 ```
 $ swerepo init
 SWERepo · plan for /Users/me/code/invoices (new Python project, git: yes, GitHub: me/invoices, mode: solo)
-  docs      create  docs/adr/README.md, docs/adr/TEMPLATE.md, docs/PROGRESS.md, docs/progress/, CHANGELOG.md, CONTRIBUTING.md
-  agents    create  AGENTS.md (rules, commands), CLAUDE.md (@AGENTS.md), docs/agents/ (3 runbooks)   [editors: Claude Code, Cursor]
+  docs      create  SPEC.md, docs/adr/README.md, docs/adr/TEMPLATE.md, docs/PROGRESS.md, docs/progress/, CHANGELOG.md,
+                    CONTRIBUTING.md
+  agents    create  AGENTS.md (rules, commands), CLAUDE.md (@AGENTS.md), docs/agents/ (4 runbooks)   [editors: Claude Code, Cursor]
   ci        create  .github/workflows/swerepo-ci.yml (Python 3.11–3.14);  update pyproject.toml ([tool.ruff], [tool.pytest])
   security  create  SECURITY.md, .github/workflows/swerepo-privacy.yml;  update .gitignore
   github    create  .github/swerepo/ruleset.json, repo-settings.json, copilot-instructions.md,
@@ -310,7 +312,6 @@ SWERepo · plan for /Users/me/code/invoices (new Python project, git: yes, GitHu
             ask     apply ruleset "swerepo" on main (PRs only, ci-ok required, Copilot review, threads resolved)
             ask     merge settings (squash only, delete merged branches)
   seamspec  run     seamspec init (asks its own questions);  propose 4 hygiene rules
-  openspec  skip    (not installed; `swerepo init --only openspec` after installing it)
 Apply? [y/N]
 ```
 
@@ -322,14 +323,12 @@ Each component has the same four parts: what it **writes**, what it **runs**, wh
 
 | Component | Writes | Runs | Asks | Check looks for |
 |---|---|---|---|---|
-| `docs` | ADR folder (README with index, template), PROGRESS, `docs/progress/`, CHANGELOG, CONTRIBUTING, README (when missing) | — | — (a missing license is noted, never picked) | each file present; ADR index matches the ADR files; CHANGELOG has `[Unreleased]`; with `--base`: progress entry added, ADR for new dependencies |
+| `docs` | ADR folder (README with index, template), PROGRESS, `docs/progress/`, CHANGELOG, CONTRIBUTING, README and `SPEC.md` (when missing) | — | — (a missing license is noted, never picked) | each file present; a spec present (`SPEC.md` or the adopted one); ADR index matches the ADR files; CHANGELOG has `[Unreleased]`; with `--base`: progress entry added, ADR for new dependencies |
 | `agents` | AGENTS.md block, CLAUDE.md import, GEMINI.md (each only for the editors chosen), `docs/agents/` runbooks | — | which agents and editors are in use | block and runbooks present and current; CLAUDE.md imports AGENTS.md; listed commands still exist |
 | `ci` | `swerepo-ci.yml`; ruff and pytest settings (per project in a monorepo) | — | the type checker (§19); keep existing linters or move to ruff gradually | workflow present, current or merged; `ci-ok` aggregates every job; Python versions match `requires-python`; every project root covered by a required check or recorded as not covered |
 | `security` | SECURITY.md, privacy workflow, `.gitignore` block | the privacy scan once, to report findings before committing | the security contact | files present; privacy scan clean; secret scanning on (if readable) |
 | `github` | `.github/swerepo/*.json`, copilot-instructions, PR template, CODEOWNERS, issue templates, dependabot | `gh` to apply the ruleset and merge settings | **the mode, the code owner, the ruleset and the merge settings** (always shown first); extra required checks in a monorepo | files present; SWERepo's CODEOWNERS block last; ruleset applied, or waiting for a GitHub repository; live ruleset and settings match the committed files (needs `gh`); plan limits explained |
 | `seamspec` | `docs/EARNED_SPEC.md` (through SeamSpec, after the first review; SeamSpec writes its other files) | `seamspec init`; `seamspec propose` for the rule pack; `seamspec review` if the person agrees; `seamspec spec --out` | SeamSpec asks its own consent; SWERepo asks before proposing and before starting the review | SeamSpec set up; CI pin matches the installed SeamSpec; plugin current; hygiene rules locked; earned spec current (`seamspec spec --check`) |
-| `openspec` | — (OpenSpec writes its own files) | OpenSpec's init command | before installing it, if missing | OpenSpec set up |
-| `release` | `release.yml` | — | the PyPI project name; asks whether this is a package at all | workflow present; protected environment exists (if readable) |
 
 **Generated files** are rendered from templates bundled in the package, with a few values filled in (project name, Python versions, default branch, code owner, mode). Every released template version stays in the package, so an earlier render can always be rebuilt for a three-way merge (§16). Templates are plain files at `swerepo/templates/<component>/<name>/<version>[.<ext>]` with `@@name@@` placeholders and no logic; a missing value is an error, and a released version never changes (ADR-20261120-b25a).
 
@@ -379,7 +378,6 @@ written = "77d0…"
 
 [tools]
 seamspec = "0.1.1"                # the version the CI workflow pins
-openspec = "absent"
 
 [seamspec]
 initialised = "0.1.2"             # the SeamSpec version `seamspec init` last ran with; an upgrade reruns it (§13)
@@ -389,6 +387,7 @@ privacy = "inv_62d51113"
 
 [adopted]
 adr_dir = "doc/decisions"         # an existing convention SWERepo follows instead of its own (§10)
+spec = "INVOICES-SPEC.md"         # the project's existing spec, instead of a new SPEC.md (§6.7)
 progress_dir = "docs/changes"     # where per-PR progress entries go, if not docs/progress
 linters = ["black", "flake8"]     # kept instead of ruff (§6.3)
 
@@ -422,7 +421,7 @@ linters = []
 ```
 
 - **Hashes are of normalised content** (SHA-256, 64 hex characters, ADR-20261120-9495): UTF-8, no byte-order mark, LF line endings, trailing whitespace removed from each line, exactly one final newline. Line-ending conversion and end-of-file fixers don't make a file look edited. A formatter that changes more than that (reflowing Markdown, reformatting YAML) does, and `check` reports it as `~`; the generated files are written to pass ruff and common formatters unchanged.
-- **What is recorded:** files SWERepo keeps current (the ADR README and TEMPLATE, the `docs/agents/` runbooks, workflows, settings) and its blocks. Starter files it writes once (README, PROGRESS, CHANGELOG, CONTRIBUTING, the first progress entry) are the person's from then on and not recorded. The ADR README's generated index is left out of its hash (ADR-20261121-6c3d).
+- **What is recorded:** files SWERepo keeps current (the ADR README and TEMPLATE, the `docs/agents/` runbooks, workflows, settings) and its blocks. Starter files it writes once (README, PROGRESS, CHANGELOG, CONTRIBUTING, SPEC.md, the first progress entry) are the person's from then on and not recorded. The ADR README's generated index is left out of its hash (ADR-20261121-6c3d).
 - **Edited or not:** a file whose current hash equals `written` was not edited since SWERepo last wrote it. Otherwise a person changed it, and `update` merges (§16).
 - **Read and written with tomlkit**, so comments and unknown keys survive; validated on load; an older SWERepo never overwrites a file a newer one wrote (ADR-20261120-ecf7).
 - **No secrets, no personal data** ever go in this file. `[values]` holds only what is already in the repository's own files.
@@ -442,11 +441,11 @@ Established repositories are a first-class case, not an afterthought.
 | Python versions | `requires-python` (or classifiers) | CI matrix built from it; never changed |
 | Linters and formatters | ruff, black, isort, flake8, pylint settings and pre-commit hooks | kept, or a gradual move to ruff, as the person chooses (§6.3) |
 | Existing CI | `.github/workflows/*.yml`, other CI files | never edited; `swerepo-ci.yml` added beside; overlaps reported ("you already run pytest in `tests.yml`") |
-| Existing docs | ADR-like folders (`docs/adr`, `doc/adr`, `docs/decisions`, `adr/`), CHANGELOG, CONTRIBUTING, SECURITY, a progress or status file | adopted and recorded under `[adopted]`; missing pieces only |
+| Existing docs | ADR-like folders (`docs/adr`, `doc/adr`, `docs/decisions`, `adr/`), CHANGELOG, CONTRIBUTING, SECURITY, a spec (`SPEC.md`, `docs/SPEC.md`, `<PROJECT>-SPEC.md`), a progress or status file | adopted and recorded under `[adopted]`; missing pieces only |
 | Agent files | CLAUDE.md, AGENTS.md, GEMINI.md, `.cursor/rules`, `.github/copilot-instructions.md` | marked block or import added; existing text kept; conflicts reported (an existing `copilot-instructions.md` gets a marked block, not a new file) |
 | Branch rules and merge settings | existing rulesets, classic branch protection, merge settings (through `gh`) | added to, never replaced; differences shown; changing merge settings is asked separately |
 | Monorepo | several project roots (§11) | reported; repository-level parts set up once at the root; listed Python projects get their own jobs and settings; uncovered projects named |
-| SeamSpec / OpenSpec | `.seamspec/`, `openspec/` | not re-initialised; checked and updated instead |
+| SeamSpec | `.seamspec/` | not re-initialised; checked and updated instead |
 
 **PR rules start as warnings.** In an existing repository, the pull-request rules (§6.5: progress entry, ADR for new dependencies and workflow changes) start in warn-only mode (`[pr] enforce = false`): the `governance` job reports them as warnings on the PR without failing, so teammates' PRs don't start failing the day the CI PR merges. The team switches them on in a later PR, by setting `enforce = true` or running `swerepo update --enforce-pr-rules`. The switch is always a commit, never a date that passes: CI never starts failing on its own. `check` shows how long the rules have been warn-only (`warn_since`). New projects start with `enforce = true`.
 
@@ -473,12 +472,13 @@ A **monorepo** holds several projects in one repository, for example `services/o
 - **Detection:** more than one project root below the repository root: folders with a project manifest, Python's (`pyproject.toml`, `setup.py`, `Pipfile`, or `setup.cfg` / `requirements*.txt` with Python source in the folder) or another language's (`package.json`, `go.mod`, `Cargo.toml`, `pom.xml`, `build.gradle`, `Gemfile`). Folders under `tests/`, `test/`, `testing/`, `fixtures/`, `examples/`, `example/`, `docs/`, `doc/`, `tools/`, `scripts/`, `vendor/` and `third_party/` are not projects, nor are folders listed in `[projects] ignore`; files are listed through git, so ignored folders never count (ADR-20261120-25b5).
 - **v0.1:**
   - reports the layout;
-  - sets up the repository-level parts (docs, agents, security, GitHub, the CI aggregator) once, at the root. One ADR folder and one progress folder serve every project; one progress file per PR keeps many teams from colliding;
+  - sets up the repository-level parts (docs, agents, security, GitHub, the CI aggregator) once, at the root. One ADR folder, one progress folder and one root `SPEC.md` serve every project; one progress file per PR keeps many teams from colliding;
   - adds a lint and test job per Python project only when `--projects` lists them (a folder with a `pyproject.toml`, also under a folder detection skips, such as `tools/`), each running in its own folder; the list is recorded under `[projects] listed`;
   - **settings per project:** ruff and pytest settings (§6.3) go into each listed project's own `pyproject.toml`, with that project's own linter detection and choice. Exception: when the root `pyproject.toml` already holds `[tool.ruff]` (for example a uv workspace root), the ruff settings go there once and projects inherit them, as ruff looks for the nearest configuration;
   - **projects outside `ci-ok`:** every project root not covered by a SWERepo job (unsupported languages such as TypeScript in v0.1, or Python projects not listed) is named in the plan. Its own existing CI keeps running, but the ruleset requires only `ci-ok`, so a failure there wouldn't block a merge. `init` lists the job names of the workflows that cover that folder and asks whether to require them too (recorded under `[github] extra_required_checks`, added to the ruleset beside `ci-ok`). The person can instead record the project as knowingly uncovered (`[projects] not_covered`). Until one of the two, `check` reports `✗ web/ not covered by any required check`;
   - for SeamSpec, explains its current limit (one test setup per repository; per-folder runners are on SeamSpec's roadmap) and sets it up for one project root the person chooses.
 - **v0.2, Phase 10** (§20, ADR-20261124-2452): `swerepo adr new --scope <path>`, opt-in two-tier ADRs (the root `docs/adr/` for decisions across services, `services/<name>/docs/adr/` for each service's own), and full monorepo support, following SeamSpec's per-runner folders.
+- **Two-tier specs, also v0.2, Phase 10** (ADR-20261124-4d76): a multi-service monorepo keeps a root `SPEC.md` for what spans services (system-wide behaviour, contracts between services) and `<service>/SPEC.md` in each listed service folder, beside that service's `docs/adr/`, so each team edits its own spec without merge conflicts. Inside a service, `<service>/SPEC.md` is the spec for that service's behaviour; the root `SPEC.md` covers what crosses services. The root file comes from a second template (`docs/spec-system@1`, listing the services and the contracts between them), each service's from `docs/spec@1`; a service that keeps its spec elsewhere is adopted under `[projects.adopted."<service>"] spec`. A single-service repository keeps one root `SPEC.md`.
 
 ---
 
@@ -541,13 +541,22 @@ SWERepo uses SeamSpec only through its public command line; SeamSpec needs no ch
 
 ---
 
-## 14. OpenSpec integration
+## 14. Specs: SPEC.md
 
-- **Optional**, off unless chosen or already present. OpenSpec is a separate open-source tool for writing specs before code; it runs on Node.js.
-- **Install and folder layout are taken from OpenSpec's public documentation only** (clean room: SWERepo never reads or copies OpenSpec's code). Before v0.1, confirm from those docs: the package name and install command, the init command and whether it can run without questions, the folders it creates, and how it treats an existing codebase.
-- **SWERepo runs OpenSpec's own init** and records only that it was applied; it doesn't generate OpenSpec files itself.
-- **Agent block:** when OpenSpec is set up, the `agents` block adds one line on when to use it (a change that needs a proposal first).
-- **Relation to SeamSpec:** OpenSpec specifies before code; SeamSpec locks behaviour after code. A later SeamSpec version imports OpenSpec requirements as proposed rules (SeamSpec's roadmap); SWERepo will offer it once it exists.
+- **One Markdown file and one rule** (ADR-20261124-4d76): the spec says what the project does, the ADRs say why it was decided that way, the progress entries say what each change did, and `docs/EARNED_SPEC.md` says what SeamSpec enforces today (§6.5, §6.8).
+- **Written once, then the person's:** `docs` writes `SPEC.md` from the template `docs/spec@1` only when no spec exists, and never records or updates it (§9).
+- **Finding the spec** (`init` and `update` alike; ADR-20261124-4d76, review P8-D04):
+  1. `[adopted] spec`, when set, is the spec; nothing is looked for.
+  2. Otherwise the candidates are the root `SPEC.md`, `docs/SPEC.md` and any root `*-SPEC.md`, whatever their case; `docs/EARNED_SPEC.md` never counts.
+  3. None: the starter `SPEC.md` is written, and nothing is recorded.
+  4. One: a root `SPEC.md` is kept as the default, with nothing recorded; any other is recorded as `[adopted] spec`.
+  5. Several: none is guessed. The plan lists them and how to record one, no `SPEC.md` is written, and `check` reports `✗ docs.spec` until the person chooses.
+
+  The path reaches the templates that name the spec, so recording it later brings them in line through `update`.
+- **Kept current by the people and agents who change behaviour:** the agents block's rule 10, `prepare-pr.md`, the `update-spec.md` runbook and the PR template's checklist (§6.6, §6.1). A change to the spec alone needs no ADR.
+- **What `check` looks for:** that the spec file exists (`docs.spec`). There is no pull-request rule comparing code changes with spec changes, by the owner's choice: refactors and bug fixes would trigger it constantly.
+- **Not a governance path:** the spec isn't in SWERepo's CODEOWNERS block (§6.1).
+- **OpenSpec** isn't part of standard 1. It was planned as an optional component, and its public documentation showed Node.js 22, skills installed in the person's home folder by default, old marker blocks removed from `CLAUDE.md` and `AGENTS.md` without asking, and usage statistics on by default. SeamSpec's OpenSpec importer stays planned for v0.2, Phase 12, for teams that use OpenSpec on their own (§20).
 
 ---
 
@@ -559,6 +568,7 @@ Read-only. Never changes a file, never calls GitHub without `gh` already logged 
 $ swerepo check
 SWERepo · check · /Users/me/code/legacy-api (standard 1, mode: team)
   docs      ✓ ADRs (adopted: doc/decisions, 41 files, index matches)
+            ✓ spec (adopted: LEGACY-API-SPEC.md)
             ✗ docs/PROGRESS.md missing
             ✓ CHANGELOG.md has [Unreleased]
   agents    ✗ AGENTS.md missing · ✓ CLAUDE.md (no import of AGENTS.md)
@@ -566,7 +576,6 @@ SWERepo · check · /Users/me/code/legacy-api (standard 1, mode: team)
   security  ✗ 2 personal email addresses in tracked files (README.md:12, setup.cfg:4)
   github    ✓ PR template · ✗ ruleset "swerepo" missing · ? Copilot review (no access to read it)
   seamspec  ✗ not set up
-  openspec  – not chosen
 6 missing, 0 changed by you, 0 outdated. Next: swerepo init --only docs,agents
 ```
 
@@ -582,7 +591,7 @@ SWERepo · check · /Users/me/code/legacy-api (standard 1, mode: team)
   - the ADR index matches the ADR files.
   With `[pr] enforce = false` (existing repositories at first, §10), these findings are warnings: printed, shown as annotations on the PR, but not failing `--ci`.
   Skipped for pull requests by bots listed under `[pr] exempt_authors` (default `dependabot[bot]`, passed in by the workflow) while every commit on the branch is the bot's own, and for diffs that touch only lockfiles.
-- **What this version checks** is listed in `swerepo/standard.py`; checks a later phase adds show as `?` naming that phase, never silently skipped. The header names the folder, not its absolute path, and the commit-email check counts addresses without printing them (ADR-20261120-fc5a). `--base` runs at the repository's top level; its mechanics (merge base vs working tree, PEP 503 dependency names, `--author` for the bot exemption) are in ADR-20261120-5e21. `--json` prints one JSON value and nothing else, also with `--ci`.
+- **What this version checks** is listed in `swerepo/standard.py`. A check that only a later version adds would show as `?` naming that version, never silently skipped; standard 1 has none left (ADR-20261124-152d). The header names the folder, not its absolute path, and the commit-email check counts addresses without printing them (ADR-20261120-fc5a). `--base` runs at the repository's top level; its mechanics (merge base vs working tree, PEP 503 dependency names, `--author` for the bot exemption) are in ADR-20261120-5e21. `--json` prints one JSON value and nothing else, also with `--ci`.
 - **No score.** A number invites gaming and hides what matters; the list says what to do next.
 
 ---
@@ -625,9 +634,9 @@ The rules make breaking the process **visible**; they make it **impossible** onl
 
 - **Python ≥ 3.11, uv, a single package** (`swerepo`), command `swerepo`; dependencies kept small: a command-line library, a format-preserving TOML library, and the standard library. Three-way merges use `git merge-file` (git is already required).
 - **Templates** under `swerepo/templates/<component>/`, versioned (`ci/python@1`); every released version kept.
-- **Modules:** `detect` (§10), `plan` (what to change), `render` (templates and normalised hashes), `merge` (three-way), `apply` (writes, with fingerprints), `state` (`.swerepo.toml`), `check` (§15), `github` (`gh` calls, threads), `docs` (ADR index, progress), `tools` (SeamSpec, OpenSpec bridges), `cli`.
-- **Tests:** pytest with fixture repositories (empty folder without git, fresh `uv init` project with no GitHub remote, an established project with its own CI, black and flake8, ADRs in `doc/decisions`, a CLAUDE.md and an existing CODEOWNERS, a monorepo with a TypeScript folder and a uv workspace root, two branches that each add an ADR and a progress entry), a fake `gh` and a fake `seamspec`/`openspec` on `PATH`, plus one test against the real SeamSpec. Merge tests cover clean merges, conflicts and line-ending changes.
-- **Its own repository** is set up by SWERepo (dogfooding), uses SeamSpec on its own rules, and follows the process it installs: branches and PRs, Copilot review, ADRs, progress entries, a release workflow with a human approval. It doubles as the public example of the standard.
+- **Modules:** `detect` (§10), `plan` (what to change), `render` (templates and normalised hashes), `merge` (three-way), `apply` (writes, with fingerprints), `state` (`.swerepo.toml`), `check` (§15), `github` (`gh` calls, threads), `docs` (ADR index, progress), `tools` (the SeamSpec bridge), `cli`.
+- **Tests:** pytest with fixture repositories (empty folder without git, fresh `uv init` project with no GitHub remote, an established project with its own CI, black and flake8, ADRs in `doc/decisions`, a CLAUDE.md and an existing CODEOWNERS, a monorepo with a TypeScript folder and a uv workspace root, two branches that each add an ADR and a progress entry), a fake `gh` and a fake `seamspec` on `PATH`, plus one test against the real SeamSpec. Merge tests cover clean merges, conflicts and line-ending changes.
+- **Its own repository** is set up by SWERepo (dogfooding), uses SeamSpec on its own rules, and follows the process it installs: branches and PRs, Copilot review, ADRs, progress entries, a release workflow with a human approval (its own, never part of the standard: ADR-20261124-4699). It doubles as the public example of the standard.
 - **Published on PyPI** only with the owner's explicit go-ahead for each release (as for SeamSpec).
 
 ---
@@ -639,11 +648,11 @@ The rules make breaking the process **visible**; they make it **impossible** onl
 3. **License.** *Decided:* Apache-2.0, like SeamSpec (ADR-20261119-7384).
 4. **Type checker.** None by default, mypy, pyright or ty. Proposal: none in standard 1, offered as an option. *Planned:* opt-in `--typecheck ty|pyright|mypy` in v0.2, Phase 11 (ADR-20261124-2452).
 5. **Secret scanning.** *Decided* (ADR-20261123-24e0): GitHub's secret scanning and push protection, plus SWERepo's privacy scan in CI and in a local pre-push hook. gitleaks stays an option for later, for git history and its longer list of formats (it's a separate binary).
-6. **OpenSpec details** (§14), confirmed from its public docs before building that component.
+6. **OpenSpec.** *Dropped from v0.1* (ADR-20261124-4d76): a native `SPEC.md` instead (§14). Its public documentation showed Node.js 22, skills in the person's home folder by default and usage statistics on by default.
 7. **Copilot review in rulesets.** *Decided:* rule `copilot_code_review` (parameters `review_on_push`, `review_draft_pull_requests`); it requests a review when the pull request author has Copilot code review access, so the account check is GitHub's. This repository uses it on every pull request with resolved threads required (ADR-20261120-2e50).
 8. **Should SWERepo create the branch and PR for each step** (`--pr`, through `gh`), or leave git to the person? Proposal: leave it to the person in v0.1. *Planned:* `--pr` per component in v0.2, Phase 11 (ADR-20261124-2452).
 9. **Agent instructions length.** The target is under 40 lines; measure with real sessions how much is followed. In the same sessions, check whether Claude Code reading both SeamSpec blocks through `@AGENTS.md` (mixed-editor projects, §6.6) causes confusion; if it does, switch to rendering SWERepo's block into both files.
-10. **Changelog fragments.** `CHANGELOG.md [Unreleased]` is edited by many PRs and conflicts like the old progress log did. Proposal: keep Keep a Changelog in standard 1; offer fragments (`changelog.d/`, compiled at release) as an option once the release component needs it. *Planned:* v0.2, Phase 11 (ADR-20261124-2452).
+10. **Changelog fragments.** `CHANGELOG.md [Unreleased]` is edited by many PRs and conflicts like the old progress log did. Proposal: keep Keep a Changelog in standard 1; offer fragments (`changelog.d/`, compiled at release) as an option later. *Planned:* v0.2, Phase 11 (ADR-20261124-2452).
 11. **Default mode for user-owned repositories with agent identities.** If SWERepo can tell that recent PRs come from a machine account, should it propose `team` mode?
 
 ---
@@ -651,11 +660,11 @@ The rules make breaking the process **visible**; they make it **impossible** onl
 ## 20. Roadmap
 
 **v0.1 — Python, one repository**
-Built in this order: `check` (with `--base`); then `init`, `update`/`-u` with three-way merge, `diff`, `status`, `progress`, `adr`, `threads`; components `docs`, `agents`, `ci`, `security`, `github` (both modes); then `seamspec`; `openspec` if its docs confirm a clean non-interactive init; `release` optional. Existing-repository detection and adoption; `.swerepo.toml`; tests on fixture repositories; dogfooded on its own repository and on one established repository of the owner's.
+Built in this order: `check` (with `--base`); then `init`, `update`/`-u` with three-way merge, `diff`, `status`, `progress`, `adr`, `threads`; components `docs`, `agents`, `ci`, `security`, `github` (both modes); then `seamspec`; then the native `SPEC.md` in `docs` and `agents` (ADR-20261124-4d76). Six components in all: no `openspec` and no `release` (ADR-20261124-152d). Existing-repository detection and adoption; `.swerepo.toml`; tests on fixture repositories; dogfooded on its own repository and on one established repository of the owner's.
 
 **v0.2**, in four phases after v0.1, each closed by a peer review (ADR-20261124-2452):
 - **Phase 9, enterprise multi-branch governance:** long-lived environment branches (`develop` for staging, `release` for production) chosen with `--protected-branches`; protected in `ruleset.json` like the default branch, `deletion` included, so `delete_branch_on_merge` never deletes `develop`; `["squash", "merge"]` allowed in `ruleset.json` and `repo-settings.json` for clean `develop → release` merges; `swerepo-ci.yml`'s `push.branches` and the agent instructions kept in step (§12).
-- **Phase 10, multi-service monorepos and federated ADRs:** `swerepo adr new --scope <path>`; opt-in two-tier ADRs when `--projects` lists several roots (the root `docs/adr/` for decisions across services, `services/<name>/docs/adr/` for each service's own, so teams don't collide on one index and CODEOWNERS works per service); full monorepo support (§11).
+- **Phase 10, multi-service monorepos and federated ADRs:** `swerepo adr new --scope <path>`; opt-in two-tier ADRs when `--projects` lists several roots (the root `docs/adr/` for decisions across services, `services/<name>/docs/adr/` for each service's own, so teams don't collide on one index and CODEOWNERS works per service); full monorepo support (§11); two-tier specs, a root `SPEC.md` for what spans services and `<service>/SPEC.md` for each listed service (§11, ADR-20261124-4d76).
 - **Phase 11, broader Python and ergonomics for agents:** Poetry and `requirements.txt` projects in CI; an opt-in type checker (`--typecheck ty|pyright|mypy`, §19.4); `swerepo progress new`; changelog fragments (§19.10); `--pr` per component (§19.8); editor command wrappers around the `docs/agents/` runbooks.
 - **Phase 12, TypeScript and polyglot monorepos:** npm and pnpm, vitest and jest, biome, eslint and prettier, matching SeamSpec's presets; SeamSpec's OpenSpec importer once it ships.
 
@@ -678,7 +687,7 @@ Built in this order: `check` (with `--base`); then `init`, `update`/`-u` with th
 | A solo developer locked out of merging | `solo` mode by default on user-owned repositories |
 | People believing the rules stop an agent that uses their login | §17 says plainly what is and isn't a lock; `check` reports the mode |
 | Copilot review threads blocking merges with noise | `copilot-instructions.md` tuned to skip style; thread resolution required only where Copilot review is on |
-| Dependence on other tools (gh, SeamSpec, OpenSpec) changing | Use only their documented commands; test against fakes and one real version; report clearly when a tool is missing or too old (SeamSpec 0.1.1's `--json` lesson) |
+| Dependence on other tools (gh, SeamSpec) changing | Use only their documented commands; test against fakes and one real version; report clearly when a tool is missing or too old (SeamSpec 0.1.1's `--json` lesson) |
 | An existing codebase failing a new linter on day one | Existing linters kept by default; a move to ruff checks only the files each PR changes (§6.3) |
 | Teammates' PRs failing new PR rules on day one | Warn-only mode in existing repositories, switched on by a commit (§10) |
 | A monorepo project silently outside the required checks | Named in the plan; its checks required or knowingly recorded as not covered (§11) |
@@ -689,6 +698,16 @@ Built in this order: `check` (with `--base`); then `init`, `update`/`-u` with th
 ---
 
 ## Appendix A: Revision history
+
+### 0.15 → 0.16
+
+Decisions for Phase 8 (the owner's, 2026-11-24):
+
+1. **A native `SPEC.md` instead of OpenSpec** (ADR-20261124-4d76): `docs` writes a starter `SPEC.md` or adopts an existing spec (`[adopted] spec`); the agents block, `prepare-pr.md`, a new `update-spec.md` runbook and the PR template carry the rule that a change to behaviour updates it; `check` looks only for the file, with no pull-request rule; it stays out of CODEOWNERS; two-tier specs planned for v0.2, Phase 10 (§1, §6, §6.1, §6.5, §6.6, §6.7, §8, §9, §10, §11, §14, §19.6, §20).
+2. **Six components** (ADR-20261124-152d): `openspec` and `release` removed; SWERepo never sets up package publishing (§3, §5, §7, §8, §9, §15, §18, §20, §21, Appendix B).
+3. **SWERepo's own releases** (ADR-20261124-4699): `release.yml` in this repository only, publishing the approved, attested build through trusted publishing (§18).
+4. **Two rules guard the shipped package** (ADR-20261124-41e9): nothing outside `swerepo/` in the wheel and no publishing in the code; released templates and the renders built in code never change, checked against every `v*` tag.
+5. **After Gemini's design review** (`P8-D01` to `P8-D09`): how the spec is found when there are none, one or several candidates (§6.7, §14); Copilot's instructions and CONTRIBUTING mention the spec (§6.1, §6.5); §15's example and its rule for later checks; the release workflow's job graph, checksums, `main`-ancestry check, uncached setup, the locked rules at the tag and a protected `v*` tag (ADR-20261124-4699); each release's snapshot of the renders built in code, required and checked before its tag (ADR-20261124-41e9).
 
 ### 0.14 → 0.15
 
@@ -842,6 +861,6 @@ Gaps found by walking through a new project, a mature repository and a monorepo 
 | Architecture layer contracts (import-linter) | **Deferred**, optional (§20) | A new project has no layers yet; generic contracts add little |
 | Diff-coverage gate (≥ 85%) | **Deferred**, optional (§20) | Agents can meet a coverage number with tests that check nothing |
 | `required_linear_history`, strict status checks | **Not taken** / option (§12) | Linear history follows from squash-only; strict checks force constant rebasing |
-| SLSA build provenance on release | **Taken**, public repositories only (§6.9) | A few lines in the optional release workflow; needs a paid plan on private repositories |
+| SLSA build provenance on release | **Taken for SWERepo's own releases** (ADR-20261124-4699), not part of the standard | SWERepo sets up no publishing (ADR-20261124-152d) |
 | `BRAINDUMP.md`, `docs/ARCHITECTURE.md` | **Not taken** in standard 1 | Not needed by the core process; easy to add later |
 | Public showcase repository | **Taken** as SWERepo's own dogfooded repository (§18) | One repository, not two |
