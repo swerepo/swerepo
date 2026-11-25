@@ -90,11 +90,14 @@ HYGIENE = {
             "ci-tests", "ci", 1,
             "CI still runs the tests, and ci-ok still needs them",
             "In .github/workflows/swerepo-ci.yml, a test job, and a test-<project> job for every folder in "
-            ".swerepo.toml's [projects] listed, each runs `uv run pytest`, is not switched off (if: false) and not "
-            "allowed to fail (continue-on-error: true) at job or step level, and isn't masked (|| or ;, &, --version, "
-            "--help, --collect-only). ci-ok's needs names each of them, and ci-ok still fails when one fails: it runs "
-            "if: always(), isn't allowed to fail, and has a step that reads the jobs' results (NEEDS: "
-            "${{ toJSON(needs) }}) and can exit non-zero.",
+            ".swerepo.toml's [projects] listed, each runs `uv run pytest` as a command of its own at the top of its "
+            "step's script, is not switched off (if: false) and not allowed to fail (continue-on-error: true) at job "
+            "or step level, and isn't masked (||, ;, a pipe, &, --version, --help, --collect-only, && unless it is "
+            "the script's last command). ci-ok's needs names each of them, and ci-ok still fails when one fails: it "
+            "runs if: always(), isn't allowed to fail, and has a step that reads the jobs' results (NEEDS: "
+            "${{ toJSON(needs) }}) into a variable and then runs `if [ -n \"$var\" ]; then` with a non-zero `exit` "
+            "before any other. Both steps stop at their first failing command: GitHub's own bash or sh, no set +e, "
+            "and no exit before them.",
             (".github/workflows/swerepo-ci.yml", ".swerepo.toml"),
         ),
     )

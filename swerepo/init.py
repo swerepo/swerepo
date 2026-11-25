@@ -259,7 +259,6 @@ class _Context:
     terminal: bool = False  # a person at a terminal: SeamSpec's own setup may run there (ADR-20261124-cd64)
     adopt: dict[str, str] = field(default_factory=dict)  # hygiene rule -> a locked rule of the repository's own
     seamspec_pin: str | None = None  # update: the installed SeamSpec, newer than the pin (ADR-20261124-cd64 point 8)
-    pin_only: bool = False  # ci brought along by the SeamSpec pin: recorded values, only the pin moves
 
     def exists(self, path: str) -> bool:
         return (self.root / path).is_file()
@@ -269,12 +268,6 @@ class _Context:
             return read_exact(self.root / path, errors="surrogateescape")
         except OSError as error:  # the reason only: the error's own text names the absolute path
             raise InitError(f"{path}: can't read it ({error.strerror or type(error).__name__})") from error
-
-
-def _refreshes(ctx: _Context) -> bool:
-    """Whether this run takes values from the project as it is now (`update`, review P6-F06), not as recorded: never
-    for `ci` brought along by the SeamSpec pin alone (ADR-20261124-cd64 point 8)."""
-    return ctx.update and not ctx.pin_only
 
 
 def _managed_file(
@@ -654,7 +647,7 @@ def _command(ctx: _Context, shared: _Workflows, name: str) -> tuple[str, str]:
     """The SWERepo command for one workflow: its recorded one (a valid one; P4-F03), unless none was recorded or
     `--with-governance` asks for one where there was none."""
     recorded = ctx.state.values.get(name) if ctx.state else None
-    if _refreshes(ctx) and shared.swerepo:  # update moves the pin to this release; never to "" (review P6-F06)
+    if ctx.update and shared.swerepo:  # update moves the pin to this release; never to "" (review P6-F06)
         return shared.swerepo, ""
     if ci.valid_swerepo_command(recorded) and (recorded or not shared.with_governance):
         return str(recorded), ("" if recorded else shared.swerepo_note)
@@ -787,7 +780,7 @@ def _project_inputs(ctx: _Context, folders: list[str]) -> tuple[list[Action], li
     recorded = ctx.state.project_inputs if ctx.state and standard.CI_WORKFLOW in ctx.state.files() else {}
     for folder in folders:
         project = ci.Project.from_inputs(folder, recorded[folder]) if folder in recorded else None
-        if project is not None and _refreshes(ctx):  # update: the project's requires-python as it is now (P6-F06)
+        if project is not None and ctx.update:  # update: the project's requires-python as it is now (P6-F06)
             python, _ = ci.python_versions(detect(ctx.root / folder))
             if python:
                 project = dataclasses.replace(project, python=[str(v) for v in python])
@@ -865,7 +858,7 @@ def _ci(
     actions: list[Action] = []
     install, install_note = ci.install_command(ctx.root)
     recorded_python = _recorded(ctx, standard.CI_WORKFLOW, "python")
-    keep = _valid_python(recorded_python) and not (_refreshes(ctx) and shared.python)  # update: requires-python
+    keep = _valid_python(recorded_python) and not (ctx.update and shared.python)  # update: requires-python
     python = [str(v) for v in recorded_python] if keep else shared.python  # type: ignore[union-attr]
     python_note = "" if python is not shared.python else shared.python_note
     if install is None or not python:
@@ -929,6 +922,27 @@ def _ci(
     return _CiResult(actions, inputs, workflow.verb in WRITTEN)
 
 
+def _ci_pin_only(ctx: _Context) -> _CiResult | None:
+    """ci brought along by the SeamSpec pin (ADR-20261124-cd64 point 8): the recorded workflow rebuilt from its recorded
+    template and inputs with only `seamspec` moved, nothing else of ci (PR #20 review). None when no workflow is
+    recorded, so none pins SeamSpec for SWERepo."""
+    c, path = "ci", standard.CI_WORKFLOW
+    record = ctx.state.files().get(path) if ctx.state else None
+    if record is None or ctx.seamspec_pin is None:
+        return None
+    inputs = {**record.inputs, "seamspec": ctx.seamspec_pin} if record.inputs else None
+    text = rebuild.rebuild(ctx.store, record.template, inputs) if inputs else None
+    try:
+        workflow = rebuild.workflow_from(inputs) if inputs and text is not None else None
+    except (KeyError, ValueError, TypeError):
+        workflow = None
+    if inputs is None or text is None or workflow is None:
+        note = f"{path}: its record can't rebuild it with the new SeamSpec pin; run `swerepo update --only ci` first"
+        return _CiResult([Action(c, NOTE, None, note)], None, False)
+    action = _managed_file(ctx, c, path, ci.WORKFLOW, render=(record.template, text), inputs=inputs)
+    return _CiResult([action], workflow, action.verb in WRITTEN)
+
+
 CONTACTS = ("github", "placeholder")  # or an email address the person types
 _CONTACT_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
 
@@ -973,7 +987,7 @@ def _security(ctx: _Context, shared: _Workflows, contact: str | None) -> tuple[l
     if command:
         template = ctx.store.latest("security", "privacy-workflow")
         recorded_python = _recorded(ctx, standard.PRIVACY_WORKFLOW, "privacy_python")
-        keep = recorded_python in KNOWN_PYTHONS and not (_refreshes(ctx) and shared.python)  # P6-F06
+        keep = recorded_python in KNOWN_PYTHONS and not (ctx.update and shared.python)  # P6-F06
         main = str(recorded_python) if keep else (shared.python or ci.DEFAULT_PYTHONS)[-1]
         values = {"default_branch": shared.default_branch, "python_main": main, "swerepo": command}
         render = (template.id, template.render(values))
@@ -1370,7 +1384,8 @@ def _seamspec(
         actions.append(Action(c, WAITING, None, note))
     set_up = ledger.set_up or plan.seamspec_run is not None  # SeamSpec there, or set up in this run
     ready = (ledger.set_up and found is not None) or plan.seamspec_run is not None  # its commands can run too
-    if set_up and ("ci" not in chosen or ledger.mode == "strict"):  # nothing else runs the rules, or strict wants it
+    recorded = ctx.state is not None and ssc.WORKFLOW in ctx.state.files()  # written before: kept up to date (PR #20)
+    if set_up and ("ci" not in chosen or ledger.mode == "strict" or recorded):  # nothing else runs the rules, or ...
         actions += _seamspec_workflow(ctx, plan, shared)
     elif ctx.exists(ssc.WORKFLOW) and ssc.unpinned(ctx.read(ssc.WORKFLOW)):  # SeamSpec's own, from `--ci` (P7-F06)
         note = f"{ssc.WORKFLOW}: actions not pinned to commits, so the workflow audit fails; pin them, or delete it"
@@ -1435,12 +1450,14 @@ def _seamspec_workflow(ctx: _Context, plan: Plan, shared: _Workflows | None) -> 
     install, note = ci.install_command(ctx.root)
     if install is None:
         return [Action(c, NOTE, None, f"{ssc.WORKFLOW} not written: {note}")]
-    python = shared.python if shared is not None else ci.python_versions(ctx.detection)[0]
+    python, python_note = ci.python_versions(ctx.detection) if shared is None else (shared.python, shared.python_note)
+    if not python:  # requires-python allows no version standard 1 knows: no guessing one (PR #20 review)
+        return [Action(c, NOTE, None, f"{ssc.WORKFLOW} not written: {python_note}")]
     recorded_branch = ctx.state.values.get("default_branch") if ctx.state else None
     branch = shared.default_branch if shared is not None else str(recorded_branch or ci.default_branch(ctx.root))
     pin = ctx.seamspec_pin or ci.seamspec_pin(ctx.state.tools.get("seamspec") if ctx.state else None)
     template = ctx.store.latest("seamspec", "workflow")
-    values = {"default_branch": branch, "python_main": (python or list(ci.DEFAULT_PYTHONS))[-1], "install": install,
+    values = {"default_branch": branch, "python_main": python[-1], "install": install,
               "seamspec": pin}  # fmt: skip
     render = (template.id, template.render(values))
     inputs = rebuild.used(template, values)
@@ -1570,11 +1587,11 @@ def make_plan(
         if component == "ci" and shared is not None:
             # ci brought along by github alone changes only for the Copilot wait, as init does: never for ci's own
             # updates, which the person didn't ask for (review P6-F08)
-            ci_ctx = ctx
-            if pin_along:
-                ci_ctx = dataclasses.replace(ctx, pin_only=True)
-            elif ci_along:
-                ci_ctx = dataclasses.replace(ctx, update=False)
+            if pin_along:  # the pin alone: the recorded workflow, rebuilt with only it moved (PR #20 review)
+                ci_result = _ci_pin_only(ctx)
+                plan.actions += ci_result.actions if ci_result else []
+                continue
+            ci_ctx = dataclasses.replace(ctx, update=False) if ci_along else ctx
             ci_result = _ci(ci_ctx, shared, (lint_mode, kept), projects, copilot, asked=choice is not None)
             plan.actions += ci_result.actions
             plan.lint_question = lint_question and ci_result.inputs is not None
@@ -1600,8 +1617,10 @@ def make_plan(
     if ctx.seamspec_pin is not None:
         # the pin moves only when every workflow pinning SeamSpec takes it; otherwise it stays everywhere (P7-F01)
         ss = next((a for a in plan.actions if a.path == ssc.WORKFLOW), None)
-        stuck = [path for path, took in ((standard.CI_WORKFLOW, ci_result is None or ci_result.written),
-                                         (ssc.WORKFLOW, ss is None or ss.verb in WRITTEN)) if not took]  # fmt: skip
+        recorded = state.files() if state else {}  # a recorded workflow ci doesn't plan (--no-ci) can't take it
+        ci_took = ci_result.written if ci_result is not None else standard.CI_WORKFLOW not in recorded
+        ss_took = ss.verb in WRITTEN if ss is not None else ssc.WORKFLOW not in recorded
+        stuck = [path for path, took in ((standard.CI_WORKFLOW, ci_took), (ssc.WORKFLOW, ss_took)) if not took]
         if stuck:
             held, kept = make_plan(**{**call, "hold_pin": True}), state.tools.get("seamspec") if state else None
             note = f"the SeamSpec pin stays at {kept}: {', '.join(stuck)} can't take {ctx.seamspec_pin} yet"

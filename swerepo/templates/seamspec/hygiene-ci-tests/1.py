@@ -2,14 +2,17 @@
 it, so an agent can't quietly weaken CI.
 
 In `.github/workflows/swerepo-ci.yml`: a `test` job, and a `test-<project>` job for every folder in `.swerepo.toml`'s
-`[projects] listed`. Each has a step that runs `uv run pytest` (`uv run` options such as `--locked` allowed), not
-masked (`|| …`, `; …`, `… &`, `--version`, `--help`, `--collect-only`; folded `run: >` blocks and lines ending in a
-backslash are joined first), and neither the job nor that step is switched off (`if: false`, also quoted or as `${{
-false }}`) or allowed to fail (`continue-on-error: true`, likewise). `ci-ok`'s `needs:` names each of these jobs, and
-`ci-ok` still fails when one of them fails: it runs `if: always()` (a skipped required check counts as passed), isn't
-allowed to fail, and has a step, neither switched off nor allowed to fail, that reads the jobs' results (`NEEDS: ${{
-toJSON(needs) }}`, then `$NEEDS` and `.result`) and can `exit` non-zero. Read as text, not parsed as YAML: action
-pins, comments and the order of jobs don't matter. Standard library and pytest only.
+`[projects] listed`. Each has a step that runs `uv run pytest` (`uv run` options such as `--locked` allowed) as a
+command of its own at the top of the script, not masked (`|| …`, `; …`, `| …`, `… &`, `--version`, `--help`,
+`--collect-only`; `&& …` only as the script's last command; folded `run: >` blocks and lines ending in a backslash are
+joined first), and neither the job nor that step is switched off (`if: false`, also quoted or as `${{ false }}`) or
+allowed to fail (`continue-on-error: true`, likewise). `ci-ok`'s `needs:` names each of these jobs, and `ci-ok` still
+fails when one of them fails: it runs `if: always()` (a skipped required check counts as passed), isn't allowed to
+fail, and has a step, neither switched off nor allowed to fail, that reads the jobs' results into a variable (`NEEDS:
+${{ toJSON(needs) }}`, then `var=$(… "$NEEDS" …)` with `.result` in the script) and fails on it: `if [ -n "$var" ];
+then`, then `exit` with a non-zero number before any other `exit` and before the `fi`. Either step stops at its first
+failing command: GitHub's own `bash` or `sh` (not another `shell:`), no `set +e`, and no `exit` before it. Read as
+text, not parsed as YAML: action pins, comments and the order of jobs don't matter. Standard library and pytest only.
 """
 
 import re
@@ -22,14 +25,20 @@ ROOT = next(p for p in Path(__file__).resolve().parents if (p / ".seamspec" / "c
 WORKFLOW = ".github/workflows/swerepo-ci.yml"
 JOB = re.compile(r"^  (?P<name>[A-Za-z0-9_-]+):\s*(?:#.*)?$")
 PYTEST = re.compile(r"^uv run(?: --?[A-Za-z0-9][\w-]*(?:=\S+)?)* pytest(?P<rest>(?:\s.*)?)$")
-NOT_A_RUN = re.compile(r"\|\||;|(?<!&)&(?!&)|(?:^|\s)(?:--version|--help|-h|--collect-only|--co)(?:\s|$)")
+NOT_A_RUN = re.compile(r"\||;|(?<!&)&(?!&)|(?:^|\s)(?:--version|--help|-h|--collect-only|--co)(?:\s|$)")
 OFF = re.compile(r"^\s*if:\s*(?:\$\{\{\s*)?[\'\"]?false[\'\"]?\s*(?:\}\})?\s*(?:#.*)?$", re.IGNORECASE)
 MAY_FAIL = re.compile(
     r"^\s*continue-on-error:\s*(?:\$\{\{\s*)?[\'\"]?true[\'\"]?\s*(?:\}\})?\s*(?:#.*)?$", re.IGNORECASE
 )
 ALWAYS = re.compile(r"^    if:\s*(?:\$\{\{\s*)?always\(\)\s*(?:\}\})?\s*(?:#.*)?$")
 NEEDS_ENV = re.compile(r"^\s*NEEDS:\s*\$\{\{\s*toJSON\(needs\)\s*\}\}\s*(?:#.*)?$")
-EXITS = re.compile(r"^exit\s+(?:[1-9]|\$)")
+EXIT = re.compile(r"^(?:exit|return)\b(?P<code>.*)$")
+FAILS = re.compile(r"^\s*[1-9][0-9]*\s*$")  # `exit 1`: a non-zero number
+ERREXIT_OFF = re.compile(r"\bset\b[^;&|]*(?:\s\+[A-Za-z]*e|\+o\s+errexit)")  # `set +e`, `set +eu`, `set +o errexit`
+SHELL = re.compile(r"^\s*shell:\s*(?P<shell>.*?)\s*(?:#.*)?$")
+ASSIGN = re.compile(r"^(?P<var>[A-Za-z_][A-Za-z0-9_]*)=\$\(.*\$\{?NEEDS\b")
+OPENS = re.compile(r"^(?:if|for|while|until|case|select)\b|\{$")
+CLOSES = re.compile(r"(?:^|;\s*)(?:fi|done|esac|\})$")
 NEEDS_INLINE = re.compile(r"^    needs:\s*\[(?P<items>[^\]]*)\]")
 NEEDS_BLOCK = re.compile(r"^    needs:\s*(?:#.*)?$")
 NEEDS_ITEM = re.compile(r"^      -\s+(?P<name>[A-Za-z0-9_-]+)\s*(?:#.*)?$")
@@ -57,6 +66,18 @@ def _jobs(text: str) -> dict[str, list[str]]:
         elif current is not None:
             jobs[current].append(line)
     return jobs
+
+
+def _defaults(lines: list[str], indent: int) -> list[str]:
+    """The lines of a `defaults:` key at `indent` spaces: the workflow's (0) or a job's (4)."""
+    found: list[str] = []
+    inside = False
+    for line in lines:
+        if line.strip() and _indent(line) <= indent:
+            inside = _indent(line) == indent and line.strip().startswith("defaults:")
+        elif inside:
+            found.append(line)
+    return found
 
 
 def _job_keys(lines: list[str]) -> list[str]:
@@ -108,25 +129,73 @@ def _commands(step: list[str]) -> list[str]:
     return commands
 
 
-def _runs_the_tests(step: list[str]) -> bool:
+def _shell_ok(lines: list[str]) -> bool:
+    """No `shell:` other than GitHub's own `bash` or `sh` (both stop at the first failing command)."""
+    return all(m["shell"].strip("'\"") in ("bash", "sh") for line in lines if (m := SHELL.match(line)))
+
+
+def _script(step: list[str], shell_ok: bool) -> list[tuple[int, str]] | None:
+    """The step's commands with their depth (0: the top of the script, 1: inside one `if`, `for` …), comments off;
+    None when the step doesn't stop at a failing command: switched off, allowed to fail, another shell or `set +e`."""
+    if not shell_ok or not _shell_ok(step):
+        return None
     if any(_indent(line) == 8 and (OFF.match(line) or MAY_FAIL.match(line)) for line in step):
-        return False
+        return None
+    script, depth = [], 0
     for command in _commands(step):
-        match = PYTEST.match(command.split("#", 1)[0].strip())
-        if match and not NOT_A_RUN.search(match["rest"]):
+        line = command.split("#", 1)[0].strip()
+        if ERREXIT_OFF.search(line):
+            return None
+        if not line:
+            continue
+        closes = bool(CLOSES.search(line))
+        if closes and not OPENS.search(line):
+            depth = max(depth - 1, 0)
+        script.append((depth, line))
+        if OPENS.search(line) and not closes:
+            depth += 1
+    return script
+
+
+def _runs_the_tests(step: list[str], shell_ok: bool = True) -> bool:
+    """Whether a failing test fails the step: `uv run pytest` at the top of the script, not masked, with no `exit`
+    before it, and `&& …` after it only as the script's last command."""
+    script = _script(step, shell_ok)
+    for i, (depth, line) in enumerate(script or []):
+        if depth == 0 and EXIT.match(line):
+            return False
+        match = PYTEST.match(line) if depth == 0 else None
+        if match and not NOT_A_RUN.search(match["rest"]) and ("&&" not in match["rest"] or i == len(script) - 1):
             return True
     return False
 
 
-def _judges(step: list[str]) -> bool:
-    """Whether a step fails `ci-ok` when a needed job's result is wrong: it reads every job's result and can exit
-    non-zero, and is neither switched off nor allowed to fail."""
-    if any(_indent(line) == 8 and (OFF.match(line) or MAY_FAIL.match(line)) for line in step):
+def _judges(step: list[str], shell_ok: bool = True) -> bool:
+    """Whether a step fails `ci-ok` when a needed job's result is wrong: it reads the results into a variable, then
+    `if [ -n "$var" ]; then` … `exit N` (N not 0) … `fi`, with no `exit` before that one."""
+    script = _script(step, shell_ok)
+    if script is None or not any(NEEDS_ENV.match(line) for line in step) or ".result" not in str(script):
         return False
-    commands = _commands(step)
-    script = "\n".join(commands)
-    reads = any(NEEDS_ENV.match(line) for line in step) and "$NEEDS" in script and ".result" in script
-    return reads and any(EXITS.match(command) for command in commands)
+    var = None
+    for i, (depth, line) in enumerate(script):
+        if depth == 0 and (match := ASSIGN.match(line)):
+            var = match["var"]
+            continue
+        exits = EXIT.match(line)
+        if exits and (depth == 0 or var is None):
+            return False  # nothing after it runs
+        if var is None or depth != 0:
+            continue
+        if re.match(rf"^{var}=", line):
+            var = None  # overwritten: no longer the results
+        elif re.fullmatch(rf'if \[\[? -n "\$\{{?{var}\}}?" \]\]?; then', line):
+            for later_depth, later in script[i + 1 :]:
+                if later_depth == 0:
+                    return False  # the `fi` came first
+                if later_depth == 1 and (code := EXIT.match(later)):
+                    return bool(FAILS.match(code["code"])) and later.startswith("exit")
+            return False
+    return False
 
 
 def _needs(lines: list[str]) -> list[str]:
@@ -160,7 +229,7 @@ def _expected() -> list[str]:
 
 
 def _problems(text: str, expected: list[str]) -> list[str]:
-    jobs = _jobs(text)
+    jobs, top = _jobs(text), _shell_ok(_defaults(text.splitlines(), 0))
     if "ci-ok" not in jobs:
         return ["no ci-ok job"]
     needs, problems = _needs(jobs["ci-ok"]), []
@@ -170,7 +239,7 @@ def _problems(text: str, expected: list[str]) -> list[str]:
         problems.append("ci-ok is allowed to fail")
     if not any(ALWAYS.match(line) for line in _job_keys(jobs["ci-ok"])):
         problems.append("ci-ok doesn't run when a job fails (if: always())")
-    if not any(_judges(step) for step in _steps(jobs["ci-ok"])):
+    if not any(_judges(step, top and _shell_ok(_defaults(jobs["ci-ok"], 4))) for step in _steps(jobs["ci-ok"])):
         problems.append("ci-ok doesn't fail when a needed job fails")
     for name in expected:
         lines = jobs.get(name)
@@ -182,7 +251,7 @@ def _problems(text: str, expected: list[str]) -> list[str]:
             problems.append(f"{name} is switched off")
         if any(MAY_FAIL.match(line) for line in keys):
             problems.append(f"{name} is allowed to fail")
-        if not any(_runs_the_tests(step) for step in _steps(lines)):
+        if not any(_runs_the_tests(step, top and _shell_ok(_defaults(lines, 4))) for step in _steps(lines)):
             problems.append(f"{name} doesn't run `uv run pytest`")
         if name not in needs:
             problems.append(f"ci-ok doesn't need {name}")
@@ -261,12 +330,34 @@ def test_a_test_step_switched_off_or_masked_doesnt_count():
         "      - continue-on-error: ${{ true }}\n        run: uv run pytest\n",
         "      - run: >\n          uv run pytest\n          || true\n",
         "      - run: |\n          uv run pytest \\\n            --collect-only\n",
+        "      - run: |\n          set +e\n          uv run pytest\n          echo done\n",  # the step goes on
+        "      - run: |\n          uv run pytest && echo passed\n          echo finished\n",
+        "      - run: uv run pytest | tee pytest.log\n",  # no pipefail: tee's status counts
+        "      - run: |\n          exit 0\n          uv run pytest\n",
+        "      - run: |\n          if false; then\n            uv run pytest\n          fi\n",
+        "      - run: uv run pytest\n        shell: bash {0}\n",  # no -e
     ):
         assert _problems(SAMPLE.replace(step, weakened, 1), ["test"]) == ["test doesn't run `uv run pytest`"], weakened
     assert _problems(SAMPLE.replace(step, "      - run: uv run --locked pytest -x\n", 1), ["test"]) == []
     joined = "      - run: |\n          uv run pytest \\\n            -q\n"
     assert _problems(SAMPLE.replace(step, joined, 1), ["test"]) == []
     assert _problems(SAMPLE.replace(step, "      - run: uv run pytest && echo done\n", 1), ["test"]) == []
+    last = "      - run: |\n          uv sync\n          uv run pytest && echo passed\n"
+    assert _problems(SAMPLE.replace(step, last, 1), ["test"]) == []
+    assert _problems(SAMPLE.replace(step, "      - run: uv run pytest\n        shell: bash\n", 1), ["test"]) == []
+
+
+def test_a_shell_set_for_the_job_or_the_workflow_counts():
+    no_e = "    defaults:\n      run:\n        shell: bash {0}\n"
+    job = SAMPLE.replace("  test:\n    runs-on: ubuntu-latest\n", "  test:\n" + no_e + "    runs-on: ubuntu-latest\n")
+    assert _problems(job, ["test"]) == ["test doesn't run `uv run pytest`"]
+    folder = "    defaults:\n      run:\n        working-directory: services/api\n"
+    assert _problems(SAMPLE.replace("  test:\n", "  test:\n" + folder, 1), ["test"]) == []
+    workflow = SAMPLE.replace("jobs:\n", "defaults:\n  run:\n    shell: bash {0}\njobs:\n")
+    assert _problems(workflow, ["test"]) == [
+        "ci-ok doesn't fail when a needed job fails",
+        "test doesn't run `uv run pytest`",
+    ]
 
 
 def test_ci_ok_itself_switched_off_or_allowed_to_fail():
@@ -288,6 +379,12 @@ def test_ci_ok_still_fails_when_a_job_fails():
         "no results": SAMPLE.replace("          NEEDS: ${{ toJSON(needs) }}\n", "          NEEDS: '{}'\n"),
         "step off": SAMPLE.replace(gate, gate + "        if: false\n"),
         "step may fail": SAMPLE.replace(gate, gate + "        continue-on-error: true\n"),
+        "never true": SAMPLE.replace('if [ -n "$wrong" ]; then', "if false; then"),
+        "exit 0 first": SAMPLE.replace("          wrong=$(", "          exit 0\n          wrong=$("),
+        "exit 0 inside": SAMPLE.replace("            exit 1\n", "            exit 0\n            exit 1\n"),
+        "overwritten": SAMPLE.replace("          if [ -n", '          wrong=""\n          if [ -n'),
+        "errexit off": SAMPLE.replace("          wrong=$(", "          set +e\n          wrong=$("),
+        "another shell": SAMPLE.replace(gate, gate + "        shell: python\n"),
     }
     for case, text in cases.items():
         assert _problems(text, BOTH) == ["ci-ok doesn't fail when a needed job fails"], case

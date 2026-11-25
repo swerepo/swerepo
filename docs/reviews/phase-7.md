@@ -424,3 +424,14 @@ Round 3 found nothing new and accepted P7-F08 to P7-F10. All ten findings (P7-F0
   - shortening the adoption question when a repository has many locked rules (Q3);
   - reporting to SeamSpec that its text `doctor` output counts warnings without naming them.
 - **Next:** the pull request for Phase 7.
+
+## Copilot's review of PR #20
+
+Six inline comments, each reproduced as a test before the fix and each fix checked by breaking it again (14 breakages, all caught):
+
+- **A recorded `seamspec.yml` kept current** (init.py, `_seamspec`): with `ci` added after `seamspec.yml` was written, `update --only seamspec` moved `swerepo-ci.yml` and `[tools] seamspec` but left `seamspec.yml` behind. A recorded `seamspec.yml` is now always planned, so it takes the pin or holds it.
+- **`--no-ci` holds the pin** (init.py, the pin check): `ci` skipped meant "no workflow" to the check, so `seamspec.yml` and `[tools] seamspec` moved while `swerepo-ci.yml` stayed. A recorded workflow that isn't planned now holds the pin, both ways.
+- **The pin alone rebuilds the recorded workflow** (init.py, `_ci_pin_only`): `ci` brought along for the pin ran the whole `ci` planner, so a `ci/workflow@1` record was upgraded to version 2 and the pyproject settings could change. The recorded template and inputs are now rebuilt with only `seamspec` changed, nothing else of `ci` is planned, and a record without inputs holds the pin with a note. `pin_only` and `_refreshes` went with it.
+- **No guessed Python for `seamspec.yml`** (init.py, `_seamspec_workflow`): `requires-python = ">=3.15"` got a workflow on 3.14. It is now not written, with the reason, as `swerepo-ci.yml` does.
+- **`hygiene/ci-tests` reads the whole script** (two comments): `set +e` before pytest, `uv run pytest && echo passed` followed by another command, a pipe, an earlier `exit`, a pytest inside `if false`, and a shell without `-e` no longer count; `ci-ok` must assign the results from `$NEEDS` and then fail through `if [ -n "$var" ]; then … exit N … fi`, so `if false; then`, a leading `exit 0`, an `exit 0` first in the block, an overwritten variable, `set +e` or another shell break the rule. This repository's `swerepo-ci.yml` and what `init` writes still pass.
+  - **The locked copy here:** `inv_c78fcca0` is not edited. The new template is proposed as `inv_11ce8c5b` (verified passing), and a supersede request for `inv_c78fcca0` waits for the owner in `seamspec review`.

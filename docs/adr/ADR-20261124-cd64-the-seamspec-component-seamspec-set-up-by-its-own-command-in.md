@@ -51,7 +51,8 @@ The owner accepted the recommendations below on 2026-11-24 and added four watcho
    - **SWERepo writes `.github/workflows/seamspec.yml` itself,** as a managed file from its own template `seamspec/workflow@1`, before running `seamspec init`. Since SeamSpec never overwrites an existing workflow, it keeps SWERepo's.
      - The file runs the same steps as `swerepo-ci.yml`'s `seamspec` job: `seamspec doctor --ci` (against the pull request's base, or the commits a push brought), `seamspec verify --all --ci`, and `seamspec spec --check docs/EARNED_SPEC.md` when the file exists. Without the last one, a rule approved or superseded without regenerating the earned spec would pass CI, against point 7 (Copilot's review of PR #19).
      - Actions are pinned to commits, credentials aren't kept, and uv and SeamSpec are pinned.
-     - So it passes the workflow audit, Dependabot keeps its pins current, and `update` maintains it like any other managed file.
+     - So it passes the workflow audit, Dependabot keeps its pins current, and `update` maintains it like any other managed file. Once recorded, `update` keeps it current even after `ci` is added and the repository would no longer need it, so its pin moves with the others (Copilot on PR #20).
+     - **Not written** when `requires-python` allows none of the Python versions standard 1 knows: the plan says why, as for `swerepo-ci.yml`, and no interpreter is guessed (Copilot on PR #20).
      - It is written only once SeamSpec is set up, or is set up in the same run, and it is recorded in `.swerepo.toml` even before SeamSpec counts as applied (review P7-F02). A run that only waits writes nothing.
      - This refines the owner's point 3 (`--ci` without `ci`): the flag is still passed, and the file SeamSpec then keeps is SWERepo's pinned one.
    - **An existing `seamspec.yml` that SeamSpec wrote** is never replaced (inv_8314036c: never edit a file SWERepo didn't write). When it fails the audit, the plan and `check` report it with the fix: delete it and run `swerepo init --only seamspec`, which writes the pinned one, or pin its actions by hand.
@@ -81,6 +82,7 @@ The owner accepted the recommendations below on 2026-11-24 and added four watcho
      - **The expected jobs:** a `test` job, and a `test-<job>` job for every folder in `.swerepo.toml`'s `[projects] listed`, named as SWERepo names them. Each runs `uv run pytest`, and `ci-ok`'s `needs:` names each of them (watchout 3).
      - **Robust to change:** it ignores action pins, comments and job order, so Dependabot's bumps and `update`'s new template versions don't break it.
      - **Each job is read step by step** (review P7-F04): a pytest step switched off or allowed to fail (also quoted, or as `${{ … }}`), a run masked (`|| …`, `; …`, `… &`, `--version`, `--help`, `--collect-only`, with folded `run: >` blocks and line continuations joined first), or a `needs:` list read past its end don't count; `uv run` options such as `--locked` do. `ci-ok` itself must not be switched off or allowed to fail, and must still fail when a test job fails: it runs `if: always()` (a skipped required check counts as passed) and keeps a step that reads the jobs' results and can exit non-zero, so replacing that script with `echo ok` breaks the rule (SeamSpec's reviewer).
+     - **The whole script is read** (Copilot on PR #20): `uv run pytest` counts only as a command of its own at the top of its step's script, not piped (no `pipefail` by default), with `&& …` after it only as the script's last command, and with no `set +e`, no earlier `exit` and no `shell:` other than GitHub's own `bash` or `sh` (for the step, the job or the workflow). `ci-ok`'s judging step must read the results into a variable (`var=$(… "$NEEDS" …)`) and then run `if [ -n "$var" ]; then` with a non-zero `exit` before any other `exit` and before its `fi`, so `if false; then` or a leading `exit 0` breaks the rule.
      - **Other test commands:** standard 1's CI runs only `uv run pytest`. When CI learns other test commands (Phase 11), the rule gets a version 2.
 6. **Rules the repository already has.**
    - **A hygiene rule counts as present when either:**
@@ -98,10 +100,10 @@ The owner accepted the recommendations below on 2026-11-24 and added four watcho
      - `swerepo-ci.yml`'s `seamspec==` pin, and its record's `inputs`, `rendered` and `written`;
      - SWERepo's `seamspec.yml`, if it has one.
    - **`ci` is brought along for the pin only** (the owner's watchout 4), as `--only github` brings it for the Copilot wait (P6-F08).
-     - **The new render** is the recorded workflow with only the SeamSpec version changed.
+     - **The new render** is the recorded workflow with only the SeamSpec version changed: rebuilt from its recorded template version and inputs, so a newer workflow template and `ci`'s other files (the pyproject settings, per-project files) wait for `update --only ci` (Copilot on PR #20). A record without inputs can't be rebuilt: the plan says so and the pin holds.
      - **Untouched:** the workflow is rewritten.
      - **Edited:** it is merged, with the person's consent.
-     - **Conflict or can't merge:** the pin doesn't move either, so `.swerepo.toml` and the files keep agreeing and `check` stays green. This holds in both directions: when any workflow pinning SeamSpec (`swerepo-ci.yml`, or SWERepo's `seamspec.yml` in strict mode) can't take the new pin, none moves, and the plan says why.
+     - **Conflict or can't merge:** the pin doesn't move either, so `.swerepo.toml` and the files keep agreeing and `check` stays green. This holds in both directions: when any recorded workflow pinning SeamSpec (`swerepo-ci.yml`, or SWERepo's `seamspec.yml`) can't take the new pin, or isn't planned in this run (`--no-ci`), none moves, and the plan says why (P7-F01; Copilot on PR #20).
    - **Finally:** reports `seamspec doctor`'s checks (by name), after applying.
 9. **`check` for the `seamspec` component:**
    - **What it reports:**
@@ -136,7 +138,7 @@ Locked by the owner on 2026-11-24, after two reads by SeamSpec's reviewer:
 - `inv_4eaaa886`: every bundled hygiene test uses only the standard library and pytest, passes ruff, passes on a repository `init` sets up, and fails on the breakage it guards, `ci-ok` no longer failing when a test job fails included.
 - `inv_2f78270e`: `-u --seamspec` never moves the SeamSpec pin backwards or to a development or local build, and every workflow pinning it and `[tools] seamspec` name one version afterwards.
 
-On this repository, the hygiene rules are `inv_62d51113` (privacy, adopted), `inv_b2000e40` (changelog, adopted), `inv_5c45ea08` (ADR index) and `inv_c78fcca0` (CI tests), all locked.
+On this repository, the hygiene rules are `inv_62d51113` (privacy, adopted), `inv_b2000e40` (changelog, adopted), `inv_5c45ea08` (ADR index) and `inv_c78fcca0` (CI tests), all locked. After Copilot's review of PR #20 the `ci-tests` template reads the whole script, and its replacement `inv_11ce8c5b` waits for the owner in a supersede request for `inv_c78fcca0`.
 
 ## Consequences
 

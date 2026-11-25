@@ -510,3 +510,74 @@ class TestReviewP7:
         assert ssc.Ledger.read(repo).hygiene("privacy", {}) == ("declined", "inv_11111111")
         found = plan(repo, adopt={"privacy": "inv_22222222"})
         assert any(a.verb == ADOPT and "inv_22222222" in a.note for a in found.actions)
+
+
+class TestCopilotPR20:
+    """Copilot's review of PR #20, each reproduced before the fix."""
+
+    CI = ".github/workflows/swerepo-ci.yml"
+
+    def chosen(self, root: Path) -> None:
+        state = State.load(root)
+        state.set_components([*state.components, "seamspec"])
+        state.save(root)
+        commit(root, "seamspec")
+
+    def test_a_recorded_seamspec_yml_takes_the_pin_after_ci_is_added(self, tmp_path: Path, fake: FakeSeamspec):
+        root = git_init(tmp_path / "lib")
+        make(root, {"pyproject.toml": PYPROJECT, "uv.lock": "version = 1\n"})
+        set_up_seamspec(root)
+        apply(make_plan(root, today=TODAY, only=["docs", "seamspec"], hosts=[]), root)  # no ci: seamspec.yml
+        apply(make_plan(root, today=TODAY, only=["ci"], hosts=[]), root)  # ci added later
+        commit(root, "set up")
+        assert {ssc.WORKFLOW, self.CI} <= set(State.load(root).files())
+        fake.set("version", "0.2.0")
+        apply(make_plan(root, today=TODAY, update=True, only=["seamspec"], hosts=[]), root)
+        assert State.load(root).tools["seamspec"] == "0.2.0"
+        for workflow in (ssc.WORKFLOW, self.CI):
+            text = (root / workflow).read_text()
+            assert "seamspec==0.2.0" in text and "seamspec==0.1.2" not in text, workflow
+
+    def test_no_ci_holds_the_pin_while_swerepo_ci_yml_pins_seamspec(self, repo: Path, fake: FakeSeamspec):
+        set_up_seamspec(repo, mode="strict")
+        apply(make_plan(repo, today=TODAY, only=["seamspec"]), repo)  # SWERepo's seamspec.yml, recorded
+        commit(repo, "strict")
+        before = snapshot(repo)
+        fake.set("version", "0.2.0")
+        found = make_plan(repo, today=TODAY, update=True, only=["seamspec"], skip=["ci"])
+        assert any(a.verb == NOTE and "pin stays at 0.1.2" in a.note and self.CI in a.note for a in found.actions)
+        apply(found, repo)
+        assert snapshot(repo) == before
+
+    def test_seamspec_yml_isnt_written_for_a_python_standard_1_doesnt_know(self, tmp_path: Path, fake):
+        root = git_init(tmp_path / "next")
+        make(root, {"pyproject.toml": PYPROJECT.replace(">=3.12", ">=3.15"), "uv.lock": "version = 1\n"})
+        set_up_seamspec(root)
+        found = make_plan(root, today=TODAY, only=["docs", "seamspec"], hosts=[])
+        assert not any(a.path == ssc.WORKFLOW for a in found.actions)
+        note = next(a.note for a in found.actions if a.verb == NOTE and ssc.WORKFLOW in a.note)
+        assert note.startswith(f"{ssc.WORKFLOW} not written:") and "allows none of the Python versions" in note
+        apply(found, root)
+        assert not (root / ssc.WORKFLOW).exists()
+
+    def test_the_pin_alone_rebuilds_the_recorded_workflow_and_nothing_else(self, tmp_path: Path, fake):
+        bundled = Path(str(STORE.root))
+        old = tmp_path / "templates-v1"  # the templates as Phase 4 shipped them: no version 2
+        for template in bundled.rglob("*"):
+            if template.is_file() and template.name[0].isdigit() and not template.name.startswith("2"):
+                make(old, {template.relative_to(bundled).as_posix(): template.read_text()})
+        root = git_init(tmp_path / "app")
+        make(root, {"pyproject.toml": PYPROJECT, "uv.lock": "version = 1\n"})
+        apply(make_plan(root, today=TODAY, only=["docs", "ci"], hosts=[], store=TemplateStore(old)), root)
+        set_up_seamspec(root)
+        self.chosen(root)
+        assert State.load(root).files()[self.CI].template == "ci/workflow@1"
+        written = (root / self.CI).read_text()
+        fake.set("version", "0.2.0")
+        found = make_plan(root, today=TODAY, update=True, only=["seamspec"], hosts=[])
+        assert [a.path for a in found.actions if a.component == "ci"] == [self.CI]  # no settings, no projects
+        apply(found, root)
+        assert (root / self.CI).read_text() == written.replace("seamspec==0.1.2", "seamspec==0.2.0")
+        state = State.load(root)
+        assert state.files()[self.CI].template == "ci/workflow@1" and state.tools["seamspec"] == "0.2.0"
+        assert state.files()[self.CI].inputs["seamspec"] == "0.2.0"

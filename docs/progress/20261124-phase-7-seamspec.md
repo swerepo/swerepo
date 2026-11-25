@@ -38,7 +38,9 @@
   - `inv_2f78270e`: `update` moves the SeamSpec pin forward only, and every workflow and `.swerepo.toml` name the same version;
   - `inv_5c45ea08` and `inv_c78fcca0`: the ADR-index and CI-tests hygiene rules on this repository, proposed by SWERepo itself.
 
+- **Copilot's review of PR #20** (six comments, [review](../reviews/phase-7.md)): a recorded `seamspec.yml` keeps taking the pin after `ci` is added; `--no-ci` holds the pin while `swerepo-ci.yml` pins SeamSpec; the pin alone rebuilds the recorded workflow with nothing else of `ci`; `seamspec.yml` isn't written for a Python version standard 1 doesn't know; `hygiene/ci-tests` reads the whole script and needs a reachable failure in `ci-ok`. The stronger `ci-tests` rule is proposed as `inv_11ce8c5b`, with a supersede request for the locked `inv_c78fcca0` waiting for the owner.
+
 ## Next
 
-- The pull request for Phase 7.
+- The owner's decision on the `ci-tests` supersede request (`seamspec review`), then the merge of PR #20.
 - Later: strict mode running the locked rules twice with `ci`; shortening the adoption question when a repository has many locked rules (review Q3).
