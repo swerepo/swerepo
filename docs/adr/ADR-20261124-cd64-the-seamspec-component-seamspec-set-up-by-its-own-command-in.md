@@ -138,7 +138,7 @@ Locked by the owner on 2026-11-24, after two reads by SeamSpec's reviewer:
 - `inv_4eaaa886`: every bundled hygiene test uses only the standard library and pytest, passes ruff, passes on a repository `init` sets up, and fails on the breakage it guards, `ci-ok` no longer failing when a test job fails included.
 - `inv_2f78270e`: `-u --seamspec` never moves the SeamSpec pin backwards or to a development or local build, and every workflow pinning it and `[tools] seamspec` name one version afterwards.
 
-On this repository, the hygiene rules are `inv_62d51113` (privacy, adopted), `inv_b2000e40` (changelog, adopted), `inv_5c45ea08` (ADR index) and `inv_c78fcca0` (CI tests), all locked. After Copilot's review of PR #20 the `ci-tests` template reads the whole script, and its replacement `inv_11ce8c5b` waits for the owner in a supersede request for `inv_c78fcca0`.
+On this repository, the hygiene rules are `inv_62d51113` (privacy, adopted), `inv_b2000e40` (changelog, adopted), `inv_5c45ea08` (ADR index) and `inv_c78fcca0` (CI tests), all locked. After Copilot's review of PR #20 the `ci-tests` template reads the whole script, and the owner approved its replacement (2026-11-24): `inv_11ce8c5b` is locked and `inv_c78fcca0` superseded.
 
 ## Consequences
 
