@@ -1,0 +1,35 @@
+{
+  "schema_version": "1",
+  "id": "inv_2f78270e",
+  "title": "update moves the SeamSpec pin forward only, and every workflow and .swerepo.toml name the same version",
+  "assertion": "In a repository set up by `swerepo init` with SeamSpec set up and chosen, the CI pinning SeamSpec 0.1.2, and a fake `seamspec` first on PATH reporting its version: `swerepo update --yes --only seamspec` with 0.2.0 installed moves the pin to 0.2.0 in `.swerepo.toml`'s `[tools] seamspec` and `swerepo-ci.yml` (`ci` brought along for the pin), and in strict mode in SWERepo's `seamspec.yml` too. With 0.1.1, 0.1.2, a development build (0.3.0.dev0) or a local build (0.3.0+local) installed, `swerepo-ci.yml`, `seamspec.yml` and `.swerepo.toml` stay byte for byte. When the person edited the `seamspec==` line in `swerepo-ci.yml`, `update --yes --merge --only seamspec` with 0.2.0 installed leaves all three byte for byte. In strict mode, a person's edit to `seamspec.yml` (so `update --yes` without `--merge` can't take the new pin there) leaves all three byte for byte. After every run, each of these workflows pins SeamSpec, and all of them and `[tools] seamspec` name the same version.",
+  "scope": {
+    "paths": [
+      "swerepo/init.py",
+      "swerepo/seamspec_component.py",
+      "swerepo/ci.py",
+      "swerepo/cli.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261124-cd64 point 8 and the owner's watchout 4 (2026-11-24): -u --seamspec moves the pin to the installed version, never backwards and never to a development build, with ci brought along for the pin only; the pin and the workflows move together or not at all. The strict-mode hold from Gemini's Phase 7 review (P7-F01); tightened twice after SeamSpec's reviewer: the fake on PATH, the strict-mode upgrade, whole files compared byte for byte, a pin required in each workflow, and a local build.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_2f78270e.py",
+    "harness_sha256": "a929ea0b4c495ad7a322d25c3746141b662112fce747d67429982ef9736086c1",
+    "assertion_sha256": "bdf1e556ddce79f585be1e8cd27ca65911f19ba28c690eab253d43ba4bc78062"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-24T23:10:48.247493Z",
+  "approved_at": "2026-11-25T01:49:43.922643Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": false
+}

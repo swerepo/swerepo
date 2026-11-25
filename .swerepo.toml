@@ -1,7 +1,7 @@
 # Written by SWERepo (SWEREPO-SPEC §9). Commit this file. Settings may be edited; fingerprints may not.
 standard = 1
 swerepo = "0.1.0.dev0"
-components = ["docs", "agents", "ci", "security", "github"]
+components = ["docs", "agents", "ci", "security", "github", "seamspec"]
 mode = "solo"
 
 [values]
@@ -56,9 +56,9 @@ written = "ccc42d0b97064ad270cb457bb87e65dff002c13ca45b3bb116f2c5dc081f7fcb"
 inputs = {progress_dir = "docs/progress", test_inline = "`uv run pytest`, `uv run ruff check .` and `uv run ruff format --check .`"}
 
 [files."docs/agents/address-review.md"]
-template = "agents/address-review@2"
-rendered = "25203d3b28688020c3a8fa234b9b4890c8a03e7311c689a40ec702bd716d5593"
-written = "25203d3b28688020c3a8fa234b9b4890c8a03e7311c689a40ec702bd716d5593"
+template = "agents/address-review@3"
+rendered = "07402575a2743ac8d57f532803d38c1e601143c5bf56c7c093bd76bccac9dbf3"
+written = "07402575a2743ac8d57f532803d38c1e601143c5bf56c7c093bd76bccac9dbf3"
 inputs = {}
 
 [files."docs/agents/record-adr.md"]
@@ -102,3 +102,10 @@ seamspec = "0.1.2"
 [github]
 copilot_review = true
 applied = true
+
+[seamspec]
+initialised = "0.1.2"
+
+[seamspec.adopted]
+privacy = "inv_62d51113"
+changelog = "inv_b2000e40"

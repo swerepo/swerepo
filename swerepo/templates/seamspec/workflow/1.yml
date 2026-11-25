@@ -1,0 +1,51 @@
+# SeamSpec's own workflow, written by SWERepo (SWEREPO-SPEC §6.8, ADR-20261124-cd64) where `swerepo-ci.yml` doesn't run
+# the locked rules, or where SeamSpec's strict mode wants a workflow of its own. The same steps as swerepo-ci.yml's
+# `seamspec` job, with actions pinned to commits so it passes the workflow audit. `seamspec init` keeps this file;
+# `swerepo update` keeps it current and merges your edits.
+name: seamspec
+
+on:
+  pull_request:
+  push:
+    branches: [@@default_branch@@]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Tests are code from the pull request: no secrets reach this job.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # doctor --ci compares the ledger with the base branch
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          version: "0.9.28"
+          python-version: "@@python_main@@"
+      - run: @@install@@
+      # doctor --ci compares the ledger with a base: the pull request's base branch, or on a push every commit the
+      # push brought (its own default, HEAD~1, misses earlier commits of a multi-commit push).
+      - name: seamspec doctor
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -eu
+          if [ "$EVENT" = "pull_request" ]; then
+            uvx seamspec==@@seamspec@@ doctor --ci
+          elif [ -n "$BEFORE" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+              && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            uvx seamspec==@@seamspec@@ doctor --ci --base "$BEFORE"
+          elif git rev-parse -q --verify "HEAD~1^{commit}" >/dev/null; then
+            uvx seamspec==@@seamspec@@ doctor --ci --base HEAD~1
+          else
+            uvx seamspec==@@seamspec@@ doctor --ci --base HEAD  # a root commit: nothing earlier to compare with
+          fi
+      - run: uvx seamspec==@@seamspec@@ verify --all --ci
+      # The earned spec must match the approved rules (spec §6.8).
+      - if: hashFiles('docs/EARNED_SPEC.md') != ''
+        run: uvx seamspec==@@seamspec@@ spec --check docs/EARNED_SPEC.md

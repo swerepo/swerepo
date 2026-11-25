@@ -1,0 +1,35 @@
+{
+  "schema_version": "1",
+  "id": "inv_c45b7540",
+  "title": "SWERepo never answers SeamSpec's consent, and runs seamspec init only in a terminal",
+  "assertion": "With a fake `seamspec` first on PATH that logs every call, in a git repository with a pyproject.toml and a uv.lock, and with the command line seeing a terminal: `swerepo init --yes`, `swerepo init --dry-run` and `swerepo init --json` run no `seamspec init`; the `--yes` run applies the other default components (docs, agents, ci, security and github are recorded, and their files written) and says to run `seamspec init` in a terminal. An interactive `swerepo init --only seamspec` answered yes runs `seamspec init` once, and `seamspec review` only when the person answers yes to reviewing the proposals. After a newer SeamSpec is installed, `swerepo update --yes` runs no `seamspec init`, and an interactive `swerepo update` answered yes reruns it once. No call SWERepo makes to `seamspec` ever passes an argument starting with `--accept-auto-run`.",
+  "scope": {
+    "paths": [
+      "swerepo/init.py",
+      "swerepo/seamspec_component.py",
+      "swerepo/cli.py",
+      "swerepo/ci.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261124-cd64 point 1 (the owner's choice, 2026-11-24): SeamSpec's consent is the person's, so seamspec init runs only in their terminal and never with --accept-auto-run; --yes never answers it. Tightened twice after SeamSpec's reviewer: the command line with a terminal, the fake on PATH, any --accept-auto-run form, what --yes applies, and the review only on a yes.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_c45b7540.py",
+    "harness_sha256": "90e553c6c3ae97a3e37f2a741d74afa253192220bab71aecb9d862d628253cb5",
+    "assertion_sha256": "cd6eb8c650ddaaeec5c995d5561073a14f57cc4837dca78e1b444f7033bc1b96"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-24T23:09:36.806226Z",
+  "approved_at": "2026-11-25T01:48:56.699297Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

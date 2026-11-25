@@ -1,0 +1,33 @@
+{
+  "schema_version": "1",
+  "id": "inv_4eaaa886",
+  "title": "The bundled hygiene tests use only the standard library and pytest, pass ruff, and pass where init set things up",
+  "assertion": "Each of SWERepo's four hygiene rule tests (privacy, adr-index, changelog, ci-tests), as SWERepo renders them for `seamspec propose`, imports only the Python standard library and pytest, passes `ruff check` and `ruff format --check` with this repository's settings, and, run alone with pytest (no conftest) from `.seamspec/tests/` of a git repository that `swerepo init --yes` set up and committed, passes: on that layout as `init` left it, and with its security policy moved to `.github/SECURITY.md` holding a contact address. Each exits with failures, run alone, on the breakage it guards: a home-folder path in a tracked file, an ADR left out of the index, a changelog without `[Unreleased]`, `ci-ok` no longer needing `test`, `test`'s pytest step allowed to fail (`continue-on-error: true`), masked (`|| true`) or masked across a folded `run: >` block, `ci-ok`'s step that judges the jobs' results replaced with `echo ok`, and `ci-ok` no longer running `if: always()`.",
+  "scope": {
+    "paths": [
+      "swerepo/templates/seamspec/",
+      "swerepo/seamspec_component.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261124-cd64 point 5 and spec §6.8: the hygiene rule tests run in the target repository, so they use only the standard library and pytest, ship ruff-clean (a locked test can't be tidied afterwards), and pass on what init sets up. Step-level and policy-path cases from Gemini's Phase 7 review (P7-F04, P7-F05); exit codes, each file alone, the unmodified layout, the folded block, and ci-ok still failing when a job fails after SeamSpec's reviewer.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_4eaaa886.py",
+    "harness_sha256": "985532288912b1a0ba2ae5755123a7acc1bf965bfd85e1a2d7891a725d0f7904",
+    "assertion_sha256": "0d9185de57bef3b2085624b5f1be77f309d272584552446569e574a7a696751a"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-24T23:10:24.512946Z",
+  "approved_at": "2026-11-25T01:49:16.821347Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": false
+}

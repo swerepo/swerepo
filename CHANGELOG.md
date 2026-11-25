@@ -25,6 +25,10 @@ All notable changes to this project are documented here. The format is based on 
 - `swerepo diff [FILE ...]`: the merge `update` would make in files you edited, or the change to make by hand for a conflict. `swerepo status [--json]`: components, mode, versions, and managed files by state. Both read only.
 - `.swerepo.toml` records keep the inputs their render used (`inputs`), so `update` can rebuild each one's earlier render; `update` adds them to older records.
 - `swerepo check` counts a workflow that differs only by newer action pins as current.
+- `swerepo init` for the `seamspec` component: runs `seamspec init` in the person's terminal only (never `--accept-auto-run`; without a terminal the plan shows the command), never installs SeamSpec, and writes a pinned `seamspec.yml` when SeamSpec needs its own workflow. Proposes the hygiene rules (`privacy`, `adr-index`, `changelog`, `ci-tests`) with `seamspec propose`, each with its component, verified where the clone is trusted; a locked rule of the repository's own is adopted instead (`--adopt NAME=ID`, `[seamspec.adopted]`); a rule the person rejected is never proposed again. Writes `docs/EARNED_SPEC.md`.
+- `swerepo check` for `seamspec`: the hygiene rules, proposals waiting, strict mode's workflow and CODEOWNERS block, and on a person's machine the CI pin against the installed SeamSpec, `seamspec doctor` and the earned spec. With `--ci` it runs no SeamSpec command.
+- `swerepo update --only seamspec` moves the SeamSpec pin forward to the installed version, never back, with the CI workflow brought along for the pin only.
+- `agents/address-review@3`: ask before resolving review threads, and resolve only on a yes.
 
 ### Fixed
 

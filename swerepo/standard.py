@@ -34,7 +34,6 @@ GITHUB_FILES = (
 
 # Checks a later phase adds: shown as "?" until then, never silently left out (ADR-20261120-fc5a point 4).
 LATER = {
-    "seamspec": (("seamspec.health", "SeamSpec health, CI pin and hygiene rules", 7),),
     "release": (("release.environment", "protected release environment", 8),),
 }
 

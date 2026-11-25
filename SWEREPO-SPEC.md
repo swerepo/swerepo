@@ -381,6 +381,9 @@ written = "77d0…"
 seamspec = "0.1.1"                # the version the CI workflow pins
 openspec = "absent"
 
+[seamspec]
+initialised = "0.1.2"             # the SeamSpec version `seamspec init` last ran with; an upgrade reruns it (§13)
+
 [seamspec.adopted]                # hygiene rules a locked rule of the repository's own already covers (§6.8)
 privacy = "inv_62d51113"
 
@@ -534,7 +537,7 @@ SWERepo uses SeamSpec only through its public command line; SeamSpec needs no ch
   3. reruns `seamspec init` in the person's terminal (which moves the Claude Code plugin to the new version and refreshes SeamSpec's blocks and host files);
   4. moves the version pin to the installed version, never backwards: `[tools] seamspec`, the `seamspec==x.y.z` pin in `swerepo-ci.yml` (and in SWERepo's `seamspec.yml`, if any) and their records, together. `ci` is brought along for the pin only; when the workflow can't take it (a conflict, or an earlier render that can't be rebuilt), the pin doesn't move either;
   5. runs `seamspec doctor` and reports the result.
-- **`check`** reports: SeamSpec set up, mode, CI pin versus installed version, plugin current (from `seamspec doctor`), hygiene rules locked, adopted, proposed or missing, proposals waiting for review, the earned spec current, and strict mode's workflow and CODEOWNERS block. It runs only `seamspec doctor`, `status` and `spec --check`, which write nothing, and with `--ci` runs no SeamSpec command at all.
+- **`check`** reports: SeamSpec set up, mode, CI pin versus installed version, plugin current (from `seamspec doctor`), hygiene rules locked, adopted, proposed or missing, proposals waiting for review, the earned spec current, and strict mode's workflow and CODEOWNERS block. It runs only `seamspec --version`, `doctor --json` (naming the checks that warn, never SeamSpec's messages) and `spec --check`, which write nothing, and with `--ci` runs no SeamSpec command at all.
 
 ---
 

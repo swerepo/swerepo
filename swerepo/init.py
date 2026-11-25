@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from swerepo import __version__, ci, github, merge, privacy, rebuild, standard
+from swerepo import seamspec_component as ssc
 from swerepo.adr import AdrError, list_adrs, with_index
 from swerepo.blocks import ADR_INDEX, append_block, file_fingerprint, inside, read_exact, replace_block_content, wrap
 from swerepo.check import _UNRELEASED, UsageError, one_line
@@ -36,8 +37,8 @@ from swerepo.fingerprint import HTML, BlockError, comment_style, find_block, fin
 from swerepo.render import TemplateError, TemplateStore, parse_id
 from swerepo.state import COMPONENTS, FILE_NAME, Record, State, StateError
 
-AVAILABLE = ("docs", "agents", "ci", "security", "github")  # components this version of init applies
-LATER = {"seamspec": 7, "openspec": 8, "release": 8}
+AVAILABLE = ("docs", "agents", "ci", "security", "github", "seamspec")  # components this version of init applies
+LATER = {"openspec": 8, "release": 8}
 HOSTS = ("claude", "cursor", "vscode", "antigravity", "gemini")
 HOST_NAMES = {
     "claude": "Claude Code", "cursor": "Cursor", "vscode": "VS Code Copilot", "antigravity": "Antigravity",
@@ -53,7 +54,8 @@ APPLY, WAITING = "apply", "waiting"  # GitHub settings, applied through gh after
 KEEP, CURRENT, CHANGED, OUTDATED = "keep", "current", "changed", "outdated"
 ADOPT, NOTE, LATER_VERB = "adopt", "note", "later"
 MERGE, CONFLICT, CANT_MERGE = "merge", "conflict", "can't merge"  # update (ADR-20261124-7afa)
-CHANGING = (CREATE, ADD_BLOCK, GIT_INIT, WRITE_STATE, REWRITE, APPLY, MERGE)
+RUN, PROPOSE = "run", "propose"  # SeamSpec's own commands, after the files (ADR-20261124-cd64)
+CHANGING = (CREATE, ADD_BLOCK, GIT_INIT, WRITE_STATE, REWRITE, APPLY, MERGE, RUN, PROPOSE)
 WRITES = (CREATE, ADD_BLOCK, REWRITE, MERGE)  # verbs that write a file and record it
 
 
@@ -103,6 +105,18 @@ class Plan:
     # compared (missing, not JSON, or not applicable); True when both files were compared (PR #10 review)
     github_compared: bool | None = None
     command: str = "init"  # or "update": named in the plan's first line
+    # SeamSpec, run after the files are written (ADR-20261124-cd64): `seamspec init`'s arguments when it runs in the
+    # person's terminal; the hygiene rules to propose; those to ask about adopting, with the locked rules to offer;
+    # and whether to write the earned spec
+    seamspec_run: list[str] | None = None
+    seamspec_propose: list[str] = field(default_factory=list)
+    seamspec_ask: list[str] = field(default_factory=list)
+    seamspec_locked: list[tuple[str, str]] = field(default_factory=list)
+    seamspec_spec: bool = False
+    seamspec_set_up: bool = False  # SeamSpec was set up when the plan was made
+    seamspec_pin_written: str | None = None  # the SeamSpec version SWERepo's seamspec.yml pins after this run
+    seamspec_installed: str | None = None  # the SeamSpec version on this machine, when it could be read
+    seamspec_doctor: bool = False  # update: report `seamspec doctor` after applying (ADR-20261124-cd64 point 8)
 
     @property
     def changes(self) -> list[Action]:
@@ -242,6 +256,10 @@ class _Context:
     enforce_pr_rules: bool = False  # update --enforce-pr-rules: the pull-request rules fail, not warn (spec §10)
     before: dict[str, str] = field(default_factory=dict)  # update: `[values]` as recorded before this run
     read_github: bool = True  # False for `diff` and `status`: they show files only, so they never call gh (P6-F07)
+    terminal: bool = False  # a person at a terminal: SeamSpec's own setup may run there (ADR-20261124-cd64)
+    adopt: dict[str, str] = field(default_factory=dict)  # hygiene rule -> a locked rule of the repository's own
+    seamspec_pin: str | None = None  # update: the installed SeamSpec, newer than the pin (ADR-20261124-cd64 point 8)
+    pin_only: bool = False  # ci brought along by the SeamSpec pin: recorded values, only the pin moves
 
     def exists(self, path: str) -> bool:
         return (self.root / path).is_file()
@@ -251,6 +269,12 @@ class _Context:
             return read_exact(self.root / path, errors="surrogateescape")
         except OSError as error:  # the reason only: the error's own text names the absolute path
             raise InitError(f"{path}: can't read it ({error.strerror or type(error).__name__})") from error
+
+
+def _refreshes(ctx: _Context) -> bool:
+    """Whether this run takes values from the project as it is now (`update`, review P6-F06), not as recorded: never
+    for `ci` brought along by the SeamSpec pin alone (ADR-20261124-cd64 point 8)."""
+    return ctx.update and not ctx.pin_only
 
 
 def _managed_file(
@@ -630,7 +654,7 @@ def _command(ctx: _Context, shared: _Workflows, name: str) -> tuple[str, str]:
     """The SWERepo command for one workflow: its recorded one (a valid one; P4-F03), unless none was recorded or
     `--with-governance` asks for one where there was none."""
     recorded = ctx.state.values.get(name) if ctx.state else None
-    if ctx.update and shared.swerepo:  # update moves the pin to this release; never to "" (review P6-F06)
+    if _refreshes(ctx) and shared.swerepo:  # update moves the pin to this release; never to "" (review P6-F06)
         return shared.swerepo, ""
     if ci.valid_swerepo_command(recorded) and (recorded or not shared.with_governance):
         return str(recorded), ("" if recorded else shared.swerepo_note)
@@ -763,7 +787,7 @@ def _project_inputs(ctx: _Context, folders: list[str]) -> tuple[list[Action], li
     recorded = ctx.state.project_inputs if ctx.state and standard.CI_WORKFLOW in ctx.state.files() else {}
     for folder in folders:
         project = ci.Project.from_inputs(folder, recorded[folder]) if folder in recorded else None
-        if project is not None and ctx.update:  # update: the project's requires-python as it is now (P6-F06)
+        if project is not None and _refreshes(ctx):  # update: the project's requires-python as it is now (P6-F06)
             python, _ = ci.python_versions(detect(ctx.root / folder))
             if python:
                 project = dataclasses.replace(project, python=[str(v) for v in python])
@@ -841,7 +865,7 @@ def _ci(
     actions: list[Action] = []
     install, install_note = ci.install_command(ctx.root)
     recorded_python = _recorded(ctx, standard.CI_WORKFLOW, "python")
-    keep = _valid_python(recorded_python) and not (ctx.update and shared.python)  # update: requires-python (P6-F06)
+    keep = _valid_python(recorded_python) and not (_refreshes(ctx) and shared.python)  # update: requires-python
     python = [str(v) for v in recorded_python] if keep else shared.python  # type: ignore[union-attr]
     python_note = "" if python is not shared.python else shared.python_note
     if install is None or not python:
@@ -860,7 +884,7 @@ def _ci(
     asked = asked and (copilot != recorded_wait or standard.CI_WORKFLOW not in (ctx.state.files() if ctx.state else {}))
     listed = _listed_projects(ctx, projects)
     project_actions, project_inputs = _project_inputs(ctx, listed)
-    seamspec = ci.seamspec_pin(ctx.state.tools.get("seamspec") if ctx.state else None)
+    seamspec = ctx.seamspec_pin or ci.seamspec_pin(ctx.state.tools.get("seamspec") if ctx.state else None)
     governance, governance_note = _command(ctx, shared, "governance_command")
     inputs = ci.Inputs(shared.default_branch, install, python, lint, linters, governance, seamspec,
                        project_inputs, copilot)  # fmt: skip
@@ -949,7 +973,7 @@ def _security(ctx: _Context, shared: _Workflows, contact: str | None) -> tuple[l
     if command:
         template = ctx.store.latest("security", "privacy-workflow")
         recorded_python = _recorded(ctx, standard.PRIVACY_WORKFLOW, "privacy_python")
-        keep = recorded_python in KNOWN_PYTHONS and not (ctx.update and shared.python)  # P6-F06
+        keep = recorded_python in KNOWN_PYTHONS and not (_refreshes(ctx) and shared.python)  # P6-F06
         main = str(recorded_python) if keep else (shared.python or ci.DEFAULT_PYTHONS)[-1]
         values = {"default_branch": shared.default_branch, "python_main": main, "swerepo": command}
         render = (template.id, template.render(values))
@@ -1302,6 +1326,136 @@ def _has_commits(root: Path) -> bool:
     return done.returncode == 0
 
 
+# --- seamspec (ADR-20261124-cd64) ----------------------------------------------------------------------
+
+
+def _seamspec(
+    ctx: _Context, plan: Plan, components: list[str], shared: _Workflows | None, hosts: list[str], adr_dir: str
+) -> list[Action]:
+    """SeamSpec set up through its own command in the person's terminal, its own workflow when one is needed, and the
+    hygiene rules proposed or adopted. Runs nothing: `apply_seamspec` does, after the files are written."""
+    c, ledger = "seamspec", ssc.Ledger.read(ctx.root)
+    plan.seamspec_set_up = ledger.set_up
+    chosen = {*components, *(ctx.state.components if ctx.state else [])}
+    for name, rule_id in ctx.adopt.items():
+        if name not in ssc.HYGIENE:
+            raise UsageError(f"--adopt {name}: not a hygiene rule ({', '.join(ssc.HYGIENE)})")
+        rule = ledger.rules.get(rule_id)
+        if rule is None or rule.status != "LOCKED":
+            raise UsageError(f"--adopt {name}={rule_id}: not a locked SeamSpec rule here")
+    found = ssc.command()
+    installed = ssc.installed_version(ctx.root) if found else None
+    plan.seamspec_installed = installed
+    pin = ctx.seamspec_pin or ci.seamspec_pin(ctx.state.tools.get("seamspec") if ctx.state else None)
+    actions: list[Action] = []
+    run_args = None
+    if not ledger.set_up:
+        run_args = ssc.init_args(first=True, ci="ci" in chosen, hosts=hosts)
+    elif ctx.update and ctx.state is not None and ssc.newer(installed, ctx.state.seamspec_initialised):
+        # a newer SeamSpec than `seamspec init` last ran with: refresh its blocks, plugin and host files, also when an
+        # earlier `update --yes` already moved the CI pin (review P7-F07)
+        run_args = ssc.init_args(first=False, ci="ci" in chosen, hosts=hosts)
+    if run_args is not None:
+        shown = " ".join(["seamspec", *run_args])
+        if found is None:
+            note = f"SeamSpec isn't installed: uv tool install seamspec=={pin}, then run swerepo init again"
+            actions.append(Action(c, WAITING, None, note))
+        elif ctx.terminal:
+            plan.seamspec_run = run_args
+            actions.append(Action(c, RUN, None, f"{shown} (in this terminal: SeamSpec asks its own questions)"))
+        else:
+            actions.append(Action(c, WAITING, None, f"run it in a terminal: {shown} (SeamSpec asks for your consent)"))
+    elif ledger.set_up and found is None:
+        note = f"SeamSpec isn't installed on this machine: uv tool install seamspec=={pin} (its steps wait)"
+        actions.append(Action(c, WAITING, None, note))
+    set_up = ledger.set_up or plan.seamspec_run is not None  # SeamSpec there, or set up in this run
+    ready = (ledger.set_up and found is not None) or plan.seamspec_run is not None  # its commands can run too
+    if set_up and ("ci" not in chosen or ledger.mode == "strict"):  # nothing else runs the rules, or strict wants it
+        actions += _seamspec_workflow(ctx, plan, shared)
+    elif ctx.exists(ssc.WORKFLOW) and ssc.unpinned(ctx.read(ssc.WORKFLOW)):  # SeamSpec's own, from `--ci` (P7-F06)
+        note = f"{ssc.WORKFLOW}: actions not pinned to commits, so the workflow audit fails; pin them, or delete it"
+        actions.append(Action(c, NOTE, None, note))
+    if ledger.mode == "strict" and ctx.exists(github.CODEOWNERS):
+        team = bool(ctx.state and ctx.state.mode == "team")
+        for problem in ssc.codeowners_problems(ctx.read(github.CODEOWNERS)):
+            why = " (in team mode this blocks merges)" if team else ""
+            actions.append(Action(c, NOTE, None, f"{github.CODEOWNERS}: {problem}{why}"))
+    adopted = {**(ctx.state.seamspec_adopted if ctx.state else {}), **ctx.adopt}
+    for rule in ssc.HYGIENE.values():
+        if rule.component not in chosen or not _hygiene_applies(ctx, plan, rule.name, adr_dir):
+            continue
+        status, rule_id = ledger.hygiene(rule.name, adopted)
+        label = f"hygiene/{rule.name}"
+        if status in ("locked", "adopted"):
+            verb = ADOPT if rule.name in ctx.adopt else CURRENT
+            actions.append(Action(c, verb, None, f"{label}: {status} ({rule_id})"))
+        elif status == "proposed":
+            actions.append(Action(c, KEEP, None, f"{label}: proposed ({rule_id}), waiting for your review"))
+        elif status == "declined":
+            actions.append(Action(c, KEEP, None, f"{label}: you declined it ({rule_id}): not proposed again"))
+        elif status == "adopted-not-locked":
+            note = f"{label}: [seamspec.adopted] names {rule_id}, which isn't a locked rule here"
+            actions.append(Action(c, NOTE, None, note))
+        elif not ready:
+            when = "seamspec is installed here" if ledger.set_up else "SeamSpec is set up"
+            actions.append(Action(c, WAITING, None, f"{label}: proposed once {when}"))
+        else:
+            plan.seamspec_propose.append(rule.name)
+            if ctx.terminal and ledger.locked():
+                plan.seamspec_ask.append(rule.name)  # does a locked rule of the repository's own cover it?
+            actions.append(Action(c, PROPOSE, None, f"{label}: {rule.title}"))
+    plan.seamspec_locked = [(rule.id, rule.title) for rule in ledger.locked()]
+    if ready and not ssc.safe_target(ctx.root, ssc.EARNED_SPEC):
+        actions.append(Action(c, NOTE, ssc.EARNED_SPEC, "a link, or out of the repository: SWERepo doesn't write it"))
+    elif ready and ledger.set_up and not plan.seamspec_propose and plan.seamspec_run is None:
+        current = ssc.run_read(["spec", "--check", ssc.EARNED_SPEC], ctx.root)
+        if not ctx.exists(ssc.EARNED_SPEC) or (current is not None and current.returncode != 0):
+            plan.seamspec_spec = True
+            actions.append(Action(c, RUN, ssc.EARNED_SPEC, "seamspec spec --out: the rules approved so far"))
+    elif ready:
+        plan.seamspec_spec = True  # written after the proposals, and after the review if the person takes it
+    if ctx.update and ledger.set_up and installed:  # what `-u --seamspec` reports (ADR-20261124-cd64 point 8)
+        actions.append(Action(c, NOTE, None, f"SeamSpec {installed} installed; CI pins {pin}; to upgrade it yourself: "
+                                             "uv tool upgrade seamspec"))  # fmt: skip
+        plan.seamspec_doctor = True
+    return actions
+
+
+def _hygiene_applies(ctx: _Context, plan: Plan, name: str, adr_dir: str) -> bool:
+    """Whether a hygiene rule's subject is there, or this plan creates it (ADR-20261124-cd64 point 5; P7-F06)."""
+    subject = {"adr-index": f"{adr_dir}/README.md", "changelog": "CHANGELOG.md", "ci-tests": standard.CI_WORKFLOW}
+    if name in subject and any(a.path == subject[name] and a.verb == CREATE for a in plan.actions):
+        return True
+    return ssc.applies(ctx.root, name, adr_dir)
+
+
+def _seamspec_workflow(ctx: _Context, plan: Plan, shared: _Workflows | None) -> list[Action]:
+    """SWERepo's own `seamspec.yml`, with actions pinned to commits (ADR-20261124-cd64 point 3)."""
+    c = "seamspec"
+    install, note = ci.install_command(ctx.root)
+    if install is None:
+        return [Action(c, NOTE, None, f"{ssc.WORKFLOW} not written: {note}")]
+    python = shared.python if shared is not None else ci.python_versions(ctx.detection)[0]
+    recorded_branch = ctx.state.values.get("default_branch") if ctx.state else None
+    branch = shared.default_branch if shared is not None else str(recorded_branch or ci.default_branch(ctx.root))
+    pin = ctx.seamspec_pin or ci.seamspec_pin(ctx.state.tools.get("seamspec") if ctx.state else None)
+    template = ctx.store.latest("seamspec", "workflow")
+    values = {"default_branch": branch, "python_main": (python or list(ci.DEFAULT_PYTHONS))[-1], "install": install,
+              "seamspec": pin}  # fmt: skip
+    render = (template.id, template.render(values))
+    inputs = rebuild.used(template, values)
+    action = _managed_file(ctx, c, ssc.WORKFLOW, "seamspec/workflow", render=render, inputs=inputs)
+    yours = action.verb == KEEP and action.note != _OUTSIDE and ctx.exists(ssc.WORKFLOW)
+    if yours and ssc.unpinned(ctx.read(ssc.WORKFLOW)):
+        action.note = (
+            "SeamSpec's own: its actions aren't pinned to commits, so the workflow audit fails; delete it and run "
+            "swerepo init --only seamspec, or pin them"
+        )
+    if action.verb in WRITTEN:
+        plan.seamspec_pin_written = pin
+    return [action]
+
+
 def make_plan(
     root: Path,
     *,
@@ -1321,12 +1475,19 @@ def make_plan(
     merge: bool = False,
     enforce_pr_rules: bool = False,
     read_github: bool = True,
+    adopt: dict[str, str] | None = None,
+    terminal: bool = False,
+    hold_pin: bool = False,
 ) -> Plan:
     """What `swerepo init` would do. Writes nothing. `lint`: "kept" or "gradual" when other linters are found
     (spec §6.3); `contact`: "github", "placeholder" or an email address for SECURITY.md (ADR-20261122-a48e).
     `update`: plan as `swerepo update` (ADR-20261124-7afa), with `merge` allowing merges into a person's edits (a
     terminal's yes, or --merge) and `enforce_pr_rules` switching the pull-request rules from warnings to failures
-    (spec §10). `read_github=False`: GitHub isn't read (its settings show as waiting), for `diff` and `status`."""
+    (spec §10). `read_github=False`: GitHub isn't read (its settings show as waiting), for `diff` and `status`.
+    `adopt`: hygiene rules a locked rule of the repository's own covers, by name (`--adopt`); `terminal`: a person
+    is at a terminal, so SeamSpec's own setup may run there (ADR-20261124-cd64). `hold_pin`: plan without moving the
+    SeamSpec pin, when a workflow pinning it can't take a new one (review P7-F01)."""
+    call = dict(locals())
     components = resolve_components(only, skip)
     if projects is not None and "ci" not in components:
         raise UsageError("--projects gives Python projects their own CI jobs: it needs the ci component")
@@ -1354,7 +1515,8 @@ def make_plan(
 
     recorded = state.values if state else {}
     ctx = _Context(root, detection, state, store or TemplateStore(), {}, today or datetime.date.today(), update,
-                   merge, enforce_pr_rules, read_github=read_github)  # fmt: skip
+                   merge, enforce_pr_rules, read_github=read_github, terminal=terminal,
+                   adopt=dict(adopt or {}))  # fmt: skip
     adr_dir, adopted = _adr_dir(ctx)
     progress_dir = str((state.adopted.get("progress_dir") if state else None) or standard.PROGRESS_DIR)
     # The lint choice first, so the commands the agents block lists match the CI it gets (P4-F07).
@@ -1391,7 +1553,15 @@ def make_plan(
         copilot = bool(state and state.github.get("copilot_review"))
     ci_along = (choice is not None and "ci" not in components and "ci" not in skip
                 and state is not None and "ci" in state.components)  # fmt: skip
-    if ci_along:
+    # update: a newer SeamSpec installed moves the pin forward, never back; ci comes along for the pin only
+    # (ADR-20261124-cd64 point 8)
+    pin_along = False
+    if update and not hold_pin and "seamspec" in components and state is not None and (root / ssc.CONFIG).is_file():
+        installed = ssc.installed_version(root)
+        if ssc.newer(installed, state.tools.get("seamspec")):
+            ctx.seamspec_pin = installed
+            pin_along = "ci" not in components and "ci" not in skip and "ci" in state.components
+    if ci_along or pin_along:
         components = [c for c in COMPONENTS if c in {*components, "ci"}]
     shared = _workflows(ctx, with_governance=with_governance) if {"ci", "security"} & set(components) else None
     ci_result: _CiResult | None = None
@@ -1400,7 +1570,11 @@ def make_plan(
         if component == "ci" and shared is not None:
             # ci brought along by github alone changes only for the Copilot wait, as init does: never for ci's own
             # updates, which the person didn't ask for (review P6-F08)
-            ci_ctx = dataclasses.replace(ctx, update=False) if ci_along else ctx
+            ci_ctx = ctx
+            if pin_along:
+                ci_ctx = dataclasses.replace(ctx, pin_only=True)
+            elif ci_along:
+                ci_ctx = dataclasses.replace(ctx, update=False)
             ci_result = _ci(ci_ctx, shared, (lint_mode, kept), projects, copilot, asked=choice is not None)
             plan.actions += ci_result.actions
             plan.lint_question = lint_question and ci_result.inputs is not None
@@ -1418,14 +1592,31 @@ def make_plan(
             if moved and not update:
                 note = "the project's commands changed since they were recorded: `swerepo update` brings them in"
                 plan.actions.append(Action("agents", NOTE, None, note))
+        elif component == "seamspec":
+            plan.actions += _seamspec(ctx, plan, components, shared, chosen_hosts, adr_dir)
         else:
             plan.actions.append(Action(component, LATER_VERB, None, f"init adds it from Phase {LATER[component]}"))
 
+    if ctx.seamspec_pin is not None:
+        # the pin moves only when every workflow pinning SeamSpec takes it; otherwise it stays everywhere (P7-F01)
+        ss = next((a for a in plan.actions if a.path == ssc.WORKFLOW), None)
+        stuck = [path for path, took in ((standard.CI_WORKFLOW, ci_result is None or ci_result.written),
+                                         (ssc.WORKFLOW, ss is None or ss.verb in WRITTEN)) if not took]  # fmt: skip
+        if stuck:
+            held, kept = make_plan(**{**call, "hold_pin": True}), state.tools.get("seamspec") if state else None
+            note = f"the SeamSpec pin stays at {kept}: {', '.join(stuck)} can't take {ctx.seamspec_pin} yet"
+            held.actions.append(Action("seamspec", NOTE, None, note))
+            return held
     if ctx.update and state is not None:
         plan.actions += _dropped(ctx, components, plan.actions)
     # A component counts as applied when init could write it: ci without a workflow isn't recorded as chosen.
+    # seamspec counts once SeamSpec is set up; until then it waits (ADR-20261124-cd64 point 1)
     applied = [
-        c for c in components if c in AVAILABLE and not (c == "ci" and (ci_result is None or not ci_result.inputs))
+        c
+        for c in components
+        if c in AVAILABLE
+        and not (c == "ci" and (ci_result is None or not ci_result.inputs))
+        and not (c == "seamspec" and not plan.seamspec_set_up)
     ]
     plan.state_text = _new_state(ctx, plan, applied, adr_dir if adopted else None, shared, ci_result, privacy, choice,
                                  files)  # fmt: skip
@@ -1489,7 +1680,9 @@ def _new_state(
 ) -> str | None:
     """The `.swerepo.toml` after this run, or None when it wouldn't change. A workflow's inputs are recorded only
     when it is created, rewritten or current, so they always rebuild what was written (P4-F02)."""
-    if not applied:
+    # a file SWERepo writes is recorded, also before its component counts as applied: SWERepo's seamspec.yml is
+    # written before `seamspec init` runs (review P7-F02)
+    if not applied and not any(a.verb in WRITES and a.record is not None for a in plan.actions):
         return None
     before = ctx.state.dumps() if ctx.state else None
     state = State.parse(before) if before is not None else State.new()
@@ -1525,6 +1718,14 @@ def _new_state(
             state.set_project_inputs(project_inputs)
         if state.tools.get("seamspec") != inputs.seamspec:
             state.set_tool("seamspec", inputs.seamspec)
+    elif plan.seamspec_pin_written and state.tools.get("seamspec") != plan.seamspec_pin_written:
+        state.set_tool("seamspec", plan.seamspec_pin_written)  # no swerepo-ci.yml: SWERepo's seamspec.yml pins it
+    if "seamspec" in applied:
+        for name, rule_id in ctx.adopt.items():
+            if state.seamspec_adopted.get(name) != rule_id:
+                state.set_seamspec_adopted(name, rule_id)
+        if state.seamspec_initialised is None and ssc.released(plan.seamspec_installed):
+            state.set_seamspec_initialised(str(plan.seamspec_installed))  # adopted as it is (review P7-F07)
     if choice is not None and "github" in applied:
         settings = choice.settings
         # The choices are recorded only where the files carry them: the mode and Copilot review when ruleset.json
@@ -1725,6 +1926,100 @@ def apply(plan: Plan, root: Path) -> None:
             State.parse(plan.state_text).save(root)
         except StateError as error:
             raise InitError(str(error)) from error
+
+
+# --- seamspec, after the files (ADR-20261124-cd64) ---------------------------------------------------
+
+
+def _seamspec_run(args: list[str], root: Path, *, text: str | None = None) -> subprocess.CompletedProcess[str] | None:
+    """A SeamSpec command whose output SWERepo reads (`propose`, `verify`, `spec --out`), or None when it can't run."""
+    found = ssc.command()
+    if found is None:
+        return None
+    try:
+        return subprocess.run([found, *args], cwd=root, input=text, capture_output=True, text=True, check=False,
+                              timeout=ssc.TIMEOUT)  # fmt: skip
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def apply_seamspec(plan: Plan, root: Path, store: TemplateStore | None = None) -> tuple[list[str], list[str]]:
+    """Run the plan's SeamSpec steps, after the files are written: `seamspec init` attached to the person's terminal
+    (only when the plan holds it, which it does only with a terminal), then the hygiene proposals, verified where
+    this clone is trusted. Returns (lines to show, the ids proposed). Never approves anything."""
+    root, lines, ids = root.resolve(), [], []
+    found = ssc.command()
+    if plan.seamspec_run is not None:
+        if found is None:
+            return ["SeamSpec isn't installed: nothing run"], []
+        try:  # attached: SeamSpec asks the person its own questions, its consent screen included
+            done = subprocess.run([found, *plan.seamspec_run], cwd=root, check=False)
+        except OSError as error:
+            return [f"seamspec init didn't run ({error.strerror or type(error).__name__})"], []
+        if done.returncode != 0 or not (root / ssc.CONFIG).is_file():
+            return [f"seamspec init didn't finish (exit status {done.returncode}): nothing proposed; run "
+                    "swerepo init --only seamspec again"], []  # fmt: skip
+        state = State.load(root)
+        if state is None:  # the first .swerepo.toml: an existing repository's pull-request rules start warn-only
+            state = State.new()  # (spec §10, as `_new_state` does; review P7-F09)
+            if _has_commits(root):
+                state.set_pr_rules(enforce=False, warn_since=datetime.date.today())
+            else:
+                state.set_pr_rules(enforce=True)
+        if "seamspec" not in state.components:
+            state.set_components([c for c in COMPONENTS if c in {*state.components, "seamspec"}])
+        version = ssc.installed_version(root)
+        if ssc.released(version) and state.seamspec_initialised != version:
+            state.set_seamspec_initialised(str(version))  # what `seamspec init` last ran with (review P7-F07)
+        state.save(root)
+        lines.append("SeamSpec set up." if not plan.seamspec_set_up else "SeamSpec's own files refreshed.")
+    store = store or TemplateStore()
+    state = State.load(root)
+    adr_dir = str((state.adopted.get("adr_dir") if state else None) or "docs/adr")
+    for name in plan.seamspec_propose:
+        rule = ssc.HYGIENE[name]
+        harness = store.get(rule.template).render({})
+        data = ssc.proposal(rule, harness, adr_dir=adr_dir)
+        done = _seamspec_run(["propose", "--json", "-"], root, text=json.dumps(data))
+        try:
+            rule_id = json.loads(done.stdout).get("id") if done is not None and done.returncode == 0 else None
+        except ValueError:
+            rule_id = None
+        if not isinstance(rule_id, str):
+            lines.append(f"hygiene/{name}: not proposed (seamspec propose failed)")
+            continue
+        ids.append(rule_id)
+        lines.append(f"hygiene/{name}: proposed as {rule_id}")
+    if ids:
+        done = _seamspec_run(["verify", *[arg for rule_id in ids for arg in ("--proposed", rule_id)]], root)
+        said = (done.stdout + done.stderr).lower() if done is not None else ""
+        if done is not None and done.returncode == 0:
+            lines.append("Verified: each proposed rule passes here.")
+        elif "trust" in said or "isn't set up for this clone" in said:
+            lines.append("Not verified here: this clone isn't trusted for test runs (seamspec trust); seamspec review "
+                         "runs each rule before you approve it")  # fmt: skip
+        else:
+            lines.append("A proposed rule fails here: seamspec verify --proposed <id> shows which; reject it in "
+                         "seamspec review, or fix what it found")  # fmt: skip
+    return lines, ids
+
+
+def write_earned_spec(root: Path) -> str | None:
+    """`docs/EARNED_SPEC.md` from the approved rules (spec §13), when SeamSpec is set up and the file is missing or out
+    of date. Returns a line to show, or None when nothing was written."""
+    root = root.resolve()
+    if not (root / ssc.CONFIG).is_file():
+        return None
+    if not ssc.safe_target(root, ssc.EARNED_SPEC):  # a link could lead SeamSpec's write out of the repository (P7-F03)
+        return f"{ssc.EARNED_SPEC}: a link, or out of the repository: not written"
+    if (root / ssc.EARNED_SPEC).is_file():
+        current = _seamspec_run(["spec", "--check", ssc.EARNED_SPEC], root)
+        if current is not None and current.returncode == 0:
+            return None
+    done = _seamspec_run(["spec", "--out", ssc.EARNED_SPEC], root)
+    if done is None or done.returncode != 0:
+        return f"{ssc.EARNED_SPEC}: not written (seamspec spec --out failed)"
+    return f"{ssc.EARNED_SPEC}: written from the rules approved so far"
 
 
 def noreply_warning(root: Path) -> str | None:

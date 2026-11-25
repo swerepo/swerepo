@@ -7,6 +7,7 @@ Commands arrive phase by phase (docs/PROGRESS.md): `check` since Phase 2; `init`
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 from typing import Annotated, Any
@@ -14,6 +15,7 @@ from typing import Annotated, Any
 import typer
 
 from swerepo import __version__, standard
+from swerepo import seamspec_component as ssc
 from swerepo.adr import AdrError, new_adr, write_index
 from swerepo.blocks import inside
 from swerepo.check import UsageError, in_github_actions, one_line, run_check
@@ -29,9 +31,11 @@ from swerepo.init import (
     InitError,
     apply,
     apply_github,
+    apply_seamspec,
     has_github_remote,
     make_plan,
     noreply_warning,
+    write_earned_spec,
 )
 from swerepo.progress import report
 from swerepo.state import COMPONENTS, State, StateError
@@ -167,6 +171,65 @@ def _ask_github(ask: dict[str, str]) -> dict[str, object]:
     return answers
 
 
+def _ask_adopt(names: list[str], locked: list[tuple[str, str]]) -> dict[str, str]:
+    """For each hygiene rule SWERepo would propose, whether a locked rule of the repository's own already covers it
+    (ADR-20261124-cd64 point 6). Enter proposes SWERepo's."""
+    ids = {rule_id for rule_id, _ in locked}
+    typer.echo("Locked rules here:")
+    for rule_id, title in locked:
+        typer.echo(f"  {rule_id}  {one_line(title)}")
+    answers: dict[str, str] = {}
+    for name in names:
+        while True:
+            given = typer.prompt(f"A locked rule that covers hygiene/{name} (its id, or Enter to propose SWERepo's)",
+                                 default="", show_default=False).strip()  # fmt: skip
+            if not given or given in ids:
+                break
+            typer.echo(f"{given}: not one of the locked rules above")
+        if given:
+            answers[name] = given
+    return answers
+
+
+def _parse_adopt(given: list[str] | None) -> dict[str, str]:
+    adopt: dict[str, str] = {}
+    for item in given or []:
+        name, sep, rule_id = item.partition("=")
+        if not sep or not name.strip() or not rule_id.strip():
+            raise UsageError(f"--adopt {item}: NAME=ID, for example privacy=inv_62d51113")
+        adopt[name.strip()] = rule_id.strip()
+    return adopt
+
+
+def _seamspec_after(plan, path: Path, interactive: bool) -> list[str]:
+    """SeamSpec's steps after the files: its own setup in this terminal, the hygiene proposals, the review if the
+    person takes it now, then the earned spec (spec §13)."""
+    if not (plan.seamspec_run or plan.seamspec_propose or plan.seamspec_spec or plan.seamspec_doctor):
+        return []
+    lines, ids = apply_seamspec(plan, path)
+    if interactive:  # shown before the question about reviewing them; otherwise returned, so --json stays one object
+        for line in lines:
+            typer.echo(one_line(line))
+        lines = []
+    if ids and interactive and typer.confirm("Review the proposed rules now (seamspec review)?", default=True):
+        found = ssc.command()
+        if found:
+            subprocess.run([found, "review"], cwd=path.resolve(), check=False)  # the person decides there
+    elif ids:
+        lines.append("Next: seamspec review, to approve or reject each proposed rule (SWERepo never approves)")
+    written = write_earned_spec(path) if plan.seamspec_spec else None  # only when the plan holds it (review P7-F08)
+    if written:
+        lines.append(written)
+    if plan.seamspec_doctor:  # update reports SeamSpec's own health last (ADR-20261124-cd64 point 8)
+        doctor = ssc.doctor(path.resolve())
+        if doctor is not None:
+            errors, warnings = doctor
+            said = (f"error in {', '.join(errors)}" if errors else f"warning in {', '.join(warnings)}" if warnings
+                    else "healthy")  # fmt: skip
+            lines.append(f"seamspec doctor: {said}")
+    return lines
+
+
 def _apply_github(plan, path: Path, yes: bool) -> list[str]:
     """Show each GitHub change as JSON and apply what the person says yes to (all of them with --yes)."""
     labels = {"ruleset": 'Apply ruleset "swerepo" on the default branch?', "settings": "Apply merge settings?"}
@@ -200,19 +263,25 @@ def init(
         bool | None,
         typer.Option("--copilot-review/--no-copilot-review", help="github: request Copilot's review, and wait for it."),
     ] = None,
+    adopt: Annotated[
+        list[str] | None,
+        typer.Option("--adopt", help="seamspec: NAME=ID, a locked rule of yours covering a hygiene rule."),
+    ] = None,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Print the plan and stop.")] = False,
     yes: Annotated[bool, typer.Option("--yes", help="Apply without asking (for scripts).")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Print one JSON result instead of text.")] = False,
     path: Annotated[Path, typer.Option("--path", help="The repository to set up.")] = Path("."),
 ) -> None:
     """Set the repository up to the standard: print the plan, then apply it. Never replaces your files.
-    This version applies `docs`, `agents`, `ci`, `security` and `github`; the others come in later phases."""
+    This version applies `docs`, `agents`, `ci`, `security`, `github` and `seamspec`; the others come in later
+    phases."""
     interactive = _interactive() and not as_json and not yes
     try:
         components, skipped = _selection(only, ctx.args)
         listed = [p.strip() for p in projects.split(",") if p.strip()] if projects is not None else None
         options = {"only": components, "skip": skipped, "with_governance": with_governance, "projects": listed,
-                   "mode": mode, "code_owner": code_owner, "copilot_review": copilot_review}  # fmt: skip
+                   "mode": mode, "code_owner": code_owner, "copilot_review": copilot_review,
+                   "adopt": _parse_adopt(adopt), "terminal": interactive and not dry_run}  # fmt: skip
         plan = make_plan(path, **options)
         if interactive and not dry_run:
             asked: dict[str, object] = {}
@@ -224,6 +293,8 @@ def init(
                 asked["contact"] = _ask_contact(path.resolve())
             if plan.github_question:
                 asked.update(_ask_github(plan.github_ask))  # asks only what no flag or record decided
+            if plan.seamspec_ask:
+                asked["adopt"] = {**options["adopt"], **_ask_adopt(plan.seamspec_ask, plan.seamspec_locked)}
             if asked:
                 plan = make_plan(path, **{**options, **asked})
     except UsageError as error:
@@ -247,23 +318,26 @@ def init(
     try:
         apply(plan, path)
         github_lines = _apply_github(plan, path, yes) if plan.github_apply else []
+        seamspec_lines = _seamspec_after(plan, path, interactive)
     except InitError as error:
         raise _fail(error, 1, "init") from error
     if as_json:
-        typer.echo(json.dumps({**plan.to_dict(applied=True), "github": github_lines}, indent=2, ensure_ascii=False))
+        result = {**plan.to_dict(applied=True), "github": github_lines, "seamspec": seamspec_lines}
+        typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
         raise typer.Exit(0)
     created = sum(1 for a in plan.changes if a.verb == "create")
     blocks = sum(1 for a in plan.changes if a.verb == "add block")
     rewritten = sum(1 for a in plan.changes if a.verb == "rewrite")
     again = f", {rewritten} rewritten" if rewritten else ""
     typer.echo(f"Applied: {created} file(s) created, {blocks} block(s) added{again}.")
-    for line in github_lines:
+    for line in [*github_lines, *seamspec_lines]:
         typer.echo(one_line(line))
-    if any(a.verb == "waiting" for a in plan.actions) and plan.github_remote:  # on GitHub, gh missing or logged out
+    github_waits = any(a.verb == "waiting" and a.component == "github" for a in plan.actions)
+    if github_waits and plan.github_remote:  # on GitHub, gh missing or logged out
         typer.echo("Next: review the changes (git status, git diff), commit them on a new branch, open a pull request.")
         typer.echo("Then, with gh installed and logged in (gh auth login), apply the ruleset and merge settings:")
         typer.echo("  swerepo init --only github")
-    elif any(a.verb == "waiting" for a in plan.actions):
+    elif github_waits:
         typer.echo("Next, as there is no GitHub repository yet (spec §12):")
         typer.echo("  1. commit these files on the default branch (the one commit straight to it)")
         typer.echo("  2. create the repository and push: gh repo create --source . --push")
@@ -308,7 +382,7 @@ def update(
     try:
         components, skipped = _selection(only, ctx.args)
         plan = _update_plan(path, components, skipped, "update", merge=merge or interactive,
-                            enforce_pr_rules=enforce_pr_rules)  # fmt: skip
+                            enforce_pr_rules=enforce_pr_rules, terminal=interactive and not dry_run)  # fmt: skip
     except UsageError as error:
         raise _fail(error, 2, "update") from error
     except InitError as error:
@@ -333,15 +407,17 @@ def update(
     try:
         apply(plan, path)
         github_lines = _apply_github(plan, path, yes) if plan.github_apply else []
+        seamspec_lines = _seamspec_after(plan, path, interactive)
     except InitError as error:
         raise _fail(error, 1, "update") from error
     if as_json:
-        typer.echo(json.dumps({**plan.to_dict(applied=True), "github": github_lines}, indent=2, ensure_ascii=False))
+        result = {**plan.to_dict(applied=True), "github": github_lines, "seamspec": seamspec_lines}
+        typer.echo(json.dumps(result, indent=2, ensure_ascii=False))
         raise typer.Exit(0)
     counts = {verb: sum(1 for a in plan.changes if a.verb == verb) for verb in (REWRITE, MERGE, "create", "add block")}
     typer.echo(f"Applied: {counts[REWRITE]} updated, {counts[MERGE]} merged, "
                f"{counts['create'] + counts['add block']} added.")  # fmt: skip
-    for line in github_lines:
+    for line in [*github_lines, *seamspec_lines]:
         typer.echo(one_line(line))
     left = sum(1 for a in plan.actions if a.verb in (CONFLICT, CANT_MERGE))
     if left:
