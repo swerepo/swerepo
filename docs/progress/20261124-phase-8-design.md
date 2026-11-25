@@ -27,6 +27,7 @@
   - a `v*` tag ruleset on this repository (no deletion, force-push or move).
 - **Round 1:** Gemini accepted all nine, the pushback included, and raised `P8-D10`, fixed: each release's snapshot of the renders built in code is required, and checked before its tag freezes it; `release.yml` runs the locked rules at the tag.
 - **Round 2:** Gemini accepted `P8-D10`; the design review is closed (`P8-D01` to `P8-D10` fixed and accepted). `CODE_REVIEW.md` stays open for the implementation review (`P8-F<nn>`).
+- **Copilot's review of PR #21:** `SHA256SUMS` stays outside the PyPA action's `packages-dir` after it is checked, since the action runs `twine check` on every file there (ADR-20261124-4699).
 - **`docs/PROGRESS.md`:** Phase 7 done ([PR #20](https://github.com/swerepo/swerepo/pull/20)), Phase 8 designed.
 
 ## Next

@@ -42,7 +42,8 @@ Facts this rests on, from GitHub's and PyPI's documentation (read on 2026-11-24)
       Nothing is built or signed before the tag has passed `check` and `test`.
    4. **`publish`** (`needs: [build]`; `id-token: write` only; `environment: pypi`):
       - waits until the owner approves;
-      - downloads that exact artifact and checks it with `sha256sum -c SHA256SUMS`, so the files published are the files built and attested;
+      - downloads that exact artifact into a staging folder and checks it with `sha256sum -c SHA256SUMS`, so the files published are the files built and attested;
+      - then moves only the wheel and the sdist into `dist/`, the action's `packages-dir`. The action runs `twine check` on every file there, so `SHA256SUMS` stays behind in the staging folder (Copilot on PR #21);
       - publishes with `pypa/gh-action-pypi-publish` through trusted publishing;
       - never checks out or rebuilds the code.
    5. **`github-release`** (`needs: [publish]`; `contents: write` only):
