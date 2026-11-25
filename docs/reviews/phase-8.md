@@ -445,3 +445,10 @@ Breaking each new piece is caught: another backend, stray sdist entries dropped,
   - `inv_4a53ca43` replaces `inv_9265607a`.
 
   That makes 28 rules locked, all passing. `docs/EARNED_SPEC.md` was regenerated.
+
+## Copilot's review of PR #22
+
+Two inline comments, each reproduced as a test before the fix, and each fix broken on purpose and caught:
+
+- **The `docs` folder, whatever its case** (`swerepo/spec.py`): `Docs/SPEC.md` wasn't a candidate, so `check` reported the spec missing and `init` wrote a second, root `SPEC.md`. The folder name is now compared case-insensitively too, and the path is recorded as it is spelled.
+- **Several specs, without `docs` in the run** (`swerepo/init.py`): `init --only agents` or `--only github` named `SPEC.md` without saying there were several candidates. The plan now lists them and says how to record one, on the running component's line, once; `docs` still says it itself when it runs.

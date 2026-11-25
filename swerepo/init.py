@@ -1651,6 +1651,8 @@ def make_plan(
             held.actions.append(Action("seamspec", NOTE, None, note))
             return held
     named_by = [c for c in components if c in SPEC_NAMED_BY]
+    if found_spec.several and named_by and "docs" not in components:  # docs says so itself (Copilot on PR #22)
+        plan.actions.append(Action(named_by[0], NOTE, None, specs.how_to_choose(found_spec.several)))
     if found_spec.adopt and named_by:
         plan.spec_adopt = found_spec.adopt
         if "docs" not in components:  # docs says so itself; otherwise say it here (review P8-F02)

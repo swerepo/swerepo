@@ -48,7 +48,7 @@ def _is_candidate(path: str) -> bool:
     lower = name.lower()
     if folder == "":
         return lower == "spec.md" or (lower.endswith(_SUFFIX) and len(lower) > len(_SUFFIX))
-    return folder == "docs" and lower == "spec.md"
+    return folder.lower() == "docs" and lower == "spec.md"  # `Docs/SPEC.md` too (Copilot on PR #22)
 
 
 def within(root: Path, path: str) -> bool:

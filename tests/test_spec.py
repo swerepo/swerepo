@@ -188,3 +188,23 @@ class TestReviewP8:
         make(project, {"docs/SPEC.md": "# a second one\n"})  # recorded: a new candidate changes nothing
         again = make_plan(project, today=TODAY, only=[only], hosts=[], code_owner="@dev", contact="github")
         assert not again.changes
+
+
+class TestCopilotPR22:
+    """Copilot's review of PR #22, each reproduced before the fix."""
+
+    def test_the_docs_folder_matches_whatever_its_case(self, project: Path):
+        make(project, {"Docs/SPEC.md": "# Ours\n"})
+        assert specs.find(project) == specs.Found("Docs/SPEC.md", adopt="Docs/SPEC.md")
+        found = plan(project)
+        assert spec_action(found).verb == ADOPT and not any(a.path == "SPEC.md" for a in found.actions)
+        assert docs_spec(project).status == OK
+
+    @pytest.mark.parametrize("only", ["agents", "github"])
+    def test_a_run_without_docs_lists_several_specs_too(self, project: Path, only: str):
+        make(project, {"A-SPEC.md": "# a\n", "B-SPEC.md": "# b\n"})
+        found = make_plan(project, today=TODAY, only=[only], hosts=[], code_owner="@dev", contact="github")
+        notes = [a for a in found.actions if a.verb == NOTE and "several specs" in a.note]
+        assert len(notes) == 1 and notes[0].component == only and "A-SPEC.md, B-SPEC.md" in notes[0].note
+        both = make_plan(project, today=TODAY, only=["docs", only], hosts=[], code_owner="@dev", contact="github")
+        assert len([a for a in both.actions if a.verb == NOTE and "several specs" in a.note]) == 1  # once, by docs

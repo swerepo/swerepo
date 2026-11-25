@@ -42,6 +42,8 @@
 - **SeamSpec:** the owner approved all three on 2026-11-25. `inv_3f05e701` and `inv_7bc9c95a` are locked, and `inv_4a53ca43` replaces `inv_9265607a`, so 28 rules are locked, all passing. `docs/EARNED_SPEC.md` was regenerated.
 - **Review:** closed after two rounds each for the design and the implementation ([review](../reviews/phase-8.md)).
 
+- **Copilot's review of PR #22** ([review](../reviews/phase-8.md)): the `docs` folder matches whatever its case (`Docs/SPEC.md`), and a run without `docs` lists several spec candidates too.
+
 ## Next
 
 - After merging: the `pypi` environment and the `v*` tag ruleset on GitHub (on the owner's yes), dogfooding on an established repository, and the `0.1.0` release PR.
