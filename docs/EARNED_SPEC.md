@@ -2,11 +2,34 @@
 
 # Spec: what this code guarantees
 
-20 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
+26 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
 
 ## Rules in force
 
-### `swerepo` (17 rules)
+### `.github/workflows` (1 rule)
+
+#### CI still runs the tests, and ci-ok still needs them
+
+In .github/workflows/swerepo-ci.yml, a test job, and a test-<project> job for every folder in .swerepo.toml's [projects] listed, each runs `uv run pytest` as a command of its own at the top of its step's script, is not switched off (if: false) and not allowed to fail (continue-on-error: true) at job or step level, and isn't masked (||, ;, a pipe, &, --version, --help, --collect-only, && unless it is the script's last command). ci-ok's needs names each of them, and ci-ok still fails when one fails: it runs if: always(), isn't allowed to fail, and has a step that reads the jobs' results (NEEDS: ${{ toJSON(needs) }}) into a variable and then runs `if [ -n "$var" ]; then` with a non-zero `exit` before any other. Both steps stop at their first failing command: GitHub's own bash or sh, no set +e, and no exit before them.
+
+- **Applies to:** `.github/workflows/swerepo-ci.yml`, `.swerepo.toml`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-25, in the terminal
+- **Test:** `.seamspec/tests/test_inv_11ce8c5b.py` (pytest)
+- **Replaces:** CI still runs the tests, and ci-ok still needs them (`inv_c78fcca0`)
+- **Id:** `inv_11ce8c5b`
+
+### `docs/adr` (1 rule)
+
+#### Every ADR is listed in the ADR index, and the index lists no ADR without a file
+
+Every ADR file (ADR-YYYYMMDD-xxxx-title.md) in the ADR folder ([adopted] adr_dir in .swerepo.toml, else docs/adr) is listed once in its README.md's index between the swerepo:adr-index markers, by its own row's link to the file ([ADR-YYYYMMDD-xxxx](file.md) in the first cell; an ID named elsewhere in a row doesn't count), and the index links no file that doesn't exist.
+
+- **Applies to:** `docs/adr/`, `.swerepo.toml`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-25, in the terminal
+- **Test:** `.seamspec/tests/test_inv_5c45ea08.py` (pytest)
+- **Id:** `inv_5c45ea08`
+
+### `swerepo` (20 rules)
 
 #### A fingerprint ignores only line endings, trailing whitespace, trailing blank lines and a BOM
 
@@ -179,6 +202,34 @@ In a repository with files of the person's own (CLAUDE.md with CRLF line endings
 - **Critical:** always shown to the agent in full
 - **Id:** `inv_9265607a`
 
+#### SWERepo never answers SeamSpec's consent, and runs seamspec init only in a terminal
+
+With a fake `seamspec` first on PATH that logs every call, in a git repository with a pyproject.toml and a uv.lock, and with the command line seeing a terminal: `swerepo init --yes`, `swerepo init --dry-run` and `swerepo init --json` run no `seamspec init`; the `--yes` run applies the other default components (docs, agents, ci, security and github are recorded, and their files written) and says to run `seamspec init` in a terminal. An interactive `swerepo init --only seamspec` answered yes runs `seamspec init` once, and `seamspec review` only when the person answers yes to reviewing the proposals. After a newer SeamSpec is installed, `swerepo update --yes` runs no `seamspec init`, and an interactive `swerepo update` answered yes reruns it once. No call SWERepo makes to `seamspec` ever passes an argument starting with `--accept-auto-run`.
+
+- **Applies to:** `swerepo/init.py`, `swerepo/seamspec_component.py`, `swerepo/cli.py`, `swerepo/ci.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-25, in the terminal
+- **Test:** `.seamspec/tests/test_inv_c45b7540.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_c45b7540`
+
+#### check stays read-only with SeamSpec, and with --ci runs no SeamSpec command
+
+In a repository set up by `swerepo init` with SeamSpec set up and chosen (a ledger where one hygiene rule is adopted, one locked, one proposed and one not yet proposed) and a `docs/EARNED_SPEC.md`, with a fake `seamspec` first on PATH that logs every call: `swerepo check --ci` on GitHub Actions makes no call to `seamspec` at all. `swerepo check` on a person's machine (every component) calls `seamspec` with exactly `--version`, `doctor --json` and `spec --check docs/EARNED_SPEC.md`, the last at least once, and nothing else, and reports each of the four hygiene rules with its status. Both leave every file and folder unchanged (names, sizes, modification times and contents, folders' modification times included, `.git` included).
+
+- **Applies to:** `swerepo/check.py`, `swerepo/seamspec_component.py`, `swerepo/cli.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-25, in the terminal
+- **Test:** `.seamspec/tests/test_inv_022998a0.py` (pytest)
+- **Id:** `inv_022998a0`
+
+#### update moves the SeamSpec pin forward only, and every workflow and .swerepo.toml name the same version
+
+In a repository set up by `swerepo init` with SeamSpec set up and chosen, the CI pinning SeamSpec 0.1.2, and a fake `seamspec` first on PATH reporting its version: `swerepo update --yes --only seamspec` with 0.2.0 installed moves the pin to 0.2.0 in `.swerepo.toml`'s `[tools] seamspec` and `swerepo-ci.yml` (`ci` brought along for the pin), and in strict mode in SWERepo's `seamspec.yml` too. With 0.1.1, 0.1.2, a development build (0.3.0.dev0) or a local build (0.3.0+local) installed, `swerepo-ci.yml`, `seamspec.yml` and `.swerepo.toml` stay byte for byte. When the person edited the `seamspec==` line in `swerepo-ci.yml`, `update --yes --merge --only seamspec` with 0.2.0 installed leaves all three byte for byte. In strict mode, a person's edit to `seamspec.yml` (so `update --yes` without `--merge` can't take the new pin there) leaves all three byte for byte. After every run, each of these workflows pins SeamSpec, and all of them and `[tools] seamspec` name the same version.
+
+- **Applies to:** `swerepo/init.py`, `swerepo/seamspec_component.py`, `swerepo/ci.py`, `swerepo/cli.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-25, in the terminal
+- **Test:** `.seamspec/tests/test_inv_2f78270e.py` (pytest)
+- **Id:** `inv_2f78270e`
+
 ### `swerepo/templates/github/dependabot` (1 rule)
 
 #### Dependabot's version updates wait a week, and SWERepo's settings turn auto-merge off
@@ -190,6 +241,17 @@ In what `swerepo init --only github` writes, for a uv project and a pip project 
 - **Test:** `.seamspec/tests/test_inv_abcc9759.py` (pytest)
 - **Critical:** always shown to the agent in full
 - **Id:** `inv_abcc9759`
+
+### `swerepo/templates/seamspec` (1 rule)
+
+#### The bundled hygiene tests use only the standard library and pytest, pass ruff, and pass where init set things up
+
+Each of SWERepo's four hygiene rule tests (privacy, adr-index, changelog, ci-tests), as SWERepo renders them for `seamspec propose`, imports only the Python standard library and pytest, passes `ruff check` and `ruff format --check` with this repository's settings, and, run alone with pytest (no conftest) from `.seamspec/tests/` of a git repository that `swerepo init --yes` set up and committed, passes: on that layout as `init` left it, and with its security policy moved to `.github/SECURITY.md` holding a contact address. Each exits with failures, run alone, on the breakage it guards: a home-folder path in a tracked file, an ADR left out of the index, a changelog without `[Unreleased]`, `ci-ok` no longer needing `test`, `test`'s pytest step allowed to fail (`continue-on-error: true`), masked (`|| true`) or masked across a folded `run: >` block, `ci-ok`'s step that judges the jobs' results replaced with `echo ok`, and `ci-ok` no longer running `if: always()`.
+
+- **Applies to:** `swerepo/templates/seamspec/`, `swerepo/seamspec_component.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-25, in the terminal
+- **Test:** `.seamspec/tests/test_inv_4eaaa886.py` (pytest)
+- **Id:** `inv_4eaaa886`
 
 ### `(repository root)` (2 rules)
 
@@ -225,6 +287,9 @@ These were approved once and are no longer checked.
 - **Pull requests wait for Copilot's review inside ci-ok** (`inv_faa5bef5`): In the `swerepo-ci.yml` that `swerepo init` writes when the ruleset requests Copilot's review (also when github is applied on its own after ci), `ci-ok` waits for a `copilot-review` job that runs on pull requests only and whose `permissions:` block grants `pull-requests: read` and nothing else, and the `pull_request` trigger lists `types: [opened, synchronize, reopened, ready_for_review]`, so a draft marked ready runs again. Run as written, with the values its own `env:` block maps from GitHub (`GH_TOKEN` included; the fake `gh` refuses without it), the job asks GitHub for exactly `repos/<repository>/pulls/<number>/reviews` with `--paginate`. It passes once that list holds a review by `copilot-pull-request-reviewer[bot]`, asking again when the first answer has none. It fails when none comes or only others reviewed (look-alike names included), and fails at once on a draft, without asking. `ci-ok`'s step fails on a pull request whose `copilot-review` didn't succeed, and on a push where it ran. With `--no-copilot-review` (also on a later run that turns the wait off) or a committed ruleset without Copilot review, there is no such job.
   - Retired because: Dependabot's first pull requests (#12–#14) were all blocked: GitHub requests Copilot's review only for authors who have Copilot, so the wait timed out and ci-ok failed on every dependency update. The owner decided (ADR-20261123-cc8d) that pull requests opened by dependabot[bot] or renovate[bot] pass the wait at once; their tests and dependency-review still run and the person merging reviews them. The job now reads the pull request's author, which the old test doesn't know. inv_78f19f51 keeps everything inv_faa5bef5 locked and adds the bot cases, including look-alike names and other bots that still wait.
   - Replaced by Pull requests wait for Copilot's review inside ci-ok; Dependabot's holds only its own commits (`inv_78f19f51`).
+- **CI still runs the tests, and ci-ok still needs them** (`inv_c78fcca0`): In .github/workflows/swerepo-ci.yml, a test job, and a test-<project> job for every folder in .swerepo.toml's [projects] listed, each runs `uv run pytest`, is not switched off (if: false) and not allowed to fail (continue-on-error: true) at job or step level, and isn't masked (|| or ;, &, --version, --help, --collect-only). ci-ok's needs names each of them, and ci-ok still fails when one fails: it runs if: always(), isn't allowed to fail, and has a step that reads the jobs' results (NEEDS: ${{ toJSON(needs) }}) and can exit non-zero.
+  - Retired because: Copilot's review of PR #20 found two ways round the locked copy: it checks each command alone, so `set +e` before `uv run pytest`, or `uv run pytest && echo passed` followed by another command, still passes while failed tests leave the step green; and in ci-ok it only looks for `$NEEDS`, `.result` and an `exit 1` somewhere, so `if false; then` or a leading `exit 0` still passes. The replacement (inv_11ce8c5b, the updated seamspec/hygiene-ci-tests@1) reads the whole script: pytest must be a top-level command, not piped, not followed by `&&` unless last, with no `set +e`, no earlier `exit` and no custom shell; ci-ok must assign the results from `$NEEDS` to a variable, then `if [ -n "$var" ]; then` with a non-zero `exit` before any other. It still passes on this repository's swerepo-ci.yml and on what init writes.
+  - Replaced by CI still runs the tests, and ci-ok still needs them (`inv_11ce8c5b`).
 
 ## Tried and failed
 

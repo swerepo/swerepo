@@ -206,8 +206,8 @@ class TestChoices:
         assert "agents" not in {a.component for a in plan.actions}
 
     def test_components_of_later_phases_are_listed_not_applied(self, new_project: Path):
-        plan = make_plan(new_project, only=["seamspec"])
-        assert [(a.component, a.verb) for a in plan.actions] == [("seamspec", LATER_VERB)]
+        plan = make_plan(new_project, only=["openspec"])
+        assert [(a.component, a.verb) for a in plan.actions] == [("openspec", LATER_VERB)]
         assert plan.state_text is None and not plan.changes
 
     def test_wrong_names_are_usage_errors(self, new_project: Path):

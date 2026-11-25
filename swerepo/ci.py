@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import configparser
 import re
-import shutil
 import subprocess
 import tomllib
 from dataclasses import dataclass, field
@@ -190,7 +189,9 @@ def seamspec_pin(recorded: str | None) -> str:
     version is written into the workflow."""
     if valid_pin(recorded):
         return str(recorded)
-    command = shutil.which("seamspec")
+    from swerepo import seamspec_component  # the one place SWERepo finds SeamSpec (Phase 7 review of the rules)
+
+    command = seamspec_component.command()
     if command:
         try:
             done = subprocess.run([command, "--version"], capture_output=True, text=True, check=False, timeout=60)

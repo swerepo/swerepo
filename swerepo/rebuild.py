@@ -45,7 +45,7 @@ def workflow_inputs(inputs: ci.Inputs) -> dict[str, str]:
     }
 
 
-def _workflow_from(inputs: Mapping[str, str]) -> ci.Inputs:
+def workflow_from(inputs: Mapping[str, str]) -> ci.Inputs:
     projects = []
     for entry in json.loads(inputs["projects"]):
         project = ci.Project.from_inputs(str(entry["folder"]), entry)
@@ -102,7 +102,7 @@ def rebuild(store: TemplateStore, template_id: str, inputs: Mapping[str, str]) -
         component, name, version = parse_id(template_id)
         family = f"{component}/{name}"
         if family == ci.WORKFLOW:
-            return ci.render_workflow(store, _workflow_from(inputs), version)[1]
+            return ci.render_workflow(store, workflow_from(inputs), version)[1]
         if family == ci.PYPROJECT:
             block = ci.settings_block(
                 store, ruff=inputs["ruff"] == "true", pytest=inputs["pytest"] == "true",

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from swerepo import __version__, ci, github, merge, privacy, rebuild, standard
+from swerepo import seamspec_component as ssc
 from swerepo.blocks import file_fingerprint
 from swerepo.detect import Detection, detect
 from swerepo.fingerprint import HASH, HTML, BlockError, comment_style, find_block, fingerprint
@@ -822,6 +823,88 @@ def _seamspec(ctx: Context) -> list[Finding]:
         found.append(_ok(c, "seamspec.ci", f"CI runs the locked rules ({', '.join(Path(p).name for p in runners)})"))
     else:
         found.append(_missing(c, "seamspec.ci", "no workflow runs `seamspec verify`"))
+    return found + _seamspec_rules(ctx) + _seamspec_workflows(ctx, mode) + _seamspec_local(ctx)
+
+
+def _seamspec_rules(ctx: Context) -> list[Finding]:
+    """The hygiene rules (ADR-20261124-cd64 points 5 and 6) and the proposals waiting for review, from SeamSpec's own
+    files. A rule not yet approved only warns: approving is the person's call."""
+    c, ledger = "seamspec", ssc.Ledger.read(ctx.root)
+    chosen = set(ctx.state.components) if ctx.state else set()
+    adopted = ctx.state.seamspec_adopted if ctx.state else {}
+    found = []
+    adr_dir = str(ctx.adopted.get("adr_dir") or "docs/adr")
+    for rule in ssc.HYGIENE.values():
+        status, rule_id = ledger.hygiene(rule.name, adopted)
+        if rule.component not in chosen or (status == "missing" and not ssc.applies(ctx.root, rule.name, adr_dir)):
+            continue  # no subject here yet: init wouldn't propose it either (review P7-F06)
+        item, label = f"seamspec.hygiene.{rule.name}", f"hygiene/{rule.name}"
+        if status in ("locked", "adopted", "declined"):
+            word = {"locked": "locked", "adopted": "adopted", "declined": "declined by you"}[status]
+            found.append(_ok(c, item, f"{label}: {word} ({rule_id})"))
+        elif status == "proposed":
+            message = f"{label}: proposed ({rule_id}), waiting for seamspec review"
+            found.append(_missing(c, item, message, blocking=False))
+        elif status == "adopted-not-locked":
+            found.append(_missing(c, item, f"{label}: [seamspec.adopted] names {rule_id}, which isn't locked here"))
+        else:
+            message = f"{label}: not proposed yet (swerepo init --only seamspec)"
+            found.append(_missing(c, item, message, blocking=False))
+    waiting = ledger.waiting()
+    if waiting:
+        message = f"{len(waiting)} proposal(s) waiting for your review: seamspec review"
+        found.append(_missing(c, "seamspec.waiting", message, blocking=False))
+    return found
+
+
+def _seamspec_workflows(ctx: Context, mode: object) -> list[Finding]:
+    """SeamSpec's own workflow, unpinned, in any mode (review P7-F06), and strict mode's CODEOWNERS block
+    (ADR-20261124-cd64 points 3 and 4)."""
+    c, found = "seamspec", []
+    workflow = ctx.read(ssc.WORKFLOW)
+    if workflow is not None and ssc.unpinned(workflow):
+        message = f"{ssc.WORKFLOW}: actions not pinned to commits, so the workflow audit fails (init --only seamspec)"
+        found.append(_missing(c, "seamspec.workflow", message, ssc.WORKFLOW))
+    if mode != "strict":
+        return found
+    owners = ctx.read(github.CODEOWNERS)
+    team = bool(ctx.state and ctx.state.mode == "team")
+    for problem in ssc.codeowners_problems(owners or ""):
+        message = f"{github.CODEOWNERS}: {problem}"
+        found.append(_missing(c, "seamspec.codeowners", message, github.CODEOWNERS, blocking=team))
+    return found
+
+
+def _seamspec_local(ctx: Context) -> list[Finding]:
+    """On a person's machine only (never with --ci): the installed SeamSpec against the CI pin, `seamspec doctor`,
+    and whether the earned spec is current. Each of these commands only reads (ADR-20261124-cd64 point 9)."""
+    if not ctx.local or ssc.command() is None:
+        return []
+    c, found = "seamspec", []
+    pinned = ctx.state.tools.get("seamspec") if ctx.state else None
+    installed = ssc.installed_version(ctx.root)
+    if ssc.newer(installed, pinned):
+        message = f"SeamSpec {installed} installed, CI pins {pinned}: swerepo -u --seamspec"
+        found.append(Finding(c, "seamspec.pin", OUTDATED, message))
+    elif installed:
+        found.append(_ok(c, "seamspec.pin", f"SeamSpec {installed} installed; CI pins {pinned or 'none recorded'}"))
+    doctor = ssc.doctor(ctx.root)
+    if doctor is not None:
+        errors, warnings = doctor
+        # the checks' names only: SeamSpec's own messages can name machine paths, which check never prints
+        if errors:
+            message = f"seamspec doctor: error in {', '.join(errors)} (seamspec doctor --json shows why)"
+            found.append(_missing(c, "seamspec.doctor", message))
+        elif warnings:
+            message = f"seamspec doctor: warning in {', '.join(warnings)} (seamspec doctor --json shows why)"
+            found.append(_missing(c, "seamspec.doctor", message, blocking=False))
+        else:
+            found.append(_ok(c, "seamspec.doctor", "seamspec doctor: healthy"))
+    if ctx.exists(ssc.EARNED_SPEC):
+        current = ssc.run_read(["spec", "--check", ssc.EARNED_SPEC], ctx.root)
+        if current is not None and current.returncode != 0:
+            message = f"{ssc.EARNED_SPEC} is out of date: seamspec spec --out {ssc.EARNED_SPEC}"
+            found.append(_missing(c, "seamspec.earned-spec-current", message, ssc.EARNED_SPEC))
     return found
 
 

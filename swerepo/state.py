@@ -28,6 +28,9 @@ from swerepo.render import TEMPLATE_ID
 FILE_NAME = ".swerepo.toml"
 SUPPORTED_STANDARD = 1
 COMPONENTS = ("docs", "agents", "ci", "security", "github", "seamspec", "openspec", "release")
+# The hygiene rules SWERepo proposes as SeamSpec rules (spec §6.8, ADR-20261124-cd64).
+HYGIENE_RULES = ("privacy", "adr-index", "changelog", "ci-tests")
+_RULE_ID = re.compile(r"^inv_[0-9a-f]{8}$")
 MODES = ("solo", "team")
 DEFAULT_EXEMPT_AUTHORS = ("dependabot[bot]",)
 HEADER = "# Written by SWERepo (SWEREPO-SPEC §9). Commit this file. Settings may be edited; fingerprints may not."
@@ -203,6 +206,25 @@ class State:
         return {} if table is None else table.unwrap()
 
     @property
+    def seamspec_adopted(self) -> dict[str, str]:
+        """`[seamspec.adopted]`: hygiene rules a locked rule of the repository's own covers, by name (spec §9)."""
+        seamspec = self.doc.get("seamspec")
+        adopted = seamspec.get("adopted") if seamspec is not None else None
+        return {} if adopted is None else {str(k): str(v) for k, v in adopted.unwrap().items()}
+
+    @property
+    def seamspec_initialised(self) -> str | None:
+        """`[seamspec] initialised`: the SeamSpec version `seamspec init` last ran with here, apart from the CI pin, so
+        an upgrade that `update --yes` pinned still reruns `seamspec init` in a terminal (review P7-F07)."""
+        seamspec = self.doc.get("seamspec")
+        value = seamspec.get("initialised") if seamspec is not None else None
+        return None if value is None else str(value)
+
+    def set_seamspec_initialised(self, version: str) -> None:
+        _check_tool("seamspec.initialised", version)
+        self._table("seamspec")["initialised"] = version
+
+    @property
     def tools(self) -> dict[str, str]:
         """Versions of other tools the workflows pin (`[tools]`), e.g. `seamspec`."""
         table = self.doc.get("tools")
@@ -322,6 +344,14 @@ class State:
             self._table("github")[name] = array
         else:
             raise StateError(f"github.{name}: not a setting SWERepo writes")
+
+    def set_seamspec_adopted(self, name: str, rule_id: str) -> None:
+        """Record that the locked rule `rule_id` covers the hygiene rule `name` (`[seamspec.adopted]`)."""
+        _check_adopted(name, rule_id)
+        seamspec = self._table("seamspec")
+        if "adopted" not in seamspec:
+            seamspec.add("adopted", tomlkit.table())
+        seamspec["adopted"][name] = rule_id
 
     def set_tool(self, name: str, version: str) -> None:
         """Record the version of another tool a workflow pins (`[tools] seamspec`)."""
@@ -527,6 +557,13 @@ def _validate(doc: TOMLDocument, running: str = __version__) -> None:
         raise StateError("privacy: must be a table")
     if "allow_paths" in privacy:
         _text_list(privacy["allow_paths"], key="privacy.allow_paths")
+    seamspec = data.get("seamspec", {})
+    if not isinstance(seamspec, dict) or not isinstance(seamspec.get("adopted", {}), dict):
+        raise StateError("seamspec.adopted: must be a table of rule ids")
+    for name, rule_id in seamspec.get("adopted", {}).items():
+        _check_adopted(name, rule_id)
+    if "initialised" in seamspec:
+        _check_tool("seamspec.initialised", seamspec["initialised"])
     tools = data.get("tools", {})
     if not isinstance(tools, dict):
         raise StateError("tools: must be a table of versions")
@@ -536,6 +573,13 @@ def _validate(doc: TOMLDocument, running: str = __version__) -> None:
 
 # A tool's version (or a word such as "absent"): written into workflow commands, so one plain word only (P4-F03).
 _TOOL_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+!_-]*$")
+
+
+def _check_adopted(name: str, rule_id: Any) -> None:
+    if name not in HYGIENE_RULES:
+        raise StateError(f"seamspec.adopted.{name}: not a hygiene rule ({', '.join(HYGIENE_RULES)})")
+    if not isinstance(rule_id, str) or not _RULE_ID.fullmatch(rule_id):
+        raise StateError(f"seamspec.adopted.{name}: must be a SeamSpec rule id (inv_ and 8 hex characters)")
 
 
 def _check_tool(name: str, version: Any) -> None:
