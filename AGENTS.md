@@ -73,6 +73,7 @@ These rules apply to every agent and every person working on swerepo (the SWERep
 7. Answer every review thread before asking for a merge: fix it and reply with the commit, or reply why not. `swerepo threads <pr>` lists the open ones.
 8. Never publish a package, approve a deployment or merge without the person's explicit go-ahead.
 9. When a test fails, fix the code; never weaken the test. With SeamSpec, never edit a locked rule's test: request a supersede.
+10. A change to behaviour, CLI flags, APIs or configuration updates `SWEREPO-SPEC.md` in the same pull request (`update-spec.md`).
 
 ## Commands
 
@@ -83,5 +84,5 @@ These rules apply to every agent and every person working on swerepo (the SWERep
 
 ## Runbooks
 
-Step-by-step guides in `docs/agents/`, read when needed: `prepare-pr.md`, `address-review.md`, `record-adr.md`.
+Step-by-step guides in `docs/agents/`, read when needed: `prepare-pr.md`, `address-review.md`, `record-adr.md`, `update-spec.md`.
 <!-- swerepo:end -->

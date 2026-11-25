@@ -4,13 +4,13 @@ What is being built now and next. The log of what each change did is in [progres
 
 ## Now
 
-**Phase 8, designed:** the last phase of v0.1 (the owner's decisions, 2026-11-24):
+**Phase 8, reviewed:** the last phase of v0.1 (the owner's decisions, 2026-11-24; design in [PR #21](https://github.com/swerepo/swerepo/pull/21)):
 - a native `SPEC.md` kept by `docs` and `agents` instead of OpenSpec (ADR-20261124-4d76);
 - standard 1 with six components, `openspec` and `release` removed, since SWERepo never sets up package publishing (ADR-20261124-152d);
 - SWERepo's own release workflow, in this repository only (ADR-20261124-4699);
 - two rules guarding the shipped package (ADR-20261124-41e9).
 
-Before that: Phase 7, the `seamspec` component and the hygiene rules ([PR #20](https://github.com/swerepo/swerepo/pull/20)). 26 SeamSpec rules are in force.
+Before that: Phase 7, the `seamspec` component and the hygiene rules ([PR #20](https://github.com/swerepo/swerepo/pull/20)). 28 SeamSpec rules are in force.
 
 ## Next
 
@@ -37,7 +37,7 @@ Before that: Phase 7, the `seamspec` component and the hygiene rules ([PR #20](h
 | 5 | `github`; `threads` | done ([PR #10](https://github.com/swerepo/swerepo/pull/10), [review](reviews/phase-5.md)); applied here (ADR-20261123-e2f8) |
 | 6 | `update`, merge, `diff`, `status` | done ([PR #18](https://github.com/swerepo/swerepo/pull/18), [review](reviews/phase-6.md)) |
 | 7 | `seamspec` and the hygiene rule pack | done ([PR #20](https://github.com/swerepo/swerepo/pull/20), [review](reviews/phase-7.md)) |
-| 8 | native `SPEC.md`; six components (no `openspec`, no `release`); this repository's release workflow and rules; dogfooding; `0.1.0` | designed (ADR-20261124-4d76, -152d, -4699, -41e9) |
+| 8 | native `SPEC.md`; six components (no `openspec`, no `release`); this repository's release workflow and rules; dogfooding; `0.1.0` | reviewed ([review](reviews/phase-8.md); design: [PR #21](https://github.com/swerepo/swerepo/pull/21)); pull request next |
 | | **v0.2** (ADR-20261124-2452) | |
 | 9 | Enterprise multi-branch governance: `develop` and `release` protected, `--protected-branches`, squash and merge commits | |
 | 10 | Multi-service monorepos and federated ADRs: `adr new --scope`, two-tier ADRs | |

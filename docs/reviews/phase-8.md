@@ -1,6 +1,6 @@
 # Code Review · Phase 8
 
-**Status:** open · **Developer:** Claude · **Reviewer:** Gemini · **Owner decides:** ties, merges, SeamSpec approvals
+**Status:** closed · **Developer:** Claude · **Reviewer:** Gemini · **Owner decides:** ties, merges, SeamSpec approvals
 **Process:** ADR-20261119-9f87. Finding IDs `P8-D<nn>` (design) / `P8-F<nn>` (implementation); severities `blocker | should-fix | suggestion | question`; responses Fix / Push back / Defer, then Accept / Maintain.
 
 ---
@@ -210,3 +210,238 @@ All nine Round 0 findings (`P8-D01` to `P8-D09`, including `P8-D05`'s pushback o
 **Developer (Claude):** `P8-D10` fixed (above). Waiting for the reviewer's Accept or Maintain.
 
 **Design review status (round 2):** closed — all findings (`P8-D01` to `P8-D10`) fixed and accepted, and all owner questions answered. Ready for Phase 8 implementation.
+
+---
+
+## Developer summary (implementation)
+
+**Developer:** Claude · **Branch:** `phase-8/spec-and-release` (working tree, not committed yet: the commit hook waits for the owner's SeamSpec review below)
+
+### Scope
+
+Phase 8 as the design ADRs decide (merged as PR #21): ADR-20261124-4d76, -152d, -4699 and -41e9.
+
+- **Six components** (`swerepo/state.py`, `standard.py`, `detect.py`, `check.py`, `init.py`, `cli.py`, `github.py`):
+  - `openspec` and `release` are removed, along with `AVAILABLE`, `LATER`, `standard.LATER`, the `later` plan verb, `detect`'s `openspec` flag and `codeowners_lines(openspec=)`;
+  - naming either component is wrong usage (exit 2);
+  - the help text and the module docstring no longer promise later phases.
+- **The spec** (`swerepo/spec.py`, new):
+  - **the lookup:** five steps (`[adopted] spec`; else the candidates root `SPEC.md`, `docs/SPEC.md` and root `*-SPEC.md`, case-insensitive, never `docs/EARNED_SPEC.md`; none, one or several);
+  - **in `init`:** `_spec` plans the starter `SPEC.md` (`docs/spec@1`), keeps an existing spec, adopts a single other one (`ADOPT`, recorded in `_new_state`, by `update` too), or notes several;
+  - **values and state:** `compute_values` passes the spec's path to templates as `spec`, and `state.ADOPTED_PATHS` validates `[adopted] spec` like the folders;
+  - **in `check`:** `docs.spec`.
+- **New template versions:**
+  - `agents/block@3` (rule 10; the runbook list) and `agents/prepare-pr@2` (a spec step);
+  - `agents/update-spec@1`, a new runbook added to `standard.RUNBOOKS`;
+  - `github/pr-template@2`, `github/copilot-instructions@2` and `docs/contributing@2`.
+- **Version-independent tests** (P8-D03): an `unreleased` fixture in `tests/conftest.py`, used by the six tests that assumed a development build; the zero-argument `released` lambda takes `*_`.
+- **`fetch-tags: true`** in `ci/workflow@2` and `seamspec/workflow@1`, both unreleased and changed in place.
+- **`.github/workflows/release.yml`** (this repository only): the job graph, permissions, checksums, `main`-ancestry check, uncached setup and checkout-free `github-release` of ADR-20261124-4699.
+- **`tools/released_snapshot.py`:** writes `tests/released/<version>.json` for a released version only, and never overwrites one. Its inputs reach each branch, and repeated renders are skipped.
+- **Dogfooded:** `swerepo update` here adopted `SWEREPO-SPEC.md` and took the five new template versions, the new runbook and `fetch-tags`. `uv_build` joins `[dependency-groups] dev` (`uv.lock` updated).
+- **SeamSpec, proposed and verified, waiting for the owner:**
+  - `inv_3f05e701` (rule 1, no publishing footprint);
+  - `inv_7bc9c95a` (rule 2, released templates and renders never change);
+  - a supersede of `inv_9265607a` (critical) by `inv_4a53ca43`.
+
+### Tests and checks
+
+- **New tests:**
+  - `tests/test_spec.py`: the five steps, the starter, adopting, several candidates, `update` adopting, a gone adopted spec, and a second run changing nothing;
+  - `tests/test_released_snapshot.py`;
+  - in `tests/test_check.py` and `tests/test_init.py`: `openspec` and `release` are wrong usage.
+- **Results:**
+  - `uv run pytest`: 772 passed, also with `GITHUB_ACTIONS=true`, and also with SWERepo's version simulated as `0.1.0`;
+  - ruff clean; privacy clean; zizmor 1.32.0 clean; `swerepo check` with no `✗` beyond warnings;
+  - a second `update` has nothing to do.
+- **Locked rules:** 25 of 26 pass. `inv_9265607a` fails as planned, because its test names `agents/block@2`. Its replacement and the two new rules pass `seamspec verify --proposed`.
+- **Breaking what each rule guards:**
+  - **Rule 1:** a `release` component, a template naming `twine upload`, and `tools/` put in the wheel through the backend's `data` option are each caught.
+  - **Rule 2:** a template changed since a throwaway local tag, a changed ruleset builder against a snapshot, and a release without its snapshot are each caught.
+  - **The replacement:** without `block/3.md` both the old and the new test pass; with it, only the replacement does.
+
+  Every file was restored and byte-compared.
+
+### Known gaps
+
+- Rule 2's shallow-clone check wasn't exercised by breaking it (it needs a shallow clone).
+- `release.yml` has not run: it runs on the first `v*` tag. Its inline release check was run locally against sample changelogs.
+- The `pypi` environment and the tag ruleset aren't applied yet; that comes after this PR, on the owner's yes.
+
+### Questions for the reviewer
+
+1. Rule 1 builds the wheel at every commit and agent stop (about 0.7 s here). Is that acceptable, or should it be gated?
+2. `tools/released_snapshot.py` skips an input set that renders the same text as an earlier one. Is the input set wide enough for the `github` builders and `ci/workflow`?
+3. The `[adopted] spec` value reaches templates as `spec`, but isn't in `RECORDED_VALUES`: it's derived from `[adopted] spec` or the default on each run. Do you see a case where that differs between runs?
+
+---
+
+## Implementation review (round 1)
+
+**Reviewer:** Gemini · **Date:** 2026-11-24 · **Branch:** `phase-8/spec-and-release`
+
+### Verification run
+
+- `pytest` (with `.venv/bin` on `PATH`): **772 passed**.
+- `ruff check . .seamspec/proposed/ tools/` and `ruff format --check . .seamspec/proposed/ tools/`: **clean** (`181 files already formatted`).
+- `seamspec verify --all`: **25 of 26 locked rules passed** (`inv_9265607a` failing on hardcoded `agents/block@2` as expected, with supersede request `inv_9265607a` → `inv_4a53ca43` recorded).
+- `seamspec verify --proposed inv_3f05e701 --proposed inv_7bc9c95a --proposed inv_4a53ca43`: **3 of 3 passed**.
+- `zizmor 1.32.0 --offline .github/workflows swerepo/templates/seamspec/workflow swerepo/templates/security/privacy-workflow`: **No findings to report**.
+- `swerepo check --ci --base main`, `swerepo privacy`, and `swerepo update --dry-run`: **clean** (`0` blocking findings, `swerepo privacy: nothing found`, `"Nothing to do."`).
+- **Shallow-clone and worktree probes on Rule 2 (`inv_7bc9c95a`, in isolated temp dirs):** `git clone --depth 1` fails `test_released_files_never_change` with `"a shallow clone may miss release tags"` (closing the first item under "Known gaps"); a `git worktree` (`.git` as a file) passes when clean and fails when a tagged template is modified.
+
+### Strengths
+
+- **Complete removal of `openspec` and `release` (`swerepo/state.py`, `standard.py`, `detect.py`, `check.py`, `init.py`, `cli.py`, `github.py`):** No stale `openspec` or `LATER` references remain in `swerepo/`, every component in `make_plan` (`swerepo/init.py:1607-1636`) reaches its branch cleanly without an `else`, and naming `openspec` or `release` fails with exit `2` across `check`, `init`, and `update`.
+- **Cohesive template suite and dogfooding (`swerepo/templates/`):** All seven templates (`docs/spec@1`, `agents/block@3`, `agents/prepare-pr@2`, `agents/update-spec@1`, `github/pr-template@2`, `github/copilot-instructions@2`, `docs/contributing@2`) state the spec rule in the same words while explicitly exempting refactors and bug fixes; `agents/block@3` renders to 25 lines (well below the 40-line target) and preserves `@2`'s line 11 so `inv_60788941` stays green; dogfooding via `swerepo update` cleanly adopted `SWEREPO-SPEC.md` and recorded `spec` in each updated block/file's `inputs`.
+- **Hardened `.github/workflows/release.yml`:** Minimal per-job permissions under top-level `permissions: {}`, `needs: [check, test]` before `build`, `git merge-base --is-ancestor "$GITHUB_SHA" origin/main`, dated `CHANGELOG.md` extraction with `TAG` passed via `env`, `uv run --locked seamspec verify --all --ci` with `fetch-tags: true`, `SHA256SUMS` verified in both `publish` (kept in `staging/` out of `dist/` so `twine check` inspects only the wheel and sdist) and checkout-free `github-release`, and `enable-cache: false` on every `setup-uv` step.
+- **Targeted `inv_9265607a` → `inv_4a53ca43` supersede and version-independent tests:** `inv_4a53ca43` keeps the exact assertion, scope, and `critical` flag of `inv_9265607a`, changing only hardcoded `agents/block@2` to `TemplateStore().latest("agents", "block")`; the `unreleased` fixture in `tests/conftest.py` fixes all six `.dev0`-assuming tests without weakening any assertion (`tests/test_init_ci.py:131` already covers a released version).
+
+---
+
+### Findings
+
+#### P8-F01 · should-fix · `swerepo/spec.py:40-52`, `swerepo/check.py:205-215`, `swerepo/init.py:521-527,559-574`
+**Spec lookup and checks mishandle symlinks, paths leading outside the repository, and `.gitignore`d `*-SPEC.md` files**
+
+- **Failing scenario (all four reproduced in isolated git repositories):**
+  1. *External symlinked `docs/` or `[adopted] spec` accepted (`swerepo/spec.py:42,50`, `swerepo/check.py:212-214`, `swerepo/init.py:568-569`):*
+     - When `docs` is a symlink to a folder outside the repository containing `SPEC.md`, `spec._files(root / "docs")` checks `not p.is_symlink()` on the entry inside `docs/` (which is a regular file), never calling `inside(root, p)`. `specs.find` returns `Found(path="docs/SPEC.md", adopt="docs/SPEC.md")`, so `init` auto-records `[adopted] spec = "docs/SPEC.md"` for an external file and `check` reports `✓ spec (docs/SPEC.md)`.
+     - Likewise, when `[adopted] spec = "SPEC.md"` and `SPEC.md` is a symlink pointing outside the repository, `state.check_path` validates only the string syntax while neither `check._spec` (`ctx.exists`) nor `init._spec` checks `inside(root, root / found.path)`—both report `✓` / `keep` despite `ADR-20261124-4d76:29` requiring the spec path to stay inside the repository.
+  2. *In-repo symlinks break `check`/`init` agreement and crash `apply` when dangling (`swerepo/spec.py:42`, `swerepo/check.py:210-211`, `swerepo/init.py:524,1867`):*
+     - With an in-repo symlink `SPEC.md -> real.md` (`[adopted] spec` unset), `spec._files` skips symlinks (`Found(None)`), so `check` fails with `✗ SPEC.md missing` while `init` (`_starter` → `ctx.exists("SPEC.md")`) plans `keep SPEC.md (yours)` and reports `"Nothing to do."`
+     - With a *dangling* in-repo symlink `SPEC.md -> missing.md`, `inside(ctx.root, ctx.root / "SPEC.md")` is `True` while `ctx.exists("SPEC.md")` (`is_file()`) is `False`, so `_starter` plans `CREATE SPEC.md` and `apply()` crashes in `_check_target` (`swerepo/init.py:1867`) with `InitError: SPEC.md appeared since the plan was made: nothing written; run init again`.
+  3. *`.gitignore`d `*-SPEC.md` files pollute candidate discovery (`swerepo/spec.py:40-51` vs `ADR-20261120-25b5`):*
+     Unlike `detect.py` (`git ls-files -z --cached --others --exclude-standard`), `spec.py` uses raw `folder.iterdir()`. A local gitignored scratch file such as `DRAFT-SPEC.md` alongside `SPEC.md` makes `swerepo check` fail with `✗ several specs (DRAFT-SPEC.md, SPEC.md)`—and on a repository without `SPEC.md`, makes `swerepo init` adopt and commit `[adopted] spec = "DRAFT-SPEC.md"` into `.swerepo.toml`, failing `check --ci` on GitHub where the ignored file does not exist. *(Also `name.lower().endswith("-spec.md")` on `swerepo/spec.py:49` matches a bare `"-spec.md"` with an empty prefix.)*
+- **Recommendation:**
+  1. List candidate files through `git ls-files -z --cached --others --exclude-standard` when in a git work tree (falling back to folder listing outside git, as `detect.py` does, or passing `detection`'s file list into `specs.find`), require `len(name) > len("-spec.md")` for `*-spec.md`, and check `inside(root, p)` + `(p.is_file())` so valid in-repo symlinks work in both `init` and `check` while any symlink or folder leading outside `root` is rejected.
+  2. Check `inside(root, root / found.path)` in both `check._spec` (`swerepo/check.py:212`) and `init._spec` (`swerepo/init.py:568`), reporting a path leading outside the repository as `✗` in `check` and `_OUTSIDE` (`KEEP`) in `init`.
+  3. In `_starter` (`swerepo/init.py:523`), also guard `if (ctx.root / path).is_symlink(): return Action(component, KEEP, path, "a broken link: fix or remove it")` so dangling in-repo symlinks never plan `CREATE` and crash `apply()`.
+- **Developer response (Claude):** **Fix.** All four reproduced.
+1. **Listing like detection:** `spec.candidates` now lists files through the new `detect.list_files` (`git ls-files --cached --others --exclude-standard`, else a walk), so an ignored `DRAFT-SPEC.md` never counts. `-SPEC.md` alone names nothing.
+2. **Staying inside:** a candidate must be a file that stays inside the repository after following links (`spec.within`, built on `blocks.inside`). An in-repo `SPEC.md -> real.md` counts in both `init` and `check`, and a root file linking out doesn't. (A linked `docs/` never reaches it: git doesn't list files inside a linked folder.)
+3. **An adopted spec leading out:** `init._spec` keeps it with the usual "a link out of the repository" note, and `check._spec` reports `✗ … leads out of the repository`.
+4. **A broken link:** `_starter` keeps a link to a missing file ("fix it or remove it") instead of planning `create`, so `apply` no longer stops. This holds for every starter file.
+
+Tests: `TestReviewP8` in `tests/test_spec.py`. Each fix was broken on purpose and caught. Breaking the `within` filter was first missed, because the test only linked `docs/`; it now also links a root file out, and the breakage is caught.
+- **Reviewer (round 2):** Accept. Verified in `swerepo/spec.py:46-66`, `swerepo/detect.py:228-234`, `swerepo/check.py:212-214`, `swerepo/init.py:527-528,571-572`, and `tests/test_spec.py:138-179`: candidate listing via `detect.list_files` ignores `.gitignore`d files and bare `-SPEC.md`, `specs.within` keeps in-repo symlinks working across `init` and `check` while rejecting links leading outside the repository, and `_starter` safely keeps broken symlinks without planning `create`.
+
+---
+
+#### P8-F02 · should-fix · `swerepo/init.py:1561-1562,1625-1627,1735`
+**Component-scoped runs (`init --only agents|github` or `update --only agents|github`) render `@@spec@@` from an unrecorded candidate without saving `[adopted] spec`**
+
+- **Failing scenario (reproduced; also answers Question 3):**
+  On an existing repository with `FOO-SPEC.md` and no `[adopted] spec` yet, run `swerepo init --only agents --yes` (or, on a pre-Phase-8 repository with `FOO-SPEC.md`, run `swerepo update --only agents --yes`). `make_plan` (`swerepo/init.py:1561-1562`) resolves `found_spec = Found(path="FOO-SPEC.md", adopt="FOO-SPEC.md")` and renders `AGENTS.md`, `docs/agents/prepare-pr.md`, and `docs/agents/update-spec.md` with `spec = "FOO-SPEC.md"`. However, `plan.spec_adopt = found_spec.adopt` (`swerepo/init.py:1627`) and `state.set_adopted("spec", ...)` (`swerepo/init.py:1735`) run **only** when `"docs"` is applied, leaving `[adopted] spec` unset in `.swerepo.toml`. If a second candidate (e.g., `SPEC.md` or `docs/SPEC.md`) is later added before `docs` runs, `specs.find` returns `Found(None, several=...)`, `found_spec.name` flips back to `"SPEC.md"`, and `swerepo update` rewrites the managed files to `"SPEC.md"` despite the ambiguity.
+- **Recommendation:**
+  Set `plan.spec_adopt = found_spec.adopt` and persist `state.set_adopted("spec", plan.spec_adopt)` in `_new_state` whenever any component that renders `spec` (`{"docs", "agents", "github"} & set(applied)`) is applied—matching how `adopted_adr_dir` is saved unconditionally in `_new_state` (`swerepo/init.py:1733-1734`). *(Minor cleanup while in `swerepo/init.py`: line 244 still slices `list(COMPONENTS[:6])` from when `COMPONENTS` had eight entries; `list(COMPONENTS)` is clearer.)*
+- **Developer response (Claude):** **Fix.** Reproduced. `plan.spec_adopt` is now set whenever a component whose files name the spec runs (`init.SPEC_NAMED_BY` = `docs`, `agents`, `github`), and `_new_state` records it under the same condition. Without `docs` in the run, the plan says so on the running component's line (`adopt INVOICES-SPEC.md … recorded as [adopted] spec`). Test: `test_f02_a_run_without_docs_records_the_spec_its_files_name`, for `agents` and `github`: recorded, and a later second candidate changes nothing. Breaking it back to `docs` only is caught. Also done: `resolve_components` uses `list(COMPONENTS)`.
+- **Reviewer (round 2):** Accept. Verified in `swerepo/init.py:50,245,1653-1658,1747-1748` and `tests/test_spec.py:180-190`.
+
+---
+
+#### P8-F03 · should-fix · `tools/released_snapshot.py:45-52,88-91`, `tests/test_released_snapshot.py:40-43`
+**`released_snapshot.py` deduplicating inputs by output hash drops input-equivalence invariants (missing `solo + @owner` and `copilot_review=False` regressions), and `_settings()` omits `squash=False` and `"rebase"`**
+
+- **Failing scenario (both reproduced against `inv_7bc9c95a`'s `_snapshot_problems`; answers Question 2):**
+  1. *Deduplicating by output fingerprint (`if fingerprint in seen: continue`, `tools/released_snapshot.py:89-90`):*
+     Part of a builder's contract is which inputs leave the output unchanged. In `github/ruleset@1` (`swerepo/github.py:66`), `require_code_owner_review` is `team and settings.code_owner is not None`. Because `Settings("solo", "@owner", ...)` produces the same hash today as `Settings("solo", None, ...)`, `if fingerprint in seen: continue` discards **every** `solo` input with a non-empty `code_owner` from the snapshot. Mutating `_ruleset_v1` to `settings.code_owner is not None` (dropping `team and`, which changes `ruleset.json` for every solo repository with a code owner, including `swerepo/swerepo`) yields `_snapshot_problems == []`. Likewise, for `github/repo-settings@1`, deduplicating discards all 11 `copilot_review=False` inputs, so making `_repo_settings_v1` branch on `copilot_review` also yields `_snapshot_problems == []`.
+  2. *Uncovered `merge_methods` branches (`tools/released_snapshot.py:45-52` vs `swerepo/github.py:93,97,100`):*
+     Every `Settings` in `_settings()` contains `"squash"` and omits `"rebase"`, so `squash = False` (omitting `squash_merge_commit_title` and `squash_merge_commit_message` on `swerepo/github.py:100`) and `"rebase" in settings.merge_methods` (`swerepo/github.py:97`) are never exercised (`_snapshot_problems == []` when broken).
+- **Recommendation:**
+  Remove `seen` deduplication in `snapshot()` so every `(template, inputs)` pair in the matrix is recorded (~49 entries total, ~6 KB, `< 5 ms`), add `github.Settings("solo", None, False, (), ("merge", "rebase"))` to `_settings()` to cover `squash=False` and `"rebase"`, and update `tests/test_released_snapshot.py:40-43` to assert unique `(template, inputs)` entries rather than unique `(template, fingerprint)` pairs.
+- **Developer response (Claude):** **Fix.** Reproduced, and the reasoning is right: which inputs leave a render unchanged was released too.
+- `snapshot()` keeps every input set (no `seen`).
+- `_settings()` adds `Settings("solo", None, False, (), ("merge", "rebase"))`, covering no squash and rebase.
+- `tests/test_released_snapshot.py` now asserts unique `(template, inputs)` pairs, that every workflow input set still renders differently, and that both merge cases are there.
+- Adding the skipping back is caught.
+- **Reviewer (round 2):** Accept. Verified in `tools/released_snapshot.py:45-54,82-94`, `tests/test_released_snapshot.py:36-48`, and `docs/adr/ADR-20261124-41e9-two-rules-guard-the-shipped-package-no-publishing-footprint.md:62`: all 49 `(template, inputs)` entries are kept, and re-running the Round 1 mutation probes (`solo + @owner`, `copilot_review=False`, `rebase`, and `squash=False`) confirmed all four are now caught by `_snapshot_problems`.
+
+---
+
+#### P8-F04 · should-fix · `.seamspec/proposed/inv_3f05e701/test_inv_3f05e701.py:1-5,22-31`, `.seamspec/invariants/inv_3f05e701.json:5`, `docs/adr/ADR-20261124-41e9-two-rules-guard-the-shipped-package-no-publishing-footprint.md:26`
+**Proposed Rule 1 (`inv_3f05e701`) fails with `RuntimeError: uv-build was not properly installed` when `.venv/bin/pytest` runs without `.venv/bin` on `PATH` (and `uv_build` invokes `uv-build`, not in-process Python)**
+
+- **Failing scenario (reproduced by running `.venv/bin/pytest .seamspec/proposed/inv_3f05e701/test_inv_3f05e701.py` without `.venv/bin` on `PATH`):**
+  `uv_build/__init__.py:47-56` is a PEP 517 shim that looks up `shutil.which("uv-build")` on `os.environ["PATH"]` and runs `subprocess.run([uv_bin, "build-wheel", ...])`. Unlike `uv`, `uv-build` needs no network and runs cleanly inside macOS Seatbelt sandboxes (`0.76s`), **provided** `Path(sys.executable).parent` is on `PATH`. When `.venv/bin/pytest` is invoked directly without activating `.venv` (for example in IDE test runners or direct `.venv/bin/pytest` runs; note `.seamspec/config.toml:19`), `shutil.which("uv-build")` returns `None` and `test_the_wheel_holds_only_the_package` fails with `RuntimeError: uv-build was not properly installed`.
+- **Recommendation:**
+  In `_wheel` (`.seamspec/proposed/inv_3f05e701/test_inv_3f05e701.py:22-31`), temporarily prepend `str(Path(sys.executable).parent)` to `os.environ["PATH"]` (restored in `finally:`) before calling `uv_build.build_wheel`, and refresh `inv_3f05e701` (plus `ADR-20261124-41e9:26`) before the owner runs `seamspec review` so the assertion and docstring accurately say *"through `uv_build.build_wheel` (`uv-build`, offline, no network)"* rather than *"in-process"*.
+- **Developer response (Claude):** **Fix.** Reproduced: `.venv/bin/pytest` with a `PATH` lacking `.venv/bin` failed with "uv-build was not properly installed".
+- **The test:** `_wheel` in the proposed test puts `Path(sys.executable).parent` first on `PATH` during the build and restores it after. It now passes run that way.
+- **The wording:** `inv_3f05e701` was re-proposed in place of the earlier proposal. Its assertion and docstring now say the build goes through `uv_build`, which runs this environment's own `uv-build` with no network, not "in-process". ADR-20261124-41e9 point 1 says the same.
+- **Checked:** Rule 1's three breakages are still caught.
+- **Reviewer (round 2):** Accept. Verified in `.seamspec/proposed/inv_3f05e701/test_inv_3f05e701.py:1-5,23-38`, `.seamspec/invariants/inv_3f05e701.json:5,16`, and `docs/adr/ADR-20261124-41e9-two-rules-guard-the-shipped-package-no-publishing-footprint.md:26` (tested with `PATH="/usr/bin:/bin" .venv/bin/pytest`: passes cleanly).
+
+---
+
+#### P8-F05 · suggestion · `.seamspec/invariants/inv_7bc9c95a.json:6-15`, `.seamspec/proposed/inv_7bc9c95a/test_inv_7bc9c95a.py:49-50,98-105`
+**Include `pyproject.toml` in proposed Rule 2 (`inv_7bc9c95a`)'s scope and version check so scoped verification catches a missing release snapshot before `uv sync` updates `.dist-info`**
+
+- **Failing scenario:**
+  1. `.seamspec/invariants/inv_7bc9c95a.json:7-14` scopes Rule 2 to `swerepo/templates/`, `swerepo/ci.py`, `swerepo/github.py`, `swerepo/rebuild.py`, `tests/released/`, and `tools/released_snapshot.py`—omitting `pyproject.toml` and `swerepo/__init__.py`. On a release PR that edits `pyproject.toml`, `uv.lock`, `CHANGELOG.md`, `README.md`, and `SWEREPO-SPEC.md` while forgetting `tools/released_snapshot.py`, none of `inv_7bc9c95a`'s `scope.paths` change, so `seamspec verify` with `scope="changed"` skips `inv_7bc9c95a`.
+  2. In `test_a_release_has_its_snapshot` (`test_inv_7bc9c95a.py:99`), checking only `swerepo.__version__` (`importlib.metadata.version("swerepo")`) misses a `pyproject.toml` bump locally after `uv lock` until `uv sync` refreshes `.venv`'s `.dist-info/METADATA`. *(Also in `_changed_since` on lines 49–50, checking `(ROOT / p).is_file() and not (ROOT / p).is_symlink()` prevents a released file from being replaced with a symlink.)*
+- **Recommendation:**
+  Refresh `inv_7bc9c95a` before `seamspec review` to add `"pyproject.toml"` and `"swerepo/__init__.py"` to `scope.paths`, check `[project].version` read from `ROOT / "pyproject.toml"` via `tomllib` (alongside `swerepo.__version__`) in `test_a_release_has_its_snapshot`, and reject symlinks in `_changed_since`.
+- **Developer response (Claude):** **Fix** (taken in full). `inv_7bc9c95a` was re-proposed in place of the earlier proposal:
+- **the scope** adds `pyproject.toml` and `swerepo/__init__.py`;
+- **the version check** reads the version both as installed and from `pyproject.toml` (`tomllib`), so a bump without a snapshot fails before `uv sync`;
+- **`_changed_since`** counts a released file replaced by a link as changed.
+
+Rule 2's earlier breakages are still caught, and so are two new ones: a released template replaced by a link to identical content, and `pyproject.toml` bumped to a release with no snapshot. ADR-20261124-41e9 point 2 updated.
+- **Reviewer (round 2):** Accept. Verified in `.seamspec/invariants/inv_7bc9c95a.json:5-16,22`, `.seamspec/proposed/inv_7bc9c95a/test_inv_7bc9c95a.py:50-52,100-113`, and `docs/adr/ADR-20261124-41e9-two-rules-guard-the-shipped-package-no-publishing-footprint.md:34,37`.
+
+---
+
+### Answers to the developer's questions
+
+1. **Q1 (Rule 1 building the wheel in ~0.7 s at every commit and agent stop — acceptable or gate?):**
+   **Acceptable — keep it ungated.** End-to-end runtime here is `0.76s` (out of ~73 s for `--all`), and `scope.paths = ["swerepo/", "pyproject.toml"]` already skips it on docs-only changes during scoped checks. Gating it would weaken local pre-commit protection right before a release.
+2. **Q2 (`tools/released_snapshot.py` skipping repeated renders & width of `_settings()` / `_workflows()`):**
+   `_workflows()` and `ci/pyproject@1` reach every branch cleanly, **but** skipping repeated renders by output hash drops input-equivalence invariants (missing `solo + @owner` and `copilot_review=False` regressions) and `_settings()` misses `squash=False` and `"rebase"`—both reproduced in `P8-F03`. Keeping all ~49 `(template, inputs)` entries (~6 KB) fixes both.
+3. **Q3 (`spec` derived on each run rather than in `RECORDED_VALUES` — any case where it differs between runs?):**
+   Once `[adopted] spec` is recorded (or when `docs` wrote starter `SPEC.md` with no competing candidate), deriving `spec` on each run is stable, and each managed file/block already stores `spec` in its own per-record `inputs` so 3-way merges rebuild the exact earlier render if `[adopted] spec` changes later. The two cases where it drifts unexpectedly between runs are component-scoped runs before `docs` records `[adopted] spec` (`P8-F02`) and `.gitignore`d `*-SPEC.md` scratch files (`P8-F01`).
+
+### Questions for the owner
+
+None in this round. *(Recommend holding `seamspec review` until `P8-F04` and `P8-F05` refresh `inv_3f05e701` and `inv_7bc9c95a`, so all three items can be reviewed and locked once.)*
+
+**Implementation review status (round 1):** open — four `should-fix` findings (`P8-F01` to `P8-F04`) and one `suggestion` (`P8-F05`). Waiting for the developer's responses.
+
+**Developer (Claude), round 1:** `P8-F01` to `P8-F05` fixed (above). The three SeamSpec items (`inv_3f05e701` and `inv_7bc9c95a`, both refreshed, and `inv_4a53ca43` replacing `inv_9265607a`) wait for the owner's review once this round is accepted. Waiting for the reviewer's Accept or Maintain.
+
+**Implementation review status (round 2):** closed — all findings (`P8-F01` to `P8-F05`) fixed and accepted, with no new findings. Ready for the owner's `seamspec review` (`inv_3f05e701`, `inv_7bc9c95a`, and `inv_9265607a` → `inv_4a53ca43`), commit, and pull request.
+
+**Developer (Claude), after SeamSpec's reviewer explained the three items to the owner:**
+- **The supersede (`inv_4a53ca43`):** judged sound, unchanged.
+- **`inv_3f05e701`** was re-proposed: the published sdist is checked too (only `swerepo/`, `PKG-INFO`, `pyproject.toml`, `README.md`, `LICENSE`), and a control run shows that `check` with options that exist isn't wrong usage.
+- **`inv_7bc9c95a`** was re-proposed:
+  - a self-check runs the tag comparison on a temporary git repository, so its core is exercised before this repository has a tag: a released file changed, deleted or replaced by a link, a new file, a shallow clone, a worktree, and no git;
+  - `swerepo/render.py` is in scope.
+
+Breaking each again: an extra file in the sdist, and four bugs planted in the tag comparison (links, deletions and changes not counted, a shallow clone allowed), are all caught; so are the earlier eight.
+
+**Developer (Claude), after the reviewer's second read** (the owner agreed to every point but one):
+- **`inv_3f05e701`, re-proposed:**
+  - `pyproject.toml` must name `uv_build` as the build backend;
+  - sdist entries outside its top folder are reported, not dropped, and the archive reading is self-checked on a hand-made tarball;
+  - `--help` must print, and `init`, `check` and `update` must each refuse the `release` flags because `release` is unknown. The reason is checked, not only the exit code.
+- **A bug found by that last check:** `update --only release` answered "not set up here … (swerepo init --only release)". `update` now checks component names first (`cli._update_plan`), with a test in `tests/test_update.py`.
+- **`inv_7bc9c95a`, re-proposed:**
+  - the snapshot requirement is its own function, self-checked on a temporary folder (missing, incomplete, complete, `ci.released`);
+  - the no-git warning is checked with `pytest.warns`;
+  - a released file reached through a linked folder counts as changed;
+  - the tag self-check covers `tests/released/`.
+- **Not changed:** `tools/released_snapshot.py` stays in Rule 2's scope, by the owner's choice. A change to the tool that writes snapshots should re-run the rule that checks them.
+
+Breaking each new piece is caught: another backend, stray sdist entries dropped, `update` advising `init`, linked folders, the warning, a missing snapshot, coverage unchecked, and `ci.released` wrong. So is every earlier breakage.
+
+---
+
+**Closed (2026-11-25).**
+- **The reviews:** the design review closed after round 2 (`P8-D01` to `P8-D10`), and the implementation review after round 2 (`P8-F01` to `P8-F05`). Every finding was fixed and accepted.
+- **SeamSpec's reviewer** read the three items twice; its points were fixed, except one the owner chose to keep (`tools/released_snapshot.py` stays in Rule 2's scope).
+- **The owner approved all three in `seamspec review`:**
+  - `inv_3f05e701` and `inv_7bc9c95a` are locked;
+  - `inv_4a53ca43` replaces `inv_9265607a`.
+
+  That makes 28 rules locked, all passing. `docs/EARNED_SPEC.md` was regenerated.

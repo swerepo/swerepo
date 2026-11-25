@@ -69,7 +69,7 @@ class TestPolicy:
 
 
 class TestWorkflowAndIgnoredFiles:
-    def test_the_privacy_workflow_needs_an_installable_swerepo(self, project: Path):
+    def test_the_privacy_workflow_needs_an_installable_swerepo(self, unreleased, project: Path):
         plan = init(project)
         assert any(n.startswith(f"{PRIVACY_WORKFLOW} not written: needs a released SWERepo") for n in notes(plan))
         finding = security(project)["security.workflow"]

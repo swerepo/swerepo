@@ -2,7 +2,7 @@
 
 # Spec: what this code guarantees
 
-26 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
+28 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
 
 ## Rules in force
 
@@ -29,7 +29,7 @@ Every ADR file (ADR-YYYYMMDD-xxxx-title.md) in the ADR folder ([adopted] adr_dir
 - **Test:** `.seamspec/tests/test_inv_5c45ea08.py` (pytest)
 - **Id:** `inv_5c45ea08`
 
-### `swerepo` (20 rules)
+### `swerepo` (21 rules)
 
 #### A fingerprint ignores only line endings, trailing whitespace, trailing blank lines and a BOM
 
@@ -192,16 +192,6 @@ In a repository set up by `swerepo init --only ci` whose `swerepo-ci.yml` was wr
 - **Critical:** always shown to the agent in full
 - **Id:** `inv_d60ffffd`
 
-#### update --dry-run writes nothing, update writes only what SWERepo wrote, and a second update writes nothing
-
-In a repository with files of the person's own (CLAUDE.md with CRLF line endings, README.md, a hand-made `.github/swerepo/ruleset.json`), set up by `swerepo init`, with a line of the person's after SWERepo's block in AGENTS.md, and whose AGENTS.md block was written by an older template so there is an update to apply: `swerepo update --dry-run` exits 0, names the update, and leaves every file unchanged (none added or removed; modification times, sizes and bytes, `.git` included). `swerepo update --yes` changes AGENTS.md, whose SWERepo block becomes exactly the new template's render while the text before and after the block (the person's line after it included) stays as it was, and changes, adds or removes nothing else but `.swerepo.toml`; the person's files are byte for byte as `init` left them. A second `swerepo update --yes` says "Nothing to do." and leaves every file unchanged.
-
-- **Applies to:** `swerepo/init.py`, `swerepo/cli.py`, `swerepo/merge.py`, `swerepo/rebuild.py`, `swerepo/state.py`, `swerepo/blocks.py`
-- **Approved by:** Vamshidhar Pandrapagada, 2026-11-24, in the terminal
-- **Test:** `.seamspec/tests/test_inv_9265607a.py` (pytest)
-- **Critical:** always shown to the agent in full
-- **Id:** `inv_9265607a`
-
 #### SWERepo never answers SeamSpec's consent, and runs seamspec init only in a terminal
 
 With a fake `seamspec` first on PATH that logs every call, in a git repository with a pyproject.toml and a uv.lock, and with the command line seeing a terminal: `swerepo init --yes`, `swerepo init --dry-run` and `swerepo init --json` run no `seamspec init`; the `--yes` run applies the other default components (docs, agents, ci, security and github are recorded, and their files written) and says to run `seamspec init` in a terminal. An interactive `swerepo init --only seamspec` answered yes runs `seamspec init` once, and `seamspec review` only when the person answers yes to reviewing the proposals. After a newer SeamSpec is installed, `swerepo update --yes` runs no `seamspec init`, and an interactive `swerepo update` answered yes reruns it once. No call SWERepo makes to `seamspec` ever passes an argument starting with `--accept-auto-run`.
@@ -229,6 +219,39 @@ In a repository set up by `swerepo init` with SeamSpec set up and chosen, the CI
 - **Approved by:** Vamshidhar Pandrapagada, 2026-11-25, in the terminal
 - **Test:** `.seamspec/tests/test_inv_2f78270e.py` (pytest)
 - **Id:** `inv_2f78270e`
+
+#### update --dry-run writes nothing, update writes only what SWERepo wrote, and a second update writes nothing
+
+In a repository with files of the person's own (CLAUDE.md with CRLF line endings, README.md, a hand-made `.github/swerepo/ruleset.json`), set up by `swerepo init`, with a line of the person's after SWERepo's block in AGENTS.md, and whose AGENTS.md block was written by an older template so there is an update to apply: `swerepo update --dry-run` exits 0, names the update, and leaves every file unchanged (none added or removed; modification times, sizes and bytes, `.git` included). `swerepo update --yes` changes AGENTS.md, whose SWERepo block becomes exactly the new template's render while the text before and after the block (the person's line after it included) stays as it was, and changes, adds or removes nothing else but `.swerepo.toml`; the person's files are byte for byte as `init` left them. A second `swerepo update --yes` says "Nothing to do." and leaves every file unchanged.
+
+- **Applies to:** `swerepo/init.py`, `swerepo/cli.py`, `swerepo/merge.py`, `swerepo/rebuild.py`, `swerepo/state.py`, `swerepo/blocks.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-25, in the terminal
+- **Test:** `.seamspec/tests/test_inv_4a53ca43.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Replaces:** update --dry-run writes nothing, update writes only what SWERepo wrote, and a second update writes nothing (`inv_9265607a`)
+- **Id:** `inv_4a53ca43`
+
+#### The shipped package has no publishing footprint
+
+The wheel built from this repository (through the build backend's PEP 517 hook: `uv_build`, which runs this environment's own `uv-build`, with no network, also when the environment isn't activated) holds no file outside the `swerepo/` package except its `.dist-info` folder, and the sdist built the same way holds nothing but `swerepo/`, `PKG-INFO`, `pyproject.toml`, `README.md` and `LICENSE`, so `.github/workflows/release.yml`, `.seamspec/`, `tests/`, `docs/` and `tools/` never reach users' machines. No file under `swerepo/` names a publishing tool or endpoint (`gh-action-pypi-publish`, `uv publish`, `twine upload`, `poetry publish`, `hatch publish`, `flit publish`, `upload.pypi.org`). `swerepo` has no `release` component: the help of `init`, `check` and `update` prints and shows no `--release` or `--no-release` flag, and each of the three refuses `--only release`, `--no-release` and `--release` as wrong usage (exit 2) because `release` is unknown, while `check` and `init` with options that exist are not refused. A package that can't be built fails the rule. `pyproject.toml` names `uv_build` as the build backend, so the packages checked are the ones a release builds.
+
+- **Applies to:** `swerepo/`, `pyproject.toml`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-25, in the terminal
+- **Test:** `.seamspec/tests/test_inv_3f05e701.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_3f05e701`
+
+### `swerepo/templates` (1 rule)
+
+#### What a release shipped never changes: its templates and the renders built in code
+
+For every git tag `v<version>` that `packaging` can read, oldest first, every file under `swerepo/templates/` and `tests/released/` at that tag still exists with the same content, as a file of the repository and not a link or reached through a linked folder (new files are fine). Every snapshot in `tests/released/*.json` matches what `rebuild.rebuild` produces today for each template id and inputs it records, whether or not any tag exists. When this SWERepo's own version, as installed or as `pyproject.toml` declares it, is a release, `tests/released/<version>.json` exists and covers every template id put together in code: the `github` builders and every `ci/workflow` and `ci/pyproject` version. A shallow clone fails the rule; a copy of the files without git passes the tag part and warns that it couldn't look.
+
+- **Applies to:** `swerepo/templates/`, `swerepo/ci.py`, `swerepo/github.py`, `swerepo/rebuild.py`, `tests/released/`, `tools/released_snapshot.py`, `pyproject.toml`, `swerepo/__init__.py`, `swerepo/render.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-25, in the terminal
+- **Test:** `.seamspec/tests/test_inv_7bc9c95a.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Id:** `inv_7bc9c95a`
 
 ### `swerepo/templates/github/dependabot` (1 rule)
 
@@ -287,6 +310,9 @@ These were approved once and are no longer checked.
 - **Pull requests wait for Copilot's review inside ci-ok** (`inv_faa5bef5`): In the `swerepo-ci.yml` that `swerepo init` writes when the ruleset requests Copilot's review (also when github is applied on its own after ci), `ci-ok` waits for a `copilot-review` job that runs on pull requests only and whose `permissions:` block grants `pull-requests: read` and nothing else, and the `pull_request` trigger lists `types: [opened, synchronize, reopened, ready_for_review]`, so a draft marked ready runs again. Run as written, with the values its own `env:` block maps from GitHub (`GH_TOKEN` included; the fake `gh` refuses without it), the job asks GitHub for exactly `repos/<repository>/pulls/<number>/reviews` with `--paginate`. It passes once that list holds a review by `copilot-pull-request-reviewer[bot]`, asking again when the first answer has none. It fails when none comes or only others reviewed (look-alike names included), and fails at once on a draft, without asking. `ci-ok`'s step fails on a pull request whose `copilot-review` didn't succeed, and on a push where it ran. With `--no-copilot-review` (also on a later run that turns the wait off) or a committed ruleset without Copilot review, there is no such job.
   - Retired because: Dependabot's first pull requests (#12–#14) were all blocked: GitHub requests Copilot's review only for authors who have Copilot, so the wait timed out and ci-ok failed on every dependency update. The owner decided (ADR-20261123-cc8d) that pull requests opened by dependabot[bot] or renovate[bot] pass the wait at once; their tests and dependency-review still run and the person merging reviews them. The job now reads the pull request's author, which the old test doesn't know. inv_78f19f51 keeps everything inv_faa5bef5 locked and adds the bot cases, including look-alike names and other bots that still wait.
   - Replaced by Pull requests wait for Copilot's review inside ci-ok; Dependabot's holds only its own commits (`inv_78f19f51`).
+- **update --dry-run writes nothing, update writes only what SWERepo wrote, and a second update writes nothing** (`inv_9265607a`): In a repository with files of the person's own (CLAUDE.md with CRLF line endings, README.md, a hand-made `.github/swerepo/ruleset.json`), set up by `swerepo init`, with a line of the person's after SWERepo's block in AGENTS.md, and whose AGENTS.md block was written by an older template so there is an update to apply: `swerepo update --dry-run` exits 0, names the update, and leaves every file unchanged (none added or removed; modification times, sizes and bytes, `.git` included). `swerepo update --yes` changes AGENTS.md, whose SWERepo block becomes exactly the new template's render while the text before and after the block (the person's line after it included) stays as it was, and changes, adds or removes nothing else but `.swerepo.toml`; the person's files are byte for byte as `init` left them. A second `swerepo update --yes` says "Nothing to do." and leaves every file unchanged.
+  - Retired because: Phase 8 adds agents/block@3 (the spec rule, ADR-20261124-4d76). The locked test names agents/block@2 as the version update moves an @1 block to, so it fails now that @3 is the latest, although update behaves exactly as the rule says. The replacement inv_4a53ca43 has the same title and the same assertion word for word; its test takes the latest agents/block version from the template store (and asserts it isn't @1) instead of naming @2, so later block versions don't break it either. Planned in Gemini's design review (P8-D02), and the owner agreed on 2026-11-24. Checked: with block/3.md removed both tests pass; with it, only the replacement does.
+  - Replaced by update --dry-run writes nothing, update writes only what SWERepo wrote, and a second update writes nothing (`inv_4a53ca43`).
 - **CI still runs the tests, and ci-ok still needs them** (`inv_c78fcca0`): In .github/workflows/swerepo-ci.yml, a test job, and a test-<project> job for every folder in .swerepo.toml's [projects] listed, each runs `uv run pytest`, is not switched off (if: false) and not allowed to fail (continue-on-error: true) at job or step level, and isn't masked (|| or ;, &, --version, --help, --collect-only). ci-ok's needs names each of them, and ci-ok still fails when one fails: it runs if: always(), isn't allowed to fail, and has a step that reads the jobs' results (NEEDS: ${{ toJSON(needs) }}) and can exit non-zero.
   - Retired because: Copilot's review of PR #20 found two ways round the locked copy: it checks each command alone, so `set +e` before `uv run pytest`, or `uv run pytest && echo passed` followed by another command, still passes while failed tests leave the step green; and in ci-ok it only looks for `$NEEDS`, `.result` and an `exit 1` somewhere, so `if false; then` or a leading `exit 0` still passes. The replacement (inv_11ce8c5b, the updated seamspec/hygiene-ci-tests@1) reads the whole script: pytest must be a top-level command, not piped, not followed by `&&` unless last, with no `set +e`, no earlier `exit` and no custom shell; ci-ok must assign the results from `$NEEDS` to a variable, then `if [ -n "$var" ]; then` with a non-zero `exit` before any other. It still passes on this repository's swerepo-ci.yml and on what init writes.
   - Replaced by CI still runs the tests, and ci-ok still needs them (`inv_11ce8c5b`).

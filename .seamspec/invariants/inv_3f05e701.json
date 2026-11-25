@@ -1,0 +1,33 @@
+{
+  "schema_version": "1",
+  "id": "inv_3f05e701",
+  "title": "The shipped package has no publishing footprint",
+  "assertion": "The wheel built from this repository (through the build backend's PEP 517 hook: `uv_build`, which runs this environment's own `uv-build`, with no network, also when the environment isn't activated) holds no file outside the `swerepo/` package except its `.dist-info` folder, and the sdist built the same way holds nothing but `swerepo/`, `PKG-INFO`, `pyproject.toml`, `README.md` and `LICENSE`, so `.github/workflows/release.yml`, `.seamspec/`, `tests/`, `docs/` and `tools/` never reach users' machines. No file under `swerepo/` names a publishing tool or endpoint (`gh-action-pypi-publish`, `uv publish`, `twine upload`, `poetry publish`, `hatch publish`, `flit publish`, `upload.pypi.org`). `swerepo` has no `release` component: the help of `init`, `check` and `update` prints and shows no `--release` or `--no-release` flag, and each of the three refuses `--only release`, `--no-release` and `--release` as wrong usage (exit 2) because `release` is unknown, while `check` and `init` with options that exist are not refused. A package that can't be built fails the rule. `pyproject.toml` names `uv_build` as the build backend, so the packages checked are the ones a release builds.",
+  "scope": {
+    "paths": [
+      "swerepo/",
+      "pyproject.toml"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261124-41e9 rule 1 and ADR-20261124-152d (Phase 8, the owner's decision of 2026-11-24): SWERepo never sets up package publishing, and this repository's own release workflow never ships. Tightened by Gemini's design review (P8-D05): the wheel is built in-process with uv_build, and the list of publishing tools is longer. Checked by breaking it: a `release` component, a template naming `twine upload`, and the backend's `data` option putting `tools/` in the wheel each fail the rule. Refreshed after Gemini's implementation review (P8-F04): `uv_build` runs its `uv-build` binary found on PATH, so the test puts this environment's scripts folder first. Refreshed after SeamSpec's reviewer: the published sdist is checked too, and a control run shows `check` with options that exist is not wrong usage. Refreshed again after SeamSpec's reviewer's second read: the build backend is asserted, stray sdist entries are reported (and the archive reading self-checked), and `--help` and the refusal reason are checked for all three commands. That last check found `update --only release` advising `swerepo init --only release`; `update` now checks component names first.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_3f05e701.py",
+    "harness_sha256": "5c19e93fbb8d95d88cf1fd86434c29616a8f989e452d05b5989b8981ab0905eb",
+    "assertion_sha256": "6fbfd8c93384b436828e707a358048a6c90971a7c2325be8210c908af760d719"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-25T05:49:30.821898Z",
+  "approved_at": "2026-11-25T08:06:47.291105Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

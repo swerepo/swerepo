@@ -12,7 +12,7 @@ from swerepo.check import CHANGED, MISSING, NOT_CHOSEN, OK, OUTDATED, UNKNOWN, F
 from swerepo.cli import app
 from swerepo.fingerprint import fingerprint
 from swerepo.render import TemplateStore
-from swerepo.state import FILE_NAME, Record, State
+from swerepo.state import COMPONENTS, FILE_NAME, Record, State
 
 ADR = "ADR-20260101-abcd"
 # A repository that meets every standard-1 item this version checks.
@@ -34,6 +34,7 @@ STANDARD_FILES = {
     "docs/agents/prepare-pr.md": "x\n",
     "docs/agents/address-review.md": "x\n",
     "docs/agents/record-adr.md": "x\n",
+    "docs/agents/update-spec.md": "x\n",
     ".github/workflows/swerepo-ci.yml": (
         'jobs:\n  test:\n    strategy:\n      matrix:\n        python: ["3.11", "3.12", "3.13", "3.14"]\n'
         "    steps:\n      - run: pytest\n      - run: seamspec verify --all\n"
@@ -54,6 +55,7 @@ STANDARD_FILES = {
     ".github/CODEOWNERS": "/src/ @team\n# swerepo:begin\n/.github/ @owner\n# swerepo:end\n",
     ".seamspec/config.toml": 'mode = "enforced"\n',
     "docs/EARNED_SPEC.md": "# Spec\n",
+    "SPEC.md": "# Demo · Specification\n",
 }
 
 
@@ -74,10 +76,11 @@ def test_a_repository_that_meets_the_standard(repo: Path):
     assert report.exit_code == 0
     assert report.count(MISSING) == 0
     assert {f.status for f in report.findings} <= {OK, UNKNOWN, NOT_CHOSEN}
-    later = [f.message for f in report.findings if f.status == UNKNOWN]
-    # honest about what isn't checked: a later phase's check, or GitHub that only gh can read (never in tests)
-    assert later and all("checked from Phase" in m or "can't tell (needs gh" in m for m in later)
-    assert by_item(report)["openspec.chosen"].status == NOT_CHOSEN
+    unknown = [f.message for f in report.findings if f.status == UNKNOWN]
+    # honest about what isn't checked: only GitHub that gh alone can read (never in tests); standard 1 has no check
+    # left for a later phase (ADR-20261124-152d)
+    assert unknown and all("can't tell (needs gh" in m for m in unknown)
+    assert report.components == list(COMPONENTS)  # all six, none placeholders
     assert report.next_step() is None
 
 
@@ -317,8 +320,21 @@ def test_the_python_matrix_follows_requires_python(repo: Path, requires: str | N
 
 
 def test_a_component_named_with_only_is_checked_even_if_not_chosen(repo: Path):
-    report = run_check(repo, only=["openspec"])
-    assert by_item(report)["openspec.setup"].status == MISSING
+    state = State.new()
+    state.set_components(["docs"])
+    state.save(repo)
+    assert by_item(run_check(repo))["seamspec.chosen"].status == NOT_CHOSEN
+    report = run_check(repo, only=["seamspec"])
+    assert "seamspec.chosen" not in by_item(report) and {f.component for f in report.findings} == {"seamspec"}
+
+
+@pytest.mark.parametrize("name", ["openspec", "release"])
+def test_openspec_and_release_are_not_components(repo: Path, name: str):
+    """Standard 1 has six components (ADR-20261124-152d): naming another is wrong usage."""
+    with pytest.raises(UsageError):
+        run_check(repo, only=[name])
+    assert CliRunner().invoke(app, ["check", "--path", str(repo), "--only", name]).exit_code == 2
+    assert CliRunner().invoke(app, ["check", "--path", str(repo), f"--no-{name}"]).exit_code == 2
 
 
 class TestStateFile:

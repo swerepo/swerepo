@@ -1,0 +1,40 @@
+{
+  "schema_version": "1",
+  "id": "inv_7bc9c95a",
+  "title": "What a release shipped never changes: its templates and the renders built in code",
+  "assertion": "For every git tag `v<version>` that `packaging` can read, oldest first, every file under `swerepo/templates/` and `tests/released/` at that tag still exists with the same content, as a file of the repository and not a link or reached through a linked folder (new files are fine). Every snapshot in `tests/released/*.json` matches what `rebuild.rebuild` produces today for each template id and inputs it records, whether or not any tag exists. When this SWERepo's own version, as installed or as `pyproject.toml` declares it, is a release, `tests/released/<version>.json` exists and covers every template id put together in code: the `github` builders and every `ci/workflow` and `ci/pyproject` version. A shallow clone fails the rule; a copy of the files without git passes the tag part and warns that it couldn't look.",
+  "scope": {
+    "paths": [
+      "swerepo/templates/",
+      "swerepo/ci.py",
+      "swerepo/github.py",
+      "swerepo/rebuild.py",
+      "tests/released/",
+      "tools/released_snapshot.py",
+      "pyproject.toml",
+      "swerepo/__init__.py",
+      "swerepo/render.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261124-41e9 rule 2 and ADR-20261120-b25a (Phase 8, the owner's decision of 2026-11-24): `update` rebuilds earlier renders from the recorded template version, so what a release shipped must never change. Extended by Gemini's design review: renders built in code (P8-D05) and each release's snapshot, required and checked before its tag (P8-D10). Checked by breaking it: a template changed since a tag, a changed ruleset builder against a snapshot, and a release without its snapshot each fail the rule. Refreshed after Gemini's implementation review (P8-F05): the version is also read from pyproject.toml, which a bump changes before `uv sync`, both files are in scope, and a released file replaced by a link counts as changed. Refreshed after SeamSpec's reviewer: a self-check runs the tag comparison on a temporary git repository (a released file changed, deleted or replaced by a link, a new file, a shallow clone, a worktree, no git), so the core of the rule is exercised before the first release; swerepo/render.py is in scope. Refreshed again after SeamSpec's reviewer's second read: the snapshot requirement is self-checked on a temporary folder (missing, incomplete, complete, and ci.released on a release), the no-git warning is exercised, a released file reached through a linked folder counts as changed, and the tag self-check covers tests/released/ too.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_7bc9c95a.py",
+    "harness_sha256": "db2dc645343c4e548da0694ac64d60e95742aa2aaccaa79ae2db8592b9eb6002",
+    "assertion_sha256": "0ef2e5845f3636b1bbbcd05827b6c8d26436edd5899d925184f8dc8f80ae1b83"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-25T05:49:30.977126Z",
+  "approved_at": "2026-11-25T08:08:24.895211Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

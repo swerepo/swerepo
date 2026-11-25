@@ -48,7 +48,7 @@ def project(tmp_path: Path) -> Path:
 
 
 class TestWorkflow:
-    def test_a_new_project_gets_the_workflow_and_settings(self, project: Path):
+    def test_a_new_project_gets_the_workflow_and_settings(self, unreleased, project: Path):
         plan = init(project, only=["ci"])
         assert action(plan, WORKFLOW).verb == CREATE and action(plan, WORKFLOW).note == "Python 3.12–3.14; lint: ruff"
         text = (project / WORKFLOW).read_text()
@@ -119,7 +119,7 @@ class TestWorkflow:
 
 
 class TestGovernance:
-    def test_an_unreleased_swerepo_adds_it_only_when_asked(self, project: Path):
+    def test_an_unreleased_swerepo_adds_it_only_when_asked(self, unreleased, project: Path):
         plan = make_plan(project, only=["ci"], hosts=[])
         assert any(n.startswith("governance job: needs a released SWERepo") for n in notes(plan))
         plan = make_plan(project, only=["ci"], hosts=[], with_governance=True)
@@ -300,7 +300,7 @@ class TestGeminiReviewRound1:
             apply(plan, project)
         assert (project / WORKFLOW).read_text() == "edited meanwhile\n"
 
-    def test_p4_f02_the_privacy_command_is_recorded_without_python_versions(self, tmp_path: Path):
+    def test_p4_f02_the_privacy_command_is_recorded_without_python_versions(self, unreleased, tmp_path: Path):
         git_init(tmp_path)
         make(tmp_path, {"pyproject.toml": '[project]\nname = "x"\nrequires-python = ">=3.99"\n'})
         init(tmp_path, only=["security"], with_governance=True)

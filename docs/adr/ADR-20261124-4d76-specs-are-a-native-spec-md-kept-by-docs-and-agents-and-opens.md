@@ -66,7 +66,7 @@ None of its own yet. The spec's content can't be checked by a test; that it exis
 
 **A locked rule this changes** (review P8-D02; the owner agreed, 2026-11-24):
 - **`inv_9265607a` (critical):** `update` writes only what SWERepo wrote. Its test names `agents/block@2` as the version `update` moves an `agents/block@1` block to. With `agents/block@3`, `update` moves it to version 3 and the test fails.
-- **What happens to it:** the implementation pull request requests a supersede, with a replacement whose test finds the latest version itself (`TemplateStore().latest("agents", "block")`), so later versions don't trip it either. Its test is never edited.
+- **What happened to it:** the owner approved the supersede on 2026-11-25; `inv_4a53ca43` is locked in its place. It was requested in the implementation pull request, with a replacement whose test finds the latest version itself (`TemplateStore().latest("agents", "block")`), so later versions don't trip it either. Its test is never edited.
 - **`inv_60788941` stays green.** It edits the first line where `agents/block@1` and `@2` differ, and version 3 keeps version 2's change on that line, so the edit still conflicts.
 
 ## Consequences

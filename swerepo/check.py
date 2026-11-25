@@ -17,6 +17,7 @@ from typing import Any
 
 from swerepo import __version__, ci, github, merge, privacy, rebuild, standard
 from swerepo import seamspec_component as ssc
+from swerepo import spec as specs
 from swerepo.blocks import file_fingerprint
 from swerepo.detect import Detection, detect
 from swerepo.fingerprint import HASH, HTML, BlockError, comment_style, find_block, fingerprint
@@ -201,6 +202,19 @@ def _present(ctx: Context, component: str, item: str, path: str, what: str | Non
 # --- components ------------------------------------------------------------------------------------
 
 
+def _spec(ctx: Context) -> Finding:
+    """The spec exists: only that, with no rule on pull requests (ADR-20261124-4d76 points 4 and 5)."""
+    c, found = "docs", specs.find(ctx.root, ctx.adopted.get("spec"))
+    if found.several:
+        return _missing(c, "docs.spec", specs.how_to_choose(found.several))
+    if found.path is None:
+        return _missing(c, "docs.spec", f"{specs.DEFAULT} missing (what the project does and is for)", specs.DEFAULT)
+    if not specs.within(ctx.root, found.path):  # missing, or a link out of the repository (review P8-F01)
+        where = "leads out of the repository" if (ctx.root / found.path).exists() else "missing"
+        return _missing(c, "docs.spec", f"{found.path} {where} (`[adopted] spec` names it)", found.path)
+    return _ok(c, "docs.spec", f"spec ({'adopted: ' if found.adopted else ''}{found.path})", found.path)
+
+
 def _docs(ctx: Context) -> list[Finding]:
     c, d = "docs", ctx.detection
     found: list[Finding] = []
@@ -234,6 +248,8 @@ def _docs(ctx: Context) -> list[Finding]:
         found.append(_ok(c, "docs.progress-entries", f"progress entries in {progress_dir}/", progress_dir))
     else:
         found.append(_missing(c, "docs.progress-entries", f"{progress_dir}/ missing (one entry per PR)", progress_dir))
+
+    found.append(_spec(ctx))
 
     changelog = d.documents.get("changelog")
     if not changelog:
@@ -1012,16 +1028,6 @@ def _without_comments(text: str | None) -> str:
     return "\n".join(lines)
 
 
-def _openspec(ctx: Context) -> list[Finding]:
-    if ctx.detection.openspec:
-        return [_ok("openspec", "openspec.setup", "OpenSpec set up", "openspec")]
-    return [_missing("openspec", "openspec.setup", "OpenSpec not set up", "openspec")]
-
-
-def _release(ctx: Context) -> list[Finding]:
-    return [_present(ctx, "release", "release.workflow", standard.RELEASE_WORKFLOW, "release workflow")]
-
-
 CHECKERS = {
     "docs": _docs,
     "agents": _agents,
@@ -1029,8 +1035,6 @@ CHECKERS = {
     "security": _security,
     "github": _github,
     "seamspec": _seamspec,
-    "openspec": _openspec,
-    "release": _release,
 }
 
 
@@ -1114,10 +1118,6 @@ def chosen_components(state: State | None, detection: Detection) -> list[str]:
         chosen = set(state.components)
     else:
         chosen = set(standard.DEFAULT_COMPONENTS)
-        if detection.openspec:
-            chosen.add("openspec")
-        if any(w.path == standard.RELEASE_WORKFLOW for w in detection.workflows):
-            chosen.add("release")
     return [c for c in COMPONENTS if c in chosen]
 
 
@@ -1177,8 +1177,6 @@ def run_check(
             findings.append(Finding(component, f"{component}.chosen", NOT_CHOSEN, "not chosen"))
             continue
         findings.extend(CHECKERS[component](ctx))
-        for item, what, phase in standard.LATER.get(component, ()):
-            findings.append(Finding(component, item, UNKNOWN, f"{what}: checked from Phase {phase}"))
     checked = [c for c in COMPONENTS if c in (chosen if only is None else only) and c not in exclude]
     if state is not None and not newer:
         findings.extend(_without_repeats(findings, _record_findings(ctx, checked, store or TemplateStore())))
