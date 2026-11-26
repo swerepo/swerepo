@@ -18,7 +18,7 @@ from swerepo import __version__, standard
 from swerepo import seamspec_component as ssc
 from swerepo.adr import AdrError, new_adr, write_index
 from swerepo.blocks import inside
-from swerepo.check import UsageError, in_github_actions, one_line, run_check
+from swerepo.check import UsageError, in_github_actions, job_blocks, one_line, run_check
 from swerepo.init import (
     CANT_MERGE,
     CHANGED,
@@ -281,6 +281,12 @@ COPILOT_NOTE = (
 )
 
 
+COPILOT_NOTE_OLD_JOB = (
+    "swerepo-ci.yml's copilot-review still waits for Copilot's review on every pull request: run swerepo update "
+    "--only ci and merge it. Until then, ask Copilot on each pull request: gh pr edit <number> --add-reviewer @copilot"
+)
+
+
 def _copilot_note(plan, path: Path, declined: bool) -> list[str]:
     """The note that CI doesn't wait for Copilot yet: where init or update leaves the ruleset unapplied (held for
     --apply-github, said no to in a terminal, or gh missing or logged out) and the workflow waits for Copilot's review
@@ -294,7 +300,14 @@ def _copilot_note(plan, path: Path, declined: bool) -> list[str]:
     waiting = any(a.verb == "waiting" and a.component == "github" for a in plan.actions)
     logged_out = waiting and plan.github_remote is not None and plan.github_slug is None
     left = (plan.github_held or declined) and plan.copilot_unrequested
-    return [COPILOT_NOTE] if left or logged_out else []
+    if not (left or logged_out):
+        return []
+    try:
+        text = (path / standard.CI_WORKFLOW).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    # the pass is promised only where the job on disk reads the rules; an older one still waits (PR #24 review)
+    return [COPILOT_NOTE if "rules/branches/" in job_blocks(text).get("copilot-review", "") else COPILOT_NOTE_OLD_JOB]
 
 
 def _apply_github(plan, path: Path, yes: bool) -> tuple[list[str], bool]:

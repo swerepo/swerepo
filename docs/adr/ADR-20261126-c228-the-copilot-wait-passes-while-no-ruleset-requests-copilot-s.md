@@ -45,6 +45,8 @@ Designed in `CODE_REVIEW.md` (review P8-C) and reviewed by Gemini over two round
 
    So any change in GitHub's text fails the job (red), never skipping a wait. Tightened after SeamSpec's reviewer found the first version accepted any line matching `^gh: Upgrade to GitHub Pro.*\(HTTP 403\)$`.
 5. **`init` and `update` say so** wherever they leave the ruleset unapplied while the workflow waits for Copilot (review P8-C05): held for `--apply-github`, a terminal "no" to the ruleset, or `gh` missing or logged out. The note says that until a ruleset requests Copilot's review on the default branch, CI's `copilot-review` passes without waiting, and gives the command. It never shows under `--no-copilot-review`, when GitHub's `swerepo` ruleset already requests Copilot, or before a GitHub repository exists.
+   - **Asked as CI asks** (Copilot on PR #24): whether a ruleset requests Copilot is read from the default branch's active rules, so an active ruleset that leaves the branch out counts as requesting nothing; if GitHub won't say, the ruleset's own enforcement and rules decide.
+   - **A pass is promised only where it happens:** when the `copilot-review` job on disk doesn't read the rules (an older render still waits), the note says so instead, with `swerepo update --only ci` and the same `gh pr edit` command.
 6. **Templates changed in place:** `ci/job-copilot-review@2` hasn't been released (no `v*` tag), as in ADR-20261123-cc8d point 3. This repository's `swerepo-ci.yml`, unchanged since SWERepo wrote it, is rewritten by `swerepo update`.
 
 **Alternatives considered:**

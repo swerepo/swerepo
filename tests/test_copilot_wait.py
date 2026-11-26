@@ -16,7 +16,7 @@ from fake_gh import FakeGh
 from repo_helpers import git, git_init, make
 
 from swerepo import github
-from swerepo.cli import COPILOT_NOTE
+from swerepo.cli import COPILOT_NOTE, COPILOT_NOTE_OLD_JOB
 from swerepo.init import apply, make_plan
 
 TODAY = datetime.date(2026, 11, 26)
@@ -161,6 +161,39 @@ class TestTheNote:
         done = cli(*INIT, "--path", str(project), "--yes")
         assert done.exit_code == 0, done.output
         assert "--yes --apply-github" in done.output and COPILOT_NOTE not in done.output
+
+    @pytest.mark.parametrize(
+        ("rules", "noted"),
+        [([], True), ([{"type": "deletion"}], True), ([{"type": "deletion"}, {"type": "copilot_code_review"}], False)],
+    )
+    def test_githubs_rules_on_the_default_branch_decide(self, project: Path, tmp_path, monkeypatch,
+                                                        rules: list, noted: bool):  # fmt: skip
+        """An active ruleset with Copilot's rule that leaves the default branch out requests nothing there: the note
+        asks GitHub what CI's copilot-review asks (PR #24 review)."""
+        live = github.BUILDERS["github/ruleset@1"](github.Settings("solo", "@dev"))
+        fake = _github(project, tmp_path, monkeypatch, live={**live, "id": 9, "enforcement": "active"})
+        fake.set(f"GET repos/{SLUG}", {"owner": {"login": "dev", "type": "User"}, "allow_merge_commit": True,
+                                       "default_branch": "main"})  # fmt: skip
+        fake.set(f"GET repos/{SLUG}/rules/branches/main", rules)
+        done = cli(*INIT, "--path", str(project), "--yes")
+        assert done.exit_code == 0, done.output
+        assert any("rules/branches/main" in " ".join(c["args"]) for c in fake.calls())  # GitHub was asked
+        assert set(fake.methods()) == {"GET"}  # and only read
+        assert "--yes --apply-github" in done.output and (COPILOT_NOTE in done.output) is noted, done.output
+
+    def test_an_older_job_still_waits_and_the_note_says_so(self, project: Path, tmp_path: Path, monkeypatch):
+        """A workflow whose copilot-review doesn't read the rules still waits: the note never promises a pass there
+        (PR #24 review)."""
+        _github(project, tmp_path, monkeypatch)
+        assert cli(*INIT, "--path", str(project), "--yes").exit_code == 0
+        workflow = project / ".github/workflows/swerepo-ci.yml"
+        older = "\n".join(line for line in workflow.read_text().splitlines() if "rules/branches/" not in line)
+        workflow.write_text(older + "\n")  # as an older render: no rules read, the wait kept
+        (project / ".github/swerepo/ruleset.json").unlink()  # something for update to do
+        done = cli("update", "--path", str(project), "--only", "github", "--yes")
+        assert done.exit_code == 0, done.output
+        assert COPILOT_NOTE_OLD_JOB in done.output and COPILOT_NOTE not in done.output
+        assert "swerepo update --only ci" in COPILOT_NOTE_OLD_JOB
 
 
 # The job, run as written

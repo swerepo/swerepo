@@ -1384,9 +1384,14 @@ def _github_apply(
         return [Action(c, NOTE, None, f"can't read GitHub's settings ({error}): nothing applied")]
     wanted, settings = rendered["ruleset"], rendered["repo-settings"]
     plan.github_compared = wanted is not None and settings is not None
-    # only an active ruleset requests Copilot: GitHub ignores a disabled or evaluate-only one (review P8-C07)
-    active = isinstance(live_ruleset, dict) and live_ruleset.get("enforcement") == "active"
-    live_copilot = active and github.has_copilot_review(live_ruleset)
+    # what CI's copilot-review asks: the default branch's active rules, which leave out a disabled or evaluate-only
+    # ruleset (review P8-C07) and one that excludes the branch (PR #24 review); if GitHub won't say, the ruleset's
+    # own answer
+    try:
+        live_copilot = hub.branch_requests_copilot(str(live_repo.get("default_branch") or ""))
+    except github.GitHubError:
+        active = isinstance(live_ruleset, dict) and live_ruleset.get("enforcement") == "active"
+        live_copilot = active and github.has_copilot_review(live_ruleset)
     plan.copilot_unrequested = wanted is not None and github.has_copilot_review(wanted) and not live_copilot
     if wanted is None:
         ruleset_changes = []

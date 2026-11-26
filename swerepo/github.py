@@ -13,6 +13,7 @@ import json
 import re
 import shutil
 import subprocess
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -250,6 +251,17 @@ class GitHub:
         if self._repo is None:
             self._repo = self.get(f"repos/{self.slug}")
         return self._repo
+
+    def branch_requests_copilot(self, branch: str) -> bool:
+        """Whether GitHub's active rules on `branch` include Copilot's review: the question CI's copilot-review
+        asks, so an active ruleset that leaves the branch out counts as requesting nothing (PR #24 review)."""
+        if not branch:
+            raise GitHubError("no default branch to read the rules of")
+        path = f"repos/{self.slug}/rules/branches/{urllib.parse.quote(branch, safe='')}?per_page=100"
+        rules = self.get(path)
+        return isinstance(rules, list) and any(
+            isinstance(rule, dict) and rule.get("type") == "copilot_code_review" for rule in rules
+        )
 
     def owner_login(self) -> tuple[str, str]:
         """(login, "User" or "Organization") of the repository's owner."""
