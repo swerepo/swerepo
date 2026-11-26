@@ -69,8 +69,8 @@ inputs = {adr_dir = "docs/adr"}
 
 [files.".github/workflows/swerepo-ci.yml"]
 template = "ci/workflow@2"
-rendered = "2112f2a95f035fc3b5e0a10a1905895534b32011909e077d0378c5f6dd13fec4"
-written = "2112f2a95f035fc3b5e0a10a1905895534b32011909e077d0378c5f6dd13fec4"
+rendered = "1b70283a632a62f762d2c9e066a79466f3237dfcd729e00095c01b3928ffcc68"
+written = "1b70283a632a62f762d2c9e066a79466f3237dfcd729e00095c01b3928ffcc68"
 inputs = {copilot_review = "true", default_branch = "main", install = "uv sync --locked", lint = "ruff", linters = "", projects = "[]", python = "3.11,3.12,3.13,3.14", seamspec = "0.1.2", swerepo = "uv run --locked swerepo"}
 
 [files.".github/workflows/swerepo-privacy.yml"]

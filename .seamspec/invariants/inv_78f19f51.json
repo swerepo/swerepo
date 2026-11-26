@@ -13,7 +13,7 @@
     ],
     "tags": []
   },
-  "status": "LOCKED",
+  "status": "SUPERSEDED",
   "origin": {
     "type": "manual",
     "text": "Replaces inv_faa5bef5 (ADR-20261123-a359) after Dependabot's first pull requests (#12–#14) were all blocked: GitHub requests Copilot's review only for authors who have Copilot, so the wait timed out on every dependency update. The owner's decision (ADR-20261123-cc8d): Dependabot's pull requests don't wait; their tests and dependency-review still run and the person who merges reviews them. Everything else inv_faa5bef5 locked is kept word for word. Tightened after Gemini's review (DB-F01, DB-F03), the owner, and SeamSpec's reviewer: a Dependabot pull request holds only Dependabot's commits, committed by GitHub itself (web-flow, as on its real PRs #12–#14), on a branch in the repository, and anything else fails at once; drafts are decided first; Renovate isn't exempt, since its commits carry no signature GitHub vouches for; the wait is pinned at exactly 40 asks.",
@@ -21,7 +21,7 @@
   },
   "verification": {
     "runner": "pytest",
-    "harness_path": ".seamspec/tests/test_inv_78f19f51.py",
+    "harness_path": ".seamspec/retired/inv_78f19f51/test_inv_78f19f51.py",
     "harness_sha256": "98902a04e590291d97a57d5e051b7fdd8fc60b0e66ac2208c986a41fd0d9e3b6",
     "assertion_sha256": "5f1d60c5fb90a20fbe6f077398c5f1eb8dc84536f740892103df8c92f2686a13"
   },
@@ -29,8 +29,8 @@
   "created_at": "2026-11-24T04:23:09.723187Z",
   "approved_at": "2026-11-24T05:45:57.006182Z",
   "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
-  "superseded_by": null,
-  "status_reason": null,
+  "superseded_by": "inv_b5d32550",
+  "status_reason": "ADR-20261126-c228 (review P8-C, the owner's go-ahead 2026-11-26): the pull request that adds SWERepo waited 20 minutes for a Copilot review nothing requested, since GitHub requests it only through an active ruleset rule and the ruleset is applied after that pull request merges. The job now reads the default branch's rules once (DEFAULT_BRANCH and PRIVATE through env:) and passes when no copilot_code_review rule is there, or on GitHub Free's 403 on a private repository; any other failed read fails. inv_78f19f51's test fails because it doesn't know the two new env: values, and its sentence \"every other author waits\" is no longer true where nothing requests Copilot. inv_b5d32550 keeps every one of its checks and adds the rules read.",
   "decided_via": "terminal",
   "critical": true
 }

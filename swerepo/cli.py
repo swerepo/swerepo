@@ -18,7 +18,7 @@ from swerepo import __version__, standard
 from swerepo import seamspec_component as ssc
 from swerepo.adr import AdrError, new_adr, write_index
 from swerepo.blocks import inside
-from swerepo.check import UsageError, in_github_actions, one_line, run_check
+from swerepo.check import UsageError, in_github_actions, job_blocks, one_line, run_check
 from swerepo.init import (
     CANT_MERGE,
     CHANGED,
@@ -275,8 +275,44 @@ HELD_NEXT = ("Then apply the ruleset and merge settings on GitHub: swerepo init 
              "shown first), or swerepo init --only github --yes --apply-github")  # fmt: skip
 
 
-def _apply_github(plan, path: Path, yes: bool) -> list[str]:
-    """Show each GitHub change as JSON and apply what the person says yes to (all of them with --yes)."""
+COPILOT_NOTE = (
+    "Until a ruleset requests Copilot's review on the default branch, CI's copilot-review passes without "
+    "waiting. To have Copilot review a pull request anyway: gh pr edit <number> --add-reviewer @copilot"
+)
+
+
+COPILOT_NOTE_OLD_JOB = (
+    "swerepo-ci.yml's copilot-review still waits for Copilot's review on every pull request: run swerepo update "
+    "--only ci and merge it. Until then, ask Copilot on each pull request: gh pr edit <number> --add-reviewer @copilot"
+)
+
+
+def _copilot_note(plan, path: Path, declined: bool) -> list[str]:
+    """The note that CI doesn't wait for Copilot yet: where init or update leaves the ruleset unapplied (held for
+    --apply-github, said no to in a terminal, or gh missing or logged out) and the workflow waits for Copilot's review
+    (ADR-20261126-c228). Never under --no-copilot-review, and not before there is a GitHub repository."""
+    try:
+        state = State.load(path)
+    except StateError:
+        return []
+    if state is None or state.values.get("ci_copilot_review") != "true":
+        return []
+    waiting = any(a.verb == "waiting" and a.component == "github" for a in plan.actions)
+    logged_out = waiting and plan.github_remote is not None and plan.github_slug is None
+    left = (plan.github_held or declined) and plan.copilot_unrequested
+    if not (left or logged_out):
+        return []
+    try:
+        text = (path / standard.CI_WORKFLOW).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    # the pass is promised only where the job on disk reads the rules; an older one still waits (PR #24 review)
+    return [COPILOT_NOTE if "rules/branches/" in job_blocks(text).get("copilot-review", "") else COPILOT_NOTE_OLD_JOB]
+
+
+def _apply_github(plan, path: Path, yes: bool) -> tuple[list[str], bool]:
+    """Show each GitHub change as JSON and apply what the person says yes to (all of them with --yes). Also returns
+    whether the person said no to the ruleset."""
     labels = {"ruleset": 'Apply ruleset "swerepo" on the default branch?', "settings": "Apply merge settings?"}
     chosen = []
     for name, data in plan.github_apply.items():
@@ -285,9 +321,10 @@ def _apply_github(plan, path: Path, yes: bool) -> list[str]:
             if not typer.confirm(labels[name], default=False):
                 continue
         chosen.append(name)
+    declined = "ruleset" in plan.github_apply and "ruleset" not in chosen
     if not chosen:
-        return ["GitHub: nothing applied (run `swerepo init --only github` again to apply)"]
-    return [f"GitHub: {line}" for line in apply_github(plan, path, chosen)]
+        return ["GitHub: nothing applied (run `swerepo init --only github` again to apply)"], declined
+    return [f"GitHub: {line}" for line in apply_github(plan, path, chosen)], declined
 
 
 @app.command(context_settings=EXTRA_ARGS, epilog=SHORTHAND)
@@ -373,7 +410,7 @@ def init(
         raise typer.Exit(0)
     try:
         apply(plan, path)
-        github_lines = _apply_github(plan, path, yes) if plan.github_apply else []
+        github_lines, declined = _apply_github(plan, path, yes) if plan.github_apply else ([], False)
         seamspec_lines = _seamspec_after(plan, path, interactive)
     except InitError as error:
         raise _fail(error, 1, "init") from error
@@ -403,6 +440,8 @@ def init(
         typer.echo("  3. apply the ruleset and merge settings: swerepo init --only github")
     else:
         typer.echo("Next: review the changes (git status, git diff), commit them on a branch, open a pull request.")
+    for line in _copilot_note(plan, path, declined):
+        typer.echo(line)
     warning = noreply_warning(path.resolve())
     if warning:
         typer.echo(warning)
@@ -477,7 +516,7 @@ def update(
         raise typer.Exit(0)
     try:
         apply(plan, path)
-        github_lines = _apply_github(plan, path, yes) if plan.github_apply else []
+        github_lines, declined = _apply_github(plan, path, yes) if plan.github_apply else ([], False)
         seamspec_lines = _seamspec_after(plan, path, interactive)
     except InitError as error:
         raise _fail(error, 1, "update") from error
@@ -496,6 +535,8 @@ def update(
     typer.echo("Next: review the changes (git status, git diff), commit them on a branch, open a pull request.")
     if plan.github_held:
         typer.echo(HELD_NEXT)
+    for line in _copilot_note(plan, path, declined):
+        typer.echo(line)
 
 
 @app.command()
