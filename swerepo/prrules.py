@@ -30,6 +30,10 @@ LOCKFILES = frozenset({
 })  # fmt: skip
 _TRAILER = re.compile(r"^\s*progress:\s*none\s*$", re.IGNORECASE | re.MULTILINE)
 
+# What fixes a pull-request rule: the person's step, never `init` (ADR-20261125-5f22 point 5, review P8-A09)
+PROGRESS = "add a progress entry, or the commit trailer Progress: none"
+ADR = "record an ADR (swerepo adr new)"
+
 
 def _worktree_diff(ctx: Context, merge_base: str) -> str | None:
     """`git diff --name-status` of the working tree against the merge base, run on a copy of the index;
@@ -134,8 +138,8 @@ def pr_findings(ctx: Context, *, base: str, author: str | None, skip_progress: b
     def ok(item: str, message: str, path: str | None = None) -> Finding:
         return Finding(c, item, OK, message, path)
 
-    def missing(item: str, message: str, path: str | None = None) -> Finding:
-        return Finding(c, item, MISSING, message, path, blocking=enforce)
+    def missing(item: str, message: str, path: str | None, fix: str) -> Finding:
+        return Finding(c, item, MISSING, message, path, blocking=enforce, fix=fix)  # never init's (review P8-A09)
 
     found: list[Finding] = []
     progress_dir = str(ctx.adopted.get("progress_dir") or standard.PROGRESS_DIR).rstrip("/")
@@ -148,7 +152,7 @@ def pr_findings(ctx: Context, *, base: str, author: str | None, skip_progress: b
             ok("pr.progress", f"no progress entry needed ({'--skip progress' if skip_progress else 'Progress: none'})")
         )
     else:
-        found.append(missing("pr.progress", f"no progress entry added in {progress_dir}/", progress_dir))
+        found.append(missing("pr.progress", f"no progress entry added in {progress_dir}/", progress_dir, PROGRESS))
 
     adr_dir = str(ctx.adopted.get("adr_dir") or standard.ADR_DIR).rstrip("/")
     adr_changed = any(
@@ -168,7 +172,7 @@ def pr_findings(ctx: Context, *, base: str, author: str | None, skip_progress: b
         if adr_changed:
             found.append(ok("pr.dependencies", f"new dependency {names} with an ADR", "pyproject.toml"))
         else:
-            found.append(missing("pr.dependencies", f"new dependency {names} needs an ADR", "pyproject.toml"))
+            found.append(missing("pr.dependencies", f"new dependency {names} needs an ADR", "pyproject.toml", ADR))
 
     recorded = state.files() if state else {}
     workflows = []
@@ -184,5 +188,5 @@ def pr_findings(ctx: Context, *, base: str, author: str | None, skip_progress: b
         if adr_changed:
             found.append(ok("pr.workflows", f"workflow change ({names}) with an ADR"))
         else:
-            found.append(missing("pr.workflows", f"workflow change ({names}) needs an ADR", workflows[0]))
+            found.append(missing("pr.workflows", f"workflow change ({names}) needs an ADR", workflows[0], ADR))
     return found

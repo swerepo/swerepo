@@ -1,6 +1,6 @@
 # SWERepo — Specification
 
-**Status:** draft for the owner's review · **Version:** 0.16 (design) · **Date:** 2026-11-24
+**Status:** draft for the owner's review · **Version:** 0.17 (design) · **Date:** 2026-11-25
 **Name:** SWERepo, command `swerepo`, at `github.com/swerepo/swerepo` (renamed from Golden Repo in v0.6, ADR-20261120-1a27)
 **What changed:** Appendix A. **How the BLUEPRINT's ideas were handled:** Appendix B.
 
@@ -156,7 +156,7 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
 
 - `.github/workflows/swerepo-ci.yml`:
   - **lint**: ruff lint and format check, or the project's existing linters (§6.3);
-  - **tests**: pytest through uv on Linux, on every Python version the project supports. The versions come from `requires-python` (for a new project, `>=3.11`, so 3.11 to 3.14), up to the newest version standard 1 knows; SWERepo never changes a declared range;
+  - **tests**: pytest through uv on Linux, on every Python version the project supports. The versions come from `requires-python` (for a new project, `>=3.11`, so 3.11 to 3.14), up to the newest version standard 1 knows; SWERepo never changes a declared range. A project without tests fails this job (pytest exits 5 when it collects none): the plan and `check` say so, and `prepare-pr.md` tells agents to write a real test, never to mask the job; SWERepo writes no test itself (ADR-20261125-5f22);
   - **tests-macos**: on pushes to `main` only (macOS minutes cost about ten times more on private repositories);
   - **workflow-audit**: `zizmor` on `.github/workflows/`, run through `uvx` at a pinned version;
   - **governance**: on pull requests, `swerepo check --ci --base <base branch> --author <login>` at a pinned SWERepo version (§15; an unreleased SWERepo doesn't add this job unless asked);
@@ -171,13 +171,13 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
 
 ### 6.3 Code quality (component `ci`)
 
-- Settings for ruff and pytest in a **marked block at the end of `pyproject.toml`** (`# swerepo:begin` … `# swerepo:end`; ADR-20261122-4a06): `[tool.ruff]` only when ruff is chosen and not configured, `[tool.pytest.ini_options]` only when the project has no pytest configuration. The person's text above it is kept byte for byte; if the block would clash with their TOML, it isn't added and the plan says so.
+- Settings for ruff and pytest in a **marked block at the end of `pyproject.toml`** (`# swerepo:begin` … `# swerepo:end`; ADR-20261122-4a06): `[tool.ruff]` only when ruff is chosen and not configured, `[tool.pytest.ini_options]` only when the project has no pytest configuration. The person's text above it is kept byte for byte; if the block would clash with their TOML, it isn't added and the plan says so. The block holds only tables under `tool.ruff` and `tool.pytest`, so editing those is an ordinary edit. A table another tool appends inside it (`uv add` puts `[dependency-groups]` at the end of the file) is named by `check`, `init` and `update` with the fix, "move it above `# swerepo:begin`"; the file is then left byte for byte, never merged, rewritten or offered for deletion, and SWERepo never moves the table itself. The project's dependencies are read from the whole file, so a table there still counts (ADR-20261125-5f22 point 5).
 - **Projects that already lint.** SWERepo looks for existing linters and formatters (ruff, black, isort, flake8, pylint) in `pyproject.toml`, `setup.cfg`, `tox.ini`, `.flake8` and `.pre-commit-config.yaml`:
   - **ruff already configured:** its configuration is kept as it is; the lint job runs it.
   - **other tools found:** the person chooses (shown in the plan; the default is the first):
     1. **keep them**: no ruff settings are added; the lint job runs the detected tools through `uv run`, and they are recorded under `[adopted] linters`;
     2. **move to ruff gradually**: ruff settings are added, matched to the existing line length where it can be read (ruff takes the target version from `requires-python`), and ruff checks **only the Python files each change touches** (a pull request against its base, a push against the commit before it), so existing code isn't flagged all at once. SWERepo never reformats or edits code to make it pass.
-  - **nothing found:** ruff, as for a new project.
+  - **nothing found:** ruff. In a new project (no commits yet) it checks every file; in a repository with commits, a codebase that has never been linted, it moves to ruff gradually as in option 2, so CI isn't red on day one. The plan says how to check every file later: fix the codebase in one pull request, then set `lint = "ruff"` under `[values]` and run `swerepo update --only ci,agents`, so the agents' commands follow (ADR-20261125-5f22). A project listed with `--projects` gets full ruff in v0.1, and the plan says so; per-project gradual linting comes with v0.2's monorepo work (§11, §20).
 - The pytest section is added only when the project has no pytest configuration of its own (`pytest.ini`, `setup.cfg`, `tox.ini`, `pyproject.toml`).
 - **Locked SeamSpec tests are never linted or reformatted** (SeamSpec's ADR-20261013-c3f7). SeamSpec records a hash of each approved rule test, and any edit, even whitespace, counts as tampering. A `ruff format .` run by an agent would break every lock, and `seamspec init` doesn't add the exclusion to the repositories it sets up. So:
   - SWERepo's ruff settings include `extend-exclude = [".seamspec"]`;
@@ -188,7 +188,7 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
 ### 6.4 Security and privacy (component `security`)
 
 - `SECURITY.md`: how to report a vulnerability. The contact is asked for: GitHub's private vulnerability reporting (the default with a GitHub remote; no address is published, and the owner turns it on in the repository's settings), an email address, or a placeholder to fill in (ADR-20261122-a48e). Written once; the person's from then on.
-- A privacy check (`.github/workflows/swerepo-privacy.yml` and the same check locally as `swerepo check --only security`): no personal email addresses, no home-folder paths, no obvious secrets (private keys and well-known token formats) in tracked files and in untracked files git would add. `[privacy] allow_paths` globs read as git's (`*` within a folder, `**` across folders). Findings name the file and line, never what was found. Lesson from SessionWalk, where personal details had to be removed from history. The workflow needs a SWERepo it can install, as the `governance` job does (§15); on pull requests, `governance` reports the same findings inside `ci-ok`.
+- A privacy check (`.github/workflows/swerepo-privacy.yml` and the same check locally as `swerepo check --only security`): no personal email addresses, no home-folder paths, no obvious secrets (private keys and well-known token formats) in tracked files and in untracked files git would add. `[privacy] allow_paths` globs read as git's (`*` within a folder, `**` across folders). Findings name the file and line, never what was found. When every finding is an address or a path, `init`'s plan also says how to clear a placeholder: a reserved example domain, the `swerepo: allow-privacy` marker, or `[privacy] allow_paths` (never with a key among them, and never in `check`'s finding, which names places only; ADR-20261125-5f22). Lesson from SessionWalk, where personal details had to be removed from history. The workflow needs a SWERepo it can install, as the `governance` job does (§15); on pull requests, `governance` reports the same findings inside `ci-ok`.
   - **Allowed by default:** noreply addresses (`users.noreply.github.com`), reserved example domains (`example.com`, `example.org`, …), emails in `[project].authors` and `maintainers` in `pyproject.toml`, the contact in `SECURITY.md`, and placeholder home paths (`/Users/me`, `/home/user`, `C:\Users\you`, `~`).
   - **Allowed by the person:** files or globs listed under `[privacy] allow_paths` in `.swerepo.toml`, and a single line marked with a `swerepo: allow-privacy` comment. Allowances name files, never the addresses themselves, so no personal data goes into `.swerepo.toml`.
 - **A pre-push privacy hook** (ADR-20261123-24e0): `swerepo hook install` writes a git `pre-push` hook that runs the same scan on the lines each commit about to be pushed adds, so a key, a personal email address or a home-folder path never reaches GitHub. It shows the kind, the commit and `file:line`, never what was found.
@@ -222,7 +222,7 @@ Designed so that parallel branches don't collide: each PR adds its own files, an
 
 ### 6.6 Agent instructions (component `agents`)
 
-- **Which editors.** `init` asks which agents and editors the project uses (Claude Code, Cursor, VS Code Copilot, Antigravity or Gemini CLI), pre-filled from what it finds (`.cursor/`, `.vscode/`, `.agents/`, existing agent files), and records the answer under `[agents] hosts`. Files are written only for the editors chosen: no speculative `GEMINI.md`, because other tools read its presence as a sign that Antigravity is in use (SeamSpec does, §13).
+- **Which editors.** `init` asks which agents and editors the project uses (Claude Code, Cursor, VS Code Copilot, Antigravity or Gemini CLI), pre-filled from what it finds (`.cursor/`, `.vscode/`, `.agents/`, existing agent files), and records the answer under `[agents] hosts`; `--editors` sets them without asking, also to change a recorded choice (§7); they are recorded only when `agents` writes their files. Dropping an editor leaves its file in place, as the person's now: SWERepo stops managing it and `check` doesn't miss it. Choosing it again manages its SWERepo block again when the block is as SWERepo wrote it; adding a non-Claude editor where SeamSpec is set up runs `seamspec init` again for it (§13). Files are written only for the editors chosen: no speculative `GEMINI.md`, because other tools read its presence as a sign that Antigravity is in use (SeamSpec does, §13).
 - **One source, no copies.** The rules live in a marked SWERepo block (`<!-- swerepo:begin -->` … `<!-- swerepo:end -->`) in `AGENTS.md`, which Cursor, VS Code Copilot, Antigravity and others read directly. `CLAUDE.md` (when Claude Code is chosen) holds `@AGENTS.md` (Claude Code expands the import) beside SeamSpec's Claude block and anything already there. `GEMINI.md` (when Antigravity or Gemini is chosen) points to `AGENTS.md`. Nothing is duplicated, so nothing needs to be kept in sync.
 - **With SeamSpec and several editors**, `AGENTS.md` also holds SeamSpec's block for the other editors (`/seamspec-*` commands) and `CLAUDE.md` its Claude block (`/seamspec:*`). Through the import, Claude Code reads both: the same protocol twice with two spellings of each command. Claude-only projects don't have this (no SeamSpec block in `AGENTS.md`). For mixed projects, whether it confuses agents is measured in a real session (§19.9); if it does, the fallback is to render SWERepo's block into both `AGENTS.md` and `CLAUDE.md` instead of importing. Both copies are fingerprinted, so `check` reports either one drifting.
 - The block states the working rules, learned on SeamSpec and SessionWalk:
@@ -238,7 +238,7 @@ Designed so that parallel branches don't collide: each PR adds its own files, an
   10. A change to behaviour, CLI flags, APIs or configuration updates the spec (`SPEC.md`, or the adopted file, §6.7) in the same PR.
 - **Commands** are listed in the block, so agents never guess them: install (`uv sync`), test (`uv run pytest`), lint (`uv run ruff check` and `uv run ruff format --check`), check (`swerepo check`). They are rendered from what the project uses; an existing Makefile or task runner is listed instead when one is detected.
 - **Runbooks on demand:** step-by-step guides in `docs/agents/`, plain Markdown that every agent can read, so the block stays short. One line in the block points to them:
-  - `prepare-pr.md`: branch, tests, progress entry, ADR if needed, the spec when behaviour changed, PR template; if the PR approves or supersedes SeamSpec rules, regenerate `docs/EARNED_SPEC.md` in the same PR (`seamspec spec --out docs/EARNED_SPEC.md`);
+  - `prepare-pr.md`: branch, tests (and, with none yet, a real first test, never a masked job), progress entry, ADR if needed, the spec when behaviour changed, PR template; if the PR approves or supersedes SeamSpec rules, regenerate `docs/EARNED_SPEC.md` in the same PR (`seamspec spec --out docs/EARNED_SPEC.md`);
   - `address-review.md`: `swerepo threads`, fix or reply to each thread with the commit, summary comment;
   - `record-adr.md`: when an ADR is needed, `swerepo adr new`, index, superseding;
   - `update-spec.md`: what belongs in the spec and what doesn't; on an existing codebase, start from the part a change touches instead of describing everything at once.
@@ -269,9 +269,11 @@ Designed so that parallel branches don't collide: each PR adds its own files, an
 
 ```
 swerepo init     [--only C,...] [--no-C ...] [--mode solo|team] [--code-owner @LOGIN] [--no-copilot-review]
-                 [--projects P,...] [--with-governance] [--adopt NAME=ID ...] [--dry-run] [--yes] [--path DIR] [--json]
+                 [--projects P,...] [--with-governance] [--adopt NAME=ID ...] [--editors E,...] [--dry-run] [--yes]
+                 [--apply-github] [--path DIR] [--json]
 swerepo check    [--only C,...] [--base REF] [--author LOGIN] [--skip progress] [--json] [--ci] [--path DIR]
-swerepo update   [--only C,...] [--enforce-pr-rules] [--dry-run] [--yes] [--merge] [--path DIR] [--json]
+swerepo update   [--only C,...] [--enforce-pr-rules] [--editors E,...] [--dry-run] [--yes] [--merge] [--apply-github]
+                 [--path DIR] [--json]
 swerepo -u       (short for `update`; `swerepo -u --seamspec` = `update --only seamspec`)
 swerepo diff     [FILE ...] [--path DIR]   what update would change in files you edited, and any merge conflicts
 swerepo status   [--path DIR] [--json]     components applied, mode, standard version, tool versions, files by state
@@ -288,8 +290,10 @@ swerepo --version
 - **`--mode`**: `solo` or `team` (§12). Default: `solo` for a repository owned by a user, `team` for one owned by an organisation; always shown in the plan.
 - **`--code-owner`**: the CODEOWNERS owner of governance files, `@login` or `@org/team`, or `none` (§6.1). Default: the repository's owner when that is a user; never guessed from git config. Without one, CODEOWNERS isn't written, and `check` warns without failing.
 - **`--no-copilot-review`**: a ruleset without Copilot review, and no wait for it in CI (§12).
+- **`--editors`**: the editors in use, comma-separated (`claude`, `cursor`, `vscode`, `antigravity`, `gemini`), or `none` (§6.6). It replaces the recorded ones without the terminal question, so a script or an agent can choose them; the plan shows the change (ADR-20261125-5f22). It needs the `agents` component in the run; repeated names count once, and an empty list or `none` with other names is wrong usage.
 - **Without a terminal**, `init` applies only with `--yes`; otherwise it prints the plan and exits `2` without writing (ADR-20261121-6c3d).
-- **`--yes`** answers yes to SWERepo's own questions in scripts. It never answers another tool's consent (SeamSpec's consent to run tests stays a person's answer; §13).
+- **`--yes`** answers yes to SWERepo's own questions in scripts. It never answers another tool's consent (SeamSpec's consent to run tests stays a person's answer; §13), and it never changes GitHub: the ruleset and merge settings wait, shown as needing `--apply-github`.
+- **`--apply-github`**, with `--yes`, also applies the ruleset and merge settings on GitHub (§12). Without `--yes` and without a terminal it changes nothing and exits `2`; in a terminal each change is shown as JSON and asked about whatever the flags (ADR-20261125-5f22 point 5).
 - **`--json`** prints one machine-readable result (plan, changes, findings) for scripts.
 - **`--projects`**: in a monorepo, the Python project folders that get their own CI jobs and settings (§11).
 - **`--enforce-pr-rules`**: switches the pull-request rules from warnings to failures (§10).
@@ -325,9 +329,9 @@ Each component has the same four parts: what it **writes**, what it **runs**, wh
 |---|---|---|---|---|
 | `docs` | ADR folder (README with index, template), PROGRESS, `docs/progress/`, CHANGELOG, CONTRIBUTING, README and `SPEC.md` (when missing) | — | — (a missing license is noted, never picked) | each file present; a spec present (`SPEC.md` or the adopted one); ADR index matches the ADR files; CHANGELOG has `[Unreleased]`; with `--base`: progress entry added, ADR for new dependencies |
 | `agents` | AGENTS.md block, CLAUDE.md import, GEMINI.md (each only for the editors chosen), `docs/agents/` runbooks | — | which agents and editors are in use | block and runbooks present and current; CLAUDE.md imports AGENTS.md; listed commands still exist |
-| `ci` | `swerepo-ci.yml`; ruff and pytest settings (per project in a monorepo) | — | the type checker (§19); keep existing linters or move to ruff gradually | workflow present, current or merged; `ci-ok` aggregates every job; Python versions match `requires-python`; every project root covered by a required check or recorded as not covered |
+| `ci` | `swerepo-ci.yml`; ruff and pytest settings (per project in a monorepo) | — | the type checker (§19); keep existing linters or move to ruff gradually | workflow present, current or merged; `ci-ok` aggregates every job; Python versions match `requires-python`; the project has tests (a warning); every project root covered by a required check or recorded as not covered |
 | `security` | SECURITY.md, privacy workflow, `.gitignore` block | the privacy scan once, to report findings before committing | the security contact | files present; privacy scan clean; secret scanning on (if readable) |
-| `github` | `.github/swerepo/*.json`, copilot-instructions, PR template, CODEOWNERS, issue templates, dependabot | `gh` to apply the ruleset and merge settings | **the mode, the code owner, the ruleset and the merge settings** (always shown first); extra required checks in a monorepo | files present; SWERepo's CODEOWNERS block last; ruleset applied, or waiting for a GitHub repository; live ruleset and settings match the committed files (needs `gh`); plan limits explained |
+| `github` | `.github/swerepo/*.json`, copilot-instructions, PR template, CODEOWNERS, issue templates, dependabot | `gh` to apply the ruleset and merge settings | **the mode, the code owner, the ruleset and the merge settings** (always shown first; applied only after a terminal yes or `--yes --apply-github`); extra required checks in a monorepo | files present; SWERepo's CODEOWNERS block last; ruleset applied, or waiting for a GitHub repository; live ruleset and settings match the committed files (needs `gh`); plan limits explained |
 | `seamspec` | `docs/EARNED_SPEC.md` (through SeamSpec, after the first review; SeamSpec writes its other files) | `seamspec init`; `seamspec propose` for the rule pack; `seamspec review` if the person agrees; `seamspec spec --out` | SeamSpec asks its own consent; SWERepo asks before proposing and before starting the review | SeamSpec set up; CI pin matches the installed SeamSpec; plugin current; hygiene rules locked; earned spec current (`seamspec spec --check`) |
 
 **Generated files** are rendered from templates bundled in the package, with a few values filled in (project name, Python versions, default branch, code owner, mode). Every released template version stays in the package, so an earlier render can always be rebuilt for a three-way merge (§16). Templates are plain files at `swerepo/templates/<component>/<name>/<version>[.<ext>]` with `@@name@@` placeholders and no logic; a missing value is an error, and a released version never changes (ADR-20261120-b25a).
@@ -488,7 +492,7 @@ A **monorepo** holds several projects in one repository, for example `services/o
 - **No GitHub repository yet** (a new project): `init` writes the `github` files, marks the ruleset and merge settings as waiting in the plan ("waiting: no GitHub repository"), records `[github] applied = false`, and ends by printing the next steps for the person:
   1. commit the files to the default branch (the only commit that goes straight to it, since no rules exist yet);
   2. create the repository and push (`gh repo create --source . --push`); SWERepo never creates repositories or pushes;
-  3. run `swerepo update --only github` to apply the ruleset and merge settings.
+  3. run `swerepo init --only github` in a terminal (or with `--yes --apply-github`) to apply the ruleset and merge settings.
   Until then, `check` reports `✗ ruleset not applied (no GitHub repository yet)`.
 - **On GitHub, but without `gh`** (not installed or not logged in): the plan says the settings wait for `gh`, and the next steps are the usual branch and pull request, then `gh auth login` and `swerepo init --only github`.
 - **Settings as code.** The ruleset and merge settings live in `.github/swerepo/ruleset.json` and `repo-settings.json`. They are the source of truth: a person may edit them (SWERepo then treats them like any edited file), `init`/`update --only github` applies them, and `check` compares the live settings with them. Two edits are never applied, and `check` reports them: a ruleset renamed away from `swerepo`, and fields in `repo-settings.json` beyond the merge settings (such as `private`).
@@ -509,7 +513,7 @@ A **monorepo** holds several projects in one repository, for example `services/o
 - **Why two modes:** GitHub doesn't let a person approve their own pull request, so a required approval would stop a solo developer from ever merging. A Copilot review doesn't count as an approval.
 - **`team` mode for one person:** when agents work under their own GitHub identity (§17), the person is not the author, can approve, and `team` mode gives a real lock.
 - **Copilot review:** detected through the API where possible; when the account has no Copilot review, the ruleset is created without it (and without required thread resolution in `solo`), and `check` says so.
-- **Always shown first:** the exact ruleset and settings as JSON, and a confirmation. `--yes` applies them in scripts; without a terminal and without `--yes`, they are skipped with the command to run.
+- **Always shown first, and applied only when asked for by name** (ADR-20261125-5f22 point 5): in a terminal, the exact ruleset and settings as JSON, each with its own confirmation. Without a terminal, only `--yes --apply-github` applies them; `--yes` alone writes the files and leaves GitHub as it is, with the settings shown as waiting and `[github] applied = false`, so a second run says "Nothing to do." and a check run never changes a live repository (SeamSpec dead end `de_00bb3c21`). `--apply-github` without `--yes` exits `2`.
 - **Plan limits are explained, not hidden:** on a private repository on GitHub's Free plan, rulesets and required checks aren't enforced; `check` says "set up, but not enforced on this plan".
 - **Bypass list:** empty by default (an admin bypass would show "merge anyway" to the admin).
 - **`swerepo threads <pr>`** reads open review threads through `gh api graphql` and prints each with its file, line and last comment, so agents and people can answer every thread. It never replies or resolves.
@@ -522,7 +526,7 @@ A **monorepo** holds several projects in one repository, for example `services/o
 SWERepo uses SeamSpec only through its public command line; SeamSpec needs no changes.
 
 - **Requires** the `seamspec` command. If missing, the plan prints how to install it (`uv tool install seamspec==<pin>`); SWERepo never installs or upgrades it, a change to the person's whole machine (ADR-20261124-cd64).
-- **`init --only seamspec`** runs `seamspec init --mode enforced --no-ci --hosts <editors>` (its locked rules run in `swerepo-ci.yml`, §6.2; without the `ci` component it keeps SeamSpec's own workflow, `--ci`, and says nothing else runs them), passing the non-Claude editors chosen in the `agents` component (§6.6: `cursor`, `vscode`, `antigravity`), so SeamSpec sets up the same editors SWERepo does. Without `--hosts`, SeamSpec detects editors by their folders, which don't exist yet in a new project, and would treat a `GEMINI.md` as Antigravity. It runs in the person's terminal, so SeamSpec's own consent screen ("Allow automatic test runs?") is answered by the person: SWERepo never passes `--accept-auto-run`, and `--yes` never answers it. Without a terminal, or with `--yes`, it isn't run: the plan shows the command and the component waits until `.seamspec/config.toml` exists. `--mode enforced` is passed on a first setup only; an existing mode, `strict` included, is never lowered. A repository where SeamSpec is already set up is adopted without rerunning it (ADR-20261124-cd64).
+- **`init --only seamspec`** runs `seamspec init --mode enforced --no-ci --hosts <editors>` (its locked rules run in `swerepo-ci.yml`, §6.2; without the `ci` component it keeps SeamSpec's own workflow, `--ci`, and says nothing else runs them), passing the non-Claude editors chosen in the `agents` component (§6.6: `cursor`, `vscode`, `antigravity`), so SeamSpec sets up the same editors SWERepo does. Without `--hosts`, SeamSpec detects editors by their folders, which don't exist yet in a new project, and would treat a `GEMINI.md` as Antigravity. It runs in the person's terminal, so SeamSpec's own consent screen ("Allow automatic test runs?") is answered by the person: SWERepo never passes `--accept-auto-run`, and `--yes` never answers it. Without a terminal, or with `--yes`, it isn't run: the plan shows the command and the component waits until `.seamspec/config.toml` exists. `--mode enforced` is passed on a first setup only; an existing mode, `strict` included, is never lowered. A repository where SeamSpec is already set up is adopted without rerunning it (ADR-20261124-cd64), unless a non-Claude editor is added (`--editors`): then `seamspec init` runs again, in the person's terminal, with the new `--hosts` (ADR-20261125-5f22 point 5).
 - **Strict mode** always adds SeamSpec's own workflow and a CODEOWNERS block. SWERepo writes the workflow first from its own pinned template, which SeamSpec keeps; an unpinned one SeamSpec already wrote is reported, never replaced. SeamSpec's CODEOWNERS block is reported when it comes after SWERepo's governance block or still names `@your-team/leads` (a failure in `team` mode, where it would block merges). With `ci`, the locked rules run in both workflows (ADR-20261124-cd64).
 - **`CLAUDE.md` and `AGENTS.md`:** SeamSpec keeps writing its own blocks; SWERepo's block and the `@AGENTS.md` import sit beside them, outside SeamSpec's markers.
 - **The earned spec** (§6.8) is written **after** the first review, so it isn't empty and immediately stale:
@@ -576,11 +580,12 @@ SWERepo · check · /Users/me/code/legacy-api (standard 1, mode: team)
   security  ✗ 2 personal email addresses in tracked files (README.md:12, setup.cfg:4)
   github    ✓ PR template · ✗ ruleset "swerepo" missing · ? Copilot review (no access to read it)
   seamspec  ✗ not set up
-6 missing, 0 changed by you, 0 outdated. Next: swerepo init --only docs,agents
+6 missing, 0 changed by you, 0 outdated. Next: swerepo init --only docs,agents; clear the privacy findings (swerepo privacy)
 ```
 
 - **Statuses:** `✓` meets the standard · `✗` missing · `~` changed by you (kept) · `↑` outdated (an update is available) · `?` can't tell (says why) · `–` not chosen.
-- **`--json`** gives the same findings for scripts and dashboards.
+- **`--json`** gives the same findings for scripts and dashboards. Each finding carries `fix`: `init`, `apply-github`, or a short step in plain words or a command.
+- **"Next:"** names what fixes the gaps that fail `check`: `swerepo init --only …` for the first group of components `init` can fix, then each other step once, such as applying GitHub's settings, `swerepo adr index`, or a step that is the person's ("turn on GitHub's dependency graph", "clear the privacy findings"). Those steps are fixed phrases, never a finding's own text, so nothing found is repeated there (ADR-20261125-5f22 point 5).
 - **`--ci`** for a workflow: exits 1 on `✗` in chosen components; reports `↑` and `~` without failing. Never needs GitHub access (GitHub checks are skipped with `?`).
 - **Pinned in CI.** `swerepo-ci.yml` runs a pinned SWERepo version (`uvx swerepo==x.y.z`), moved only by `swerepo update`. A new SWERepo release or standard never turns a repository's CI red by itself.
 - **Before SWERepo is published** (as SeamSpec decided in its ADR-20261011-a9f3): a released SWERepo pins itself, as above. An unreleased build (a `.dev` or local version, which PyPI doesn't have) doesn't add the `governance` job, and says why. Asked for explicitly (`--with-governance`), it writes an install from the SWERepo repository (`uvx --from git+https://…@main swerepo`), with a comment and a line in the output saying the CI must be able to read that repository and what to change after the release. SWERepo's own repository runs `uv run swerepo` from its own checkout instead, so it always checks itself with the code under review.
@@ -698,6 +703,16 @@ Built in this order: `check` (with `--base`); then `init`, `update`/`-u` with th
 ---
 
 ## Appendix A: Revision history
+
+### 0.16 → 0.17
+
+From dogfooding on an established repository (the owner's choices, 2026-11-25; ADR-20261125-5f22):
+
+1. **A codebase never linted moves to ruff gradually:** a repository with commits and no linter gets ruff on the files each change touches, so CI isn't red on day one; a new project still gets full ruff (§6.3).
+2. **A project without tests is warned:** the plan and `check` say the `test` job fails until there is one, and `prepare-pr.md` tells agents to write a real test, never to mask the job (§6.2, §6.6, §8).
+3. **Applied for real, step 1:** `--editors` on `init` and `update` (§6.6, §7); the agents' plan says which tools their commands need that `uv sync` won't install.
+4. **Smaller:** the tools note names an optional extra `uv sync` doesn't install; privacy findings say how to clear one that isn't personal (§6.4); "dependency graph off" is said once.
+5. **Applied for real, the rest** (ADR-20261125-5f22 point 5, after Gemini's design review): GitHub's settings change only with a terminal yes or `--yes --apply-github`, never with `--yes` alone (§7, §12); a table another tool appends inside SWERepo's `pyproject.toml` block is named and left alone (§6.3); `check`'s "Next:" names what fixes each gap (§15); `--editors` needs `agents`, a dropped editor's file becomes the person's, and an added one runs `seamspec init` again (§6.6, §13).
 
 ### 0.15 → 0.16
 

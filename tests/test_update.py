@@ -340,7 +340,7 @@ class TestReviewP6:
         fake.set(f"GET repos/{slug}/dependency-graph/sbom", {"sbom": {}})
         mine = '"delete_branch_on_merge": false'
         older_settings(repo, lambda text: text.replace('"delete_branch_on_merge": true', mine))
-        found = plan(repo, merge=True, only=["github"])
+        found = plan(repo, merge=True, only=["github"], apply_github=True)
         assert action(found, SETTINGS).verb == MERGE and mine in (action(found, SETTINGS).content or "")
         applied = found.github_apply["settings"]
         assert applied["delete_branch_on_merge"] is False  # the person's edit
@@ -405,7 +405,7 @@ class TestReviewP6:
 
     def test_p6_f04_a_partial_update_keeps_every_older_records_base(self, repo: Path):
         """Older records without inputs, the project's commands changed: `update --only docs` backfills the agents
-        records too, before moving `commands` on, so a later `update --only agents --merge` still merges."""
+        records too, so a later `update --only agents --merge` still merges, and moves `commands` on then."""
         old = as_older_agents_block(repo)
         state = State.load(repo)
         for path, record in state.files().items():
@@ -419,10 +419,13 @@ class TestReviewP6:
         make(repo, {"Makefile": "test:\n\tpytest\n"})
         apply(plan(repo, only=["docs"]), repo)
         after = State.load(repo)
-        assert after.values["commands"] != recorded  # moved on
-        assert (after.blocks()["AGENTS.md"].inputs or {}).get("commands") == recorded  # but the base was kept
+        # the agents' files name the commands, so [values] moves on only when they are written (review P8-G02)
+        assert after.values["commands"] == recorded
+        assert (after.blocks()["AGENTS.md"].inputs or {}).get("commands") == recorded  # and the base was kept
         found = action(plan(repo, only=["agents"], merge=True), "AGENTS.md")
         assert found.verb == MERGE, found.note
+        apply(plan(repo, only=["agents"], merge=True), repo)
+        assert State.load(repo).values["commands"] != recorded  # moved on with the agents' files
 
     def test_p6_f05_a_check_name_with_a_comma_rebuilds(self):
         from swerepo import github

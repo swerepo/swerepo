@@ -263,6 +263,13 @@ class State:
         return True if pr is None else bool(pr.get("enforce", True))
 
     @property
+    def started_new(self) -> bool:
+        """Whether SWERepo's first run here found no commits: pull-request rules recorded as enforced from the start,
+        with no warn-only date (`[pr] warn_since` is set only for a repository that already had history, spec §10)."""
+        pr = self.doc.get("pr")
+        return pr is not None and bool(pr.get("enforce", True)) and "warn_since" not in pr
+
+    @property
     def exempt_authors(self) -> list[str]:
         pr = self.doc.get("pr")
         if pr is None or "exempt_authors" not in pr:
@@ -378,6 +385,11 @@ class State:
         files = self.doc.get("files")
         if files is not None and path in files:
             del files[path]
+
+    def remove_block(self, path: str) -> None:
+        blocks = self.doc.get("blocks")
+        if blocks is not None and path in blocks:
+            del blocks[path]
 
     def _table(self, name: str) -> Table:
         if name not in self.doc:

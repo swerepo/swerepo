@@ -10,6 +10,7 @@ git and `seamspec --version` commands; it writes nothing.
 from __future__ import annotations
 
 import configparser
+import fnmatch
 import re
 import subprocess
 import tomllib
@@ -227,6 +228,49 @@ def _own_pyproject(base: Path) -> dict[str, Any]:
         return {}
 
 
+def _whole_pyproject(base: Path) -> dict[str, Any]:
+    """The whole pyproject.toml, SWERepo's block included: a tool's append can land inside it, and SWERepo never
+    writes `[project]` or `[dependency-groups]`. Without the block when the whole file doesn't parse (P8-A04)."""
+    try:
+        text = (base / "pyproject.toml").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return {}
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return _own_pyproject(base)
+
+
+# What SWERepo's pyproject.toml block holds: the tables under these roots, and nothing else (spec §6.3)
+OWNED_TABLES = ("tool.ruff", "tool.pytest")
+
+
+def foreign_tables(content: str) -> list[str] | None:
+    """Tables inside SWERepo's pyproject.toml block that aren't SWERepo's (outside `tool.ruff` and `tool.pytest`):
+    another tool's append, such as uv's `[dependency-groups]`. None when the block isn't valid TOML (P8-A04)."""
+    try:
+        data = tomllib.loads(content)
+    except tomllib.TOMLDecodeError:
+        return None
+    found = []
+    for key, value in data.items():
+        if key != "tool" or not isinstance(value, dict):
+            found.append(key)
+            continue
+        found += [f"tool.{name}" for name in value if f"tool.{name}" not in OWNED_TABLES]
+    return found
+
+
+def foreign_note(content: str) -> str:
+    """What to do about a pyproject.toml block holding what isn't SWERepo's, or "" when it holds only its own."""
+    tables = foreign_tables(content)
+    if tables is None:
+        return "SWERepo's block isn't valid TOML: fix it"
+    if not tables:
+        return ""
+    return f"[{'], ['.join(tables)}] inside SWERepo's block: move it above # swerepo:begin"
+
+
 def _tool(data: dict[str, Any], name: str) -> Any:
     tool = data.get("tool")
     return tool.get(name) if isinstance(tool, dict) else None
@@ -279,12 +323,75 @@ def line_length(root: Path, folder: str = ".") -> str | None:
     return None
 
 
+# Folders pytest never descends into unless configured otherwise (its `norecursedirs` default): SeamSpec's own
+# `.seamspec/` tests among them (review P8-G01).
+PYTEST_SKIPS = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules", "venv", "{arch}")
+
+
+def pytest_testpaths(root: Path, folder: str = ".") -> list[str] | None:
+    """The project's `testpaths`, from the pytest configuration pytest itself would read first (`pytest.ini`, then
+    `pyproject.toml`, `tox.ini`, `setup.cfg`); None when it sets none."""
+    base = root / folder
+    for name, section in (("pytest.ini", "pytest"), (".pytest.ini", "pytest")):
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            if parser.read(base / name, encoding="utf-8"):
+                return _paths(parser.get(section, "testpaths", fallback=""))
+        except (configparser.Error, UnicodeDecodeError):
+            return None
+    pytest = _tool(_own_pyproject(base), "pytest")
+    if isinstance(pytest, dict) and isinstance(pytest.get("ini_options"), dict):
+        found = pytest["ini_options"].get("testpaths")
+        if isinstance(found, list):
+            return [str(p) for p in found] or None
+        return _paths(found) if isinstance(found, str) else None
+    for name, section in (("tox.ini", "pytest"), ("setup.cfg", "tool:pytest")):
+        parser = configparser.ConfigParser(interpolation=None)
+        try:
+            parser.read(base / name, encoding="utf-8")
+        except (configparser.Error, UnicodeDecodeError):
+            continue
+        if parser.has_section(section):
+            return _paths(parser.get(section, "testpaths", fallback=""))
+    return None
+
+
+def _paths(text: str) -> list[str] | None:
+    return text.split() or None
+
+
+def has_tests(files: list[str], folder: str = ".", testpaths: list[str] | None = None) -> bool:
+    """Whether pytest would find a test in the project in `folder` (ADR-20261125-5f22): a file named `test_*.py` or
+    `*_test.py`, outside the folders pytest skips by default, and under `testpaths` when the project sets them
+    (review P8-G01). `files`: repository-relative, as detection lists them."""
+    prefix = "" if folder == "." else folder.rstrip("/") + "/"
+    roots = [p.strip("./").rstrip("/") for p in testpaths or []]
+    for path in files:
+        if not path.startswith(prefix):
+            continue
+        relative = path[len(prefix) :]
+        *parents, name = relative.split("/")
+        if not (name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))):
+            continue
+        if any(fnmatch.fnmatch(part, skip) for part in parents for skip in PYTEST_SKIPS):
+            continue
+        if roots and not any(r == "" or relative == r or relative.startswith(r + "/") for r in roots):
+            continue
+        return True
+    return False
+
+
+def project_has_tests(root: Path, files: list[str], folder: str = ".") -> bool:
+    """`has_tests` with the project's own `testpaths`."""
+    return has_tests(files, folder, pytest_testpaths(root, folder))
+
+
 def installed_dependencies(root: Path, folder: str = ".") -> set[str]:
     """The packages `uv sync` installs for the project in `folder` (normalised names): its dependencies and its
     default dependency groups (`[tool.uv] default-groups`, else `dev`, which also holds uv's older
     `dev-dependencies`), with `include-group` followed. Extras (`[project.optional-dependencies]`) and other
     groups aren't installed by `uv sync`, so they don't count (review: Copilot on PR #8)."""
-    data = _own_pyproject(root / folder)
+    data = _whole_pyproject(root / folder)
     project = data.get("project") if isinstance(data.get("project"), dict) else {}
     groups = data.get("dependency-groups") if isinstance(data.get("dependency-groups"), dict) else {}
     uv = _tool(data, "uv") if isinstance(_tool(data, "uv"), dict) else {}
@@ -315,6 +422,21 @@ def installed_dependencies(root: Path, folder: str = ".") -> set[str]:
             except InvalidRequirement:
                 continue
     return names
+
+
+def extras_holding(root: Path, folder: str = ".") -> dict[str, str]:
+    """The optional extra each package is declared in (`[project.optional-dependencies]`), by normalised name: `uv
+    sync` doesn't install extras, so a tool declared only there doesn't count (ADR-20261125-5f22)."""
+    project = _whole_pyproject(root / folder).get("project")
+    extras = project.get("optional-dependencies") if isinstance(project, dict) else None
+    found: dict[str, str] = {}
+    for extra, entries in extras.items() if isinstance(extras, dict) else []:
+        for entry in entries if isinstance(entries, list) else []:
+            try:
+                found.setdefault(canonicalize_name(Requirement(entry).name), str(extra))
+            except (InvalidRequirement, TypeError):
+                continue
+    return found
 
 
 # --- rendering -------------------------------------------------------------------------------------------

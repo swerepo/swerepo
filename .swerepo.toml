@@ -50,9 +50,9 @@ rendered = "c8d443fcda8addfb41b3d38099772f1c681a323736151b91c6bf471fefa4cfaa"
 written = "c8d443fcda8addfb41b3d38099772f1c681a323736151b91c6bf471fefa4cfaa"
 inputs = {adr_dir = "docs/adr", progress_dir = "docs/progress", spec = "SWEREPO-SPEC.md"}
 [files."docs/agents/prepare-pr.md"]
-template = "agents/prepare-pr@2"
-rendered = "cc06b91b28ffcdf447302b601d08510a68bbd1b03d71f5b051542feae26c5ea1"
-written = "cc06b91b28ffcdf447302b601d08510a68bbd1b03d71f5b051542feae26c5ea1"
+template = "agents/prepare-pr@3"
+rendered = "f51d73a650d4daa771a62dfd2f8e15a3cfe237c7a4a194972517b3032776673f"
+written = "f51d73a650d4daa771a62dfd2f8e15a3cfe237c7a4a194972517b3032776673f"
 inputs = {progress_dir = "docs/progress", spec = "SWEREPO-SPEC.md", test_inline = "`uv run pytest`, `uv run ruff check .` and `uv run ruff format --check .`"}
 
 [files."docs/agents/address-review.md"]

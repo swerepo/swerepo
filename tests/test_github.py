@@ -58,7 +58,8 @@ def gh(tmp_path: Path, monkeypatch, project: Path) -> FakeGh:
 
 
 def plan_for(root: Path, **kwargs):
-    return make_plan(root, only=["github"], today=TODAY, hosts=[], **kwargs)
+    """github's plan, with GitHub's settings planned for applying, as with --apply-github (ADR-20261125-5f22)."""
+    return make_plan(root, only=["github"], today=TODAY, hosts=[], **{"apply_github": True, **kwargs})
 
 
 class TestRuleset:
@@ -180,7 +181,8 @@ class TestInitWithGitHub:
         assert set(gh.methods()) == {"GET"}
 
     def test_yes_applies_both_and_records_it(self, project: Path, gh: FakeGh):
-        result = CliRunner().invoke(app, ["init", "--path", str(project), "--only", "github", "--yes"])
+        command = ["init", "--path", str(project), "--only", "github", "--yes", "--apply-github"]
+        result = CliRunner().invoke(app, command)
         assert result.exit_code == 0, result.output
         assert (
             'GitHub: ruleset "swerepo" created' in result.output and "GitHub: merge settings applied" in result.output
@@ -686,7 +688,7 @@ class TestCopilotReviewPR10:
         result = CliRunner().invoke(app, command)
         assert result.exit_code == 0, result.output
         assert "gh isn't installed or logged in" in result.output
-        assert "commit them on a new branch, open a pull request" in result.output and "gh auth login" in result.output
+        assert "commit them on a branch, open a pull request" in result.output and "gh auth login" in result.output
         assert "default branch" not in result.output and "gh repo create" not in result.output
 
     def test_without_a_github_repository_the_next_steps_create_it(self, project: Path):

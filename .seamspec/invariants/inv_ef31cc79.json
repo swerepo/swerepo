@@ -13,7 +13,7 @@
     ],
     "tags": []
   },
-  "status": "LOCKED",
+  "status": "SUPERSEDED",
   "origin": {
     "type": "manual",
     "text": "ADR-20261123-4e40 (Phase 5): check is read-only and never needs GitHub in CI (spec §15); threads only reads (spec §17); init shows the ruleset and settings first and changes GitHub only after the person's yes, never touching other rulesets (spec §12). Tightened at the owner's request before locking: request bodies equal the committed files, check --json and --ci after the files exist, saying no in a terminal, and attached or = spellings of methods, bodies and GraphQL mutations. Tightened again after SeamSpec's reviewer: the fake gh logs stdin for --input=- too, a mutation goes through the fake both ways, and the terminal test sees both GitHub questions asked.",
@@ -21,7 +21,7 @@
   },
   "verification": {
     "runner": "pytest",
-    "harness_path": ".seamspec/tests/test_inv_ef31cc79.py",
+    "harness_path": ".seamspec/retired/inv_ef31cc79/test_inv_ef31cc79.py",
     "harness_sha256": "ded49055b575976267d663b5ddfbeb754096cce502a7ce76e61cdca758db4a7a",
     "assertion_sha256": "3d23a7eb15f7b56fe4584fdc72d941db4fca3bdf9da71b8433f83f26530db3db"
   },
@@ -29,8 +29,8 @@
   "created_at": "2026-11-23T10:01:07.608489Z",
   "approved_at": "2026-11-24T00:54:38.922737Z",
   "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
-  "superseded_by": null,
-  "status_reason": null,
+  "superseded_by": "inv_81872dfe",
+  "status_reason": "The owner decided (2026-11-25, ADR-20261125-5f22 point 5, after Gemini's design review P8-A03) that GitHub's settings change only when asked for by name: a terminal's yes after each is shown, or `--yes --apply-github`. `--yes` alone now writes the files and never changes GitHub. inv_ef31cc79's test applies the settings with `--yes` alone, so it no longer describes the agreed behaviour. Its read-only promises are all kept, with the same checks, in inv_81872dfe, which adds: `--yes` alone on a first and second `init` and on `update` changes nothing; `--apply-github` without `--yes` or a terminal exits 2 with nothing changed; `init` and `update` with `--yes --apply-github` send exactly the committed files to the `swerepo` ruleset and merge settings only. Why: a second `init --yes`, meant as a check, applied the settings on an established repository against the owner's no (dead end de_00bb3c21).",
   "decided_via": "terminal",
   "critical": true
 }

@@ -37,6 +37,9 @@ class UsageError(ValueError):
     """Wrong usage: an unknown component, an unknown --skip value, a --base git can't resolve."""
 
 
+INIT, APPLY = "init", "apply-github"  # what fixes a finding: `swerepo init`, or applying GitHub's settings
+
+
 @dataclass(frozen=True)
 class Finding:
     component: str
@@ -45,6 +48,9 @@ class Finding:
     message: str
     path: str | None = None
     blocking: bool = False  # a missing item that fails `check`; a warning is missing but doesn't block
+    # what fixes it (ADR-20261125-5f22 point 5): "init" (a file or block SWERepo writes), "apply-github" (GitHub's
+    # settings), or a short fixed step in plain words or a command, never the finding's own text (review P8-A05)
+    fix: str = INIT
 
 
 @dataclass
@@ -63,12 +69,21 @@ class Report:
         return sum(1 for f in self.findings if f.status == status)
 
     def next_step(self) -> str | None:
-        gaps = {f.component for f in self.findings if f.blocking}
+        """What fixes the blocking gaps: `init` for the first group of components it can fix, then each other step
+        once, in the order found (ADR-20261125-5f22 point 5)."""
+        blocking = [f for f in self.findings if f.blocking]
+        gaps = {f.component for f in blocking if f.fix == INIT}
+        steps = []
         for group in standard.RECOMMENDED_ORDER:
             chosen = [c for c in group if c in gaps]
             if chosen:
-                return f"swerepo init --only {','.join(chosen)}"
-        return None
+                steps.append(f"swerepo init --only {','.join(chosen)}")
+                break
+        for finding in blocking:
+            step = APPLY_GITHUB if finding.fix == APPLY else finding.fix
+            if finding.fix != INIT and step not in steps:
+                steps.append(step)
+        return "; ".join(steps) or None
 
     def summary(self) -> str:
         parts = [
@@ -189,8 +204,10 @@ def _ok(component: str, item: str, message: str, path: str | None = None) -> Fin
     return Finding(component, item, OK, message, path)
 
 
-def _missing(component: str, item: str, message: str, path: str | None = None, *, blocking: bool = True) -> Finding:
-    return Finding(component, item, MISSING, message, path, blocking)
+def _missing(
+    component: str, item: str, message: str, path: str | None = None, *, blocking: bool = True, fix: str = INIT
+) -> Finding:
+    return Finding(component, item, MISSING, message, path, blocking, fix)
 
 
 def _present(ctx: Context, component: str, item: str, path: str, what: str | None = None) -> Finding:
@@ -204,14 +221,15 @@ def _present(ctx: Context, component: str, item: str, path: str, what: str | Non
 
 def _spec(ctx: Context) -> Finding:
     """The spec exists: only that, with no rule on pull requests (ADR-20261124-4d76 points 4 and 5)."""
-    c, found = "docs", specs.find(ctx.root, ctx.adopted.get("spec"))
+    c, found = "docs", specs.find(ctx.root, ctx.adopted.get("spec"), list(ctx.detection.files) or None)
     if found.several:
-        return _missing(c, "docs.spec", specs.how_to_choose(found.several))
+        return _missing(c, "docs.spec", specs.how_to_choose(found.several), fix="choose the project's spec")
     if found.path is None:
         return _missing(c, "docs.spec", f"{specs.DEFAULT} missing (what the project does and is for)", specs.DEFAULT)
     if not specs.within(ctx.root, found.path):  # missing, or a link out of the repository (review P8-F01)
         where = "leads out of the repository" if (ctx.root / found.path).exists() else "missing"
-        return _missing(c, "docs.spec", f"{found.path} {where} (`[adopted] spec` names it)", found.path)
+        message = f"{found.path} {where} (`[adopted] spec` names it)"
+        return _missing(c, "docs.spec", message, found.path, fix="fix [adopted] spec in .swerepo.toml")
     return _ok(c, "docs.spec", f"spec ({'adopted: ' if found.adopted else ''}{found.path})", found.path)
 
 
@@ -257,7 +275,10 @@ def _docs(ctx: Context) -> list[Finding]:
     elif _UNRELEASED.search(ctx.read(changelog) or ""):
         found.append(_ok(c, "docs.changelog", f"{changelog} has [Unreleased]", changelog))
     else:
-        found.append(_missing(c, "docs.changelog", f"{changelog} has no [Unreleased] section", changelog))
+        message = f"{changelog} has no [Unreleased] section"
+        found.append(
+            _missing(c, "docs.changelog", message, changelog, fix="add an [Unreleased] section to the changelog")
+        )
 
     contributing = d.documents.get("contributing")
     if contributing:
@@ -280,9 +301,13 @@ def _adr_index(ctx: Context, adr_dir: str) -> list[Finding]:
     try:
         block = find_block(text, style=HTML, marker="swerepo:adr-index")
     except BlockError as error:
-        return [_missing("docs", "docs.adr-index", f"{readme}: ADR index markers are broken ({error})", readme)]
+        message = f"{readme}: ADR index markers are broken ({error})"
+        return [_missing("docs", "docs.adr-index", message, readme, fix="fix the ADR index markers")]
     if block is None:
-        return [_missing("docs", "docs.adr-index", f"{readme} has no generated ADR index", readme)]
+        # init adopts a folder of the person's own, but keeps a README it wrote and the person edited (P8-A09)
+        recorded = ctx.state is not None and readme in ctx.state.files()
+        fix = "put the ADR index markers back in the ADR README, then swerepo adr index" if recorded else INIT
+        return [_missing("docs", "docs.adr-index", f"{readme} has no generated ADR index", readme, fix=fix)]
     on_disk = {m.group(0) for p in (ctx.root / adr_dir).glob("ADR-*.md") if (m := _ADR_ID.match(p.name))}
     listed = set(_ADR_ID.findall(block.content))
     unlisted, stale = sorted(on_disk - listed), sorted(listed - on_disk)
@@ -293,14 +318,18 @@ def _adr_index(ctx: Context, adr_dir: str) -> list[Finding]:
         problems.append("not listed: " + ", ".join(unlisted))
     if stale:
         problems.append("listed without a file: " + ", ".join(stale))
-    return [_missing("docs", "docs.adr-index", f"ADR index out of date ({'; '.join(problems)})", readme)]
+    message = f"ADR index out of date ({'; '.join(problems)})"
+    return [_missing("docs", "docs.adr-index", message, readme, fix="swerepo adr index")]
+
+
+MARKERS = "fix the broken SWERepo block markers"
 
 
 def _block_finding(component: str, item: str, path: str, text: str) -> Finding:
     try:
         block = find_block(text, style=comment_style(path))
     except BlockError as error:
-        return _missing(component, item, f"{path}: SWERepo block markers are broken ({error})", path)
+        return _missing(component, item, f"{path}: SWERepo block markers are broken ({error})", path, fix=MARKERS)
     if block is None:
         return _missing(component, item, f"{path} has no SWERepo block", path)
     return _ok(component, item, f"{path} has the SWERepo block", path)
@@ -338,6 +367,18 @@ def _agents(ctx: Context) -> list[Finding]:
     return found
 
 
+# How GitHub's settings get applied: in a terminal, shown and asked first; otherwise by name (ADR-20261125-5f22)
+APPLY_GITHUB = "swerepo init --only github (in a terminal), or with --yes --apply-github"
+
+
+def _ci_fix(ctx: Context) -> str:
+    """`init` writes the CI and ruff's settings only for a project uv installs with a Python version standard 1
+    knows; otherwise its plan says why, and that is the person's to change (review P8-A09)."""
+    if ci.install_command(ctx.root)[0] is not None and ci.python_versions(ctx.detection)[0]:
+        return INIT
+    return "make the project one CI can install: swerepo init --only ci --dry-run says why it can't"
+
+
 def _ci(ctx: Context) -> list[Finding]:
     c, d = "ci", ctx.detection
     found: list[Finding] = []
@@ -345,11 +386,21 @@ def _ci(ctx: Context) -> list[Finding]:
     if text is None:
         others = [w.path.rsplit("/", 1)[-1] for w in d.workflows if w.runs_pytest]
         note = f" (you run pytest in {', '.join(others)}: kept)" if others else ""
-        found.append(_missing(c, "ci.workflow", f"swerepo-ci.yml missing{note}", standard.CI_WORKFLOW))
+        found.append(
+            _missing(c, "ci.workflow", f"swerepo-ci.yml missing{note}", standard.CI_WORKFLOW, fix=_ci_fix(ctx))
+        )
     else:
         found.append(_ok(c, "ci.workflow", "swerepo-ci.yml", standard.CI_WORKFLOW))
         found.append(_ci_ok(text))
         found.extend(_python_matrix(ctx, text))
+        files = list(ctx.detection.files)
+        if not ci.project_has_tests(ctx.root, files):  # the test job fails without (ADR-20261125-5f22)
+            message = "no tests yet: the test job fails until there is one (a real test: docs/agents/prepare-pr.md)"
+            found.append(_missing(c, "ci.tests", message, blocking=False))
+        for folder in ctx.state.projects_listed if ctx.state else []:  # each listed project's own job (P8-G01)
+            if not ci.project_has_tests(ctx.root, files, folder):
+                message = f"{folder}/: no tests yet: its test job fails until there is one"
+                found.append(_missing(c, f"ci.tests.{folder}", message, folder, blocking=False))
 
     detected = {linter.name for linter in d.linters}
     kept = [str(name) for name in ctx.adopted.get("linters", [])]
@@ -362,7 +413,8 @@ def _ci(ctx: Context) -> list[Finding]:
     elif kept or detected:
         found.append(_ok(c, "ci.linter", f"linting: {', '.join(kept or sorted(detected))} (kept)"))
     else:
-        found.append(_missing(c, "ci.linter", "no linter or formatter configured (ruff, or the project's own)"))
+        message = "no linter or formatter configured (ruff, or the project's own)"
+        found.append(_missing(c, "ci.linter", message, fix=_ci_fix(ctx)))
     if d.seamspec:
         found.append(_seamspec_excluded(ctx, detected))
     if d.is_monorepo or (ctx.state is not None and ctx.state.projects_listed):
@@ -421,10 +473,11 @@ def _copilot_wait(review_on: bool, text: str) -> Finding:
     waits = "copilot-review" in workflow_jobs(text).get("ci-ok", [])
     if review_on and not waits:
         message = "swerepo-ci.yml doesn't wait for the Copilot review the ruleset requests: swerepo init --only github"
-        return _missing(c, item, message, standard.CI_WORKFLOW)
+        return _missing(c, item, message, standard.CI_WORKFLOW, fix="swerepo init --only github")
     if waits and not review_on:
         message = "swerepo-ci.yml waits for a Copilot review the ruleset doesn't request: every pull request would fail"
-        return _missing(c, item, message, standard.CI_WORKFLOW)
+        fix = "make swerepo-ci.yml and the ruleset agree on Copilot's review"
+        return _missing(c, item, message, standard.CI_WORKFLOW, fix=fix)
     message = "waits for Copilot's review" if waits else "no Copilot review to wait for"
     return _ok(c, item, message, standard.CI_WORKFLOW)
 
@@ -442,7 +495,10 @@ def _dependency_graph(ctx: Context) -> Finding:
     except github.GitHubError as error:
         return Finding(c, item, UNKNOWN, f"dependency graph: can't read GitHub ({error})")
     message = "GitHub's dependency graph is off: dependency-review fails ci-ok (Settings → Advanced Security)"
-    return _missing(c, item, message)
+    return _missing(c, item, message, fix="turn on GitHub's dependency graph (Settings → Advanced Security)")
+
+
+CI_OK = "make ci-ok in swerepo-ci.yml wait for every job"
 
 
 def _ci_ok(text: str) -> Finding:
@@ -450,11 +506,11 @@ def _ci_ok(text: str) -> Finding:
     c, item = "ci", "ci.ci-ok"
     jobs = workflow_jobs(text)
     if "ci-ok" not in jobs:
-        return _missing(c, item, "swerepo-ci.yml has no ci-ok job", standard.CI_WORKFLOW)
+        return _missing(c, item, "swerepo-ci.yml has no ci-ok job", standard.CI_WORKFLOW, fix=CI_OK)
     left_out = [job for job in jobs if job != "ci-ok" and job not in jobs["ci-ok"]]
     if left_out:
         message = f"ci-ok doesn't wait for {', '.join(left_out)}: a failure there wouldn't block a merge"
-        return _missing(c, item, message, standard.CI_WORKFLOW)
+        return _missing(c, item, message, standard.CI_WORKFLOW, fix=CI_OK)
     return _ok(c, item, "ci-ok waits for every job", standard.CI_WORKFLOW)
 
 
@@ -530,16 +586,17 @@ def _projects_covered(ctx: Context, text: str) -> list[Finding]:
         if folder in listed and f"lint-{job}" in jobs and f"test-{job}" in jobs:
             found.append(_ok(c, item, f"{folder}/ has its own jobs in swerepo-ci.yml", folder))
         elif folder in listed:
-            message = (f"{folder}/ is listed, but swerepo-ci.yml lacks its lint or test job: "
-                       f"swerepo init --only ci --projects {','.join(listed)}")  # fmt: skip
-            found.append(_missing(c, item, message, folder))
+            command = f"swerepo init --only ci --projects {','.join(listed)}"
+            message = f"{folder}/ is listed, but swerepo-ci.yml lacks its lint or test job: {command}"
+            found.append(_missing(c, item, message, folder, fix=command))
         elif folder in skipped:
             found.append(_ok(c, item, f"{folder}/ recorded as not covered", folder))
         elif extra:
             message = f"{folder}/: whether [github] extra_required_checks cover it can't be told from files"
             found.append(Finding(c, item, UNKNOWN, message, folder))
         else:
-            found.append(_missing(c, item, f"{folder}/ not covered by any required check", folder))
+            fix = "give each project CI jobs (--projects), or record it as not covered"
+            found.append(_missing(c, item, f"{folder}/ not covered by any required check", folder, fix=fix))
     return found
 
 
@@ -586,7 +643,7 @@ def _seamspec_excluded(ctx: Context, linters: set[str]) -> Finding:
         if any(_normal_exclude(entry) in _SEAMSPEC_EXCLUDES for entry in excluded):
             return _ok(c, item, f"ruff skips .seamspec ({source})", source)
         message = f'ruff would lint and reformat locked SeamSpec tests: add ".seamspec" to extend-exclude in {source}'
-        return _missing(c, item, message, source)
+        return _missing(c, item, message, source, fix='add ".seamspec" to ruff\'s extend-exclude')
     return Finding(c, item, UNKNOWN, "can't find ruff's configuration to see whether it skips .seamspec")
 
 
@@ -671,9 +728,11 @@ def _security(ctx: Context) -> list[Finding]:
         message = f"privacy workflow ({standard.PRIVACY_WORKFLOW})"
         found.append(_ok(c, "security.workflow", message, standard.PRIVACY_WORKFLOW))
     else:
-        how = "" if ci.released() else ": needs a released SWERepo, or swerepo init --with-governance"
+        released = ci.released()
+        how = "" if released else ": needs a released SWERepo, or swerepo init --with-governance"
         message = f"privacy workflow missing ({standard.PRIVACY_WORKFLOW}){how}"
-        found.append(_missing(c, "security.workflow", message, standard.PRIVACY_WORKFLOW))
+        fix = INIT if released else "wait for a released SWERepo, or swerepo init --only security --with-governance"
+        found.append(_missing(c, "security.workflow", message, standard.PRIVACY_WORKFLOW, fix=fix))
     text = ctx.read(".gitignore")
     if text is None:
         found.append(_missing(c, "security.gitignore", ".gitignore missing", ".gitignore"))
@@ -684,7 +743,8 @@ def _security(ctx: Context) -> list[Finding]:
         found.append(_pre_push_hook(ctx))
     hits = privacy.scan(ctx.root, ctx.state.privacy_allow_paths if ctx.state else [])
     if hits:
-        found.append(_missing(c, "security.privacy-scan", privacy.summary(hits), hits[0].path))
+        fix = "clear the privacy findings (swerepo privacy)"
+        found.append(_missing(c, "security.privacy-scan", privacy.summary(hits), hits[0].path, fix=fix))
     else:
         found.append(_ok(c, "security.privacy-scan", "privacy scan: nothing found"))
     return found
@@ -725,7 +785,8 @@ def _github_live(ctx: Context) -> list[Finding]:
     applied = ctx.state.github.get("applied") if ctx.state else None
     if ctx.hub is None:
         if applied is False and github.repository(ctx.root) is None:
-            return [_missing(c, "github.live", "ruleset not applied (no GitHub repository yet)")]
+            fix = "create the GitHub repository (gh repo create --source . --push)"
+            return [_missing(c, "github.live", "ruleset not applied (no GitHub repository yet)", fix=fix)]
         return [Finding(c, "github.live", UNKNOWN, "ruleset and merge settings on GitHub: can't tell (needs gh, "
                                                   "logged in; never read with --ci)")]  # fmt: skip
     found: list[Finding] = []
@@ -739,7 +800,8 @@ def _github_live(ctx: Context) -> list[Finding]:
             continue
         problem = github.not_applicable(kind or "repo-settings", committed)
         if problem:  # init refuses to apply it, so it never matches GitHub (PR #10 review)
-            found.append(_missing(c, item, f"{path}: {problem}: swerepo init won't apply it", path))
+            fix = "fix the settings file SWERepo won't apply"
+            found.append(_missing(c, item, f"{path}: {problem}: swerepo init won't apply it", path, fix=fix))
             continue
         try:
             live = ctx.hub.find_ruleset() if kind else ctx.hub.repo()
@@ -748,14 +810,14 @@ def _github_live(ctx: Context) -> list[Finding]:
             continue
         label = f'ruleset "{github.RULESET_NAME}"' if kind else "merge settings"
         if live is None:
-            found.append(_missing(c, item, f"{label} not applied on GitHub: swerepo init --only github", path))
+            found.append(_missing(c, item, f"{label} not applied on GitHub: {APPLY_GITHUB}", path, fix=APPLY))
             continue
         compare = github.ruleset_differences if kind else github.settings_differences
         differences = compare(committed, live)
         if differences:
             verb = "differs" if kind else "differ"
-            message = f"{label} on GitHub {verb} from {path} ({', '.join(differences)}): swerepo init --only github"
-            found.append(_missing(c, item, message, path))
+            message = f"{label} on GitHub {verb} from {path} ({', '.join(differences)}): {APPLY_GITHUB}"
+            found.append(_missing(c, item, message, path, fix=APPLY))
         else:
             found.append(_ok(c, item, f"{label} on GitHub {'matches' if kind else 'match'} {path}", path))
     return found
@@ -774,7 +836,7 @@ def _codeowners(ctx: Context, path: str | None) -> Finding:
     try:
         block = find_block(text, style=HASH)
     except BlockError as error:
-        return _missing(c, item, f"{path}: SWERepo block markers are broken ({error})", path)
+        return _missing(c, item, f"{path}: SWERepo block markers are broken ({error})", path, fix=MARKERS)
     if block is None:
         return _missing(c, item, f"{path} has no SWERepo block (governance owners)", path)
     # the same line breaks find_block counts: CR, LF, CRLF; not U+2028 or form feeds (review P5-F08)
@@ -830,7 +892,8 @@ def _seamspec(ctx: Context) -> list[Finding]:
         found.append(_ok(c, "seamspec.mode", f"mode: {mode}", ".seamspec/config.toml"))
     else:
         message = f"mode: {mode or 'unknown'} (locked rules don't block)"
-        found.append(_missing(c, "seamspec.mode", message, ".seamspec/config.toml"))
+        fix = "set SeamSpec's mode to enforced or strict (seamspec init)"
+        found.append(_missing(c, "seamspec.mode", message, ".seamspec/config.toml", fix=fix))
     found.append(_present(ctx, c, "seamspec.earned-spec", standard.EARNED_SPEC))
     runners = [
         w.path for w in ctx.detection.workflows if any(_runs_seamspec_verify(r) for r in _runs(ctx.read(w.path)))
@@ -862,7 +925,8 @@ def _seamspec_rules(ctx: Context) -> list[Finding]:
             message = f"{label}: proposed ({rule_id}), waiting for seamspec review"
             found.append(_missing(c, item, message, blocking=False))
         elif status == "adopted-not-locked":
-            found.append(_missing(c, item, f"{label}: [seamspec.adopted] names {rule_id}, which isn't locked here"))
+            message = f"{label}: [seamspec.adopted] names {rule_id}, which isn't locked here"
+            found.append(_missing(c, item, message, fix="name a locked rule under [seamspec.adopted]"))
         else:
             message = f"{label}: not proposed yet (swerepo init --only seamspec)"
             found.append(_missing(c, item, message, blocking=False))
@@ -879,15 +943,17 @@ def _seamspec_workflows(ctx: Context, mode: object) -> list[Finding]:
     c, found = "seamspec", []
     workflow = ctx.read(ssc.WORKFLOW)
     if workflow is not None and ssc.unpinned(workflow):
-        message = f"{ssc.WORKFLOW}: actions not pinned to commits, so the workflow audit fails (init --only seamspec)"
-        found.append(_missing(c, "seamspec.workflow", message, ssc.WORKFLOW))
+        how = "pin them, or delete it and run swerepo init --only seamspec"  # init keeps a file it finds (P8-A09)
+        message = f"{ssc.WORKFLOW}: actions not pinned to commits, so the workflow audit fails ({how})"
+        found.append(_missing(c, "seamspec.workflow", message, ssc.WORKFLOW, fix=f"{ssc.WORKFLOW}: {how}"))
     if mode != "strict":
         return found
     owners = ctx.read(github.CODEOWNERS)
     team = bool(ctx.state and ctx.state.mode == "team")
     for problem in ssc.codeowners_problems(owners or ""):
         message = f"{github.CODEOWNERS}: {problem}"
-        found.append(_missing(c, "seamspec.codeowners", message, github.CODEOWNERS, blocking=team))
+        fix = "fix CODEOWNERS for SeamSpec's strict mode"
+        found.append(_missing(c, "seamspec.codeowners", message, github.CODEOWNERS, blocking=team, fix=fix))
     return found
 
 
@@ -910,7 +976,7 @@ def _seamspec_local(ctx: Context) -> list[Finding]:
         # the checks' names only: SeamSpec's own messages can name machine paths, which check never prints
         if errors:
             message = f"seamspec doctor: error in {', '.join(errors)} (seamspec doctor --json shows why)"
-            found.append(_missing(c, "seamspec.doctor", message))
+            found.append(_missing(c, "seamspec.doctor", message, fix="fix what seamspec doctor reports"))
         elif warnings:
             message = f"seamspec doctor: warning in {', '.join(warnings)} (seamspec doctor --json shows why)"
             found.append(_missing(c, "seamspec.doctor", message, blocking=False))
@@ -919,8 +985,9 @@ def _seamspec_local(ctx: Context) -> list[Finding]:
     if ctx.exists(ssc.EARNED_SPEC):
         current = ssc.run_read(["spec", "--check", ssc.EARNED_SPEC], ctx.root)
         if current is not None and current.returncode != 0:
-            message = f"{ssc.EARNED_SPEC} is out of date: seamspec spec --out {ssc.EARNED_SPEC}"
-            found.append(_missing(c, "seamspec.earned-spec-current", message, ssc.EARNED_SPEC))
+            command = f"seamspec spec --out {ssc.EARNED_SPEC}"
+            message = f"{ssc.EARNED_SPEC} is out of date: {command}"
+            found.append(_missing(c, "seamspec.earned-spec-current", message, ssc.EARNED_SPEC, fix=command))
     return found
 
 
@@ -1044,9 +1111,12 @@ CHECKERS = {
 def _record_findings(ctx: Context, chosen: list[str], store: TemplateStore) -> list[Finding]:
     assert ctx.state is not None
     found: list[Finding] = []
+    hosts = ctx.state.hosts if ctx.state.hosts_chosen else list(ctx.detection.hosts)
     for kind, records in (("file", ctx.state.files()), ("block", ctx.state.blocks())):
         for path, record in sorted(records.items()):
             component = record.template.split("/", 1)[0]
+            if component == "agents" and path in standard.EDITOR_FILES and not standard.editor_chosen(path, hosts):
+                continue  # an editor dropped: its file is the person's now (review P8-A01)
             if component in chosen:
                 found.append(_record(ctx, kind, path, record, component, store))
     return found
@@ -1062,7 +1132,7 @@ def _record(ctx: Context, kind: str, path: str, record: Record, component: str, 
         try:
             block = find_block(text, style=comment_style(path))
         except BlockError as error:
-            return _missing(component, item, f"{path}: SWERepo block markers are broken ({error})", path)
+            return _missing(component, item, f"{path}: SWERepo block markers are broken ({error})", path, fix=MARKERS)
         if block is None:
             return _missing(component, item, f"{path}: SWERepo block removed", path)
         text = block.content
@@ -1070,6 +1140,9 @@ def _record(ctx: Context, kind: str, path: str, record: Record, component: str, 
     pins = ""
     if seen != record.written:
         if not (kind == "file" and path.startswith(".github/workflows/") and _only_newer_pins(store, record, text)):
+            foreign = ci.foreign_note(text) if kind == "block" and Path(path).name == "pyproject.toml" else ""
+            if foreign:  # another tool's table appended inside the block (review P8-A04)
+                return Finding(component, item, CHANGED, f"{label}: {foreign}", path)
             return Finding(component, item, CHANGED, f"{label} changed by you (kept)", path)
         pins = ", newer action pins"
     try:
@@ -1152,7 +1225,7 @@ def run_check(
     try:
         state = State.load(root)
     except StateError as error:
-        findings.append(_missing("state", "state.read", str(error), FILE_NAME))
+        findings.append(_missing("state", "state.read", str(error), FILE_NAME, fix=f"fix {FILE_NAME}"))
     newer = state.written_by_newer() if state else None
     if newer:
         findings.append(Finding("state", "state.newer", UNKNOWN, f"{FILE_NAME}: {newer}; upgrade SWERepo", FILE_NAME))

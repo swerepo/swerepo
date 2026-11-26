@@ -63,6 +63,7 @@ class TestWorkflow:
         assert data["tool"]["ruff"]["extend-exclude"] == [".seamspec"] and data["tool"]["pytest"]["ini_options"]
 
     def test_check_then_finds_ci_complete_and_a_rerun_changes_nothing(self, project: Path):
+        make(project, {"tests/test_app.py": "def test_app():\n    assert True\n"})  # a project with its tests
         init(project, only=["ci"])
         findings = ci_findings(project)
         assert findings.pop("ci.dependency-graph").status == "unknown"  # only gh can tell, and tests never call it

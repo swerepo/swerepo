@@ -1,0 +1,36 @@
+{
+  "schema_version": "1",
+  "id": "inv_197d9002",
+  "title": "A codebase never linted isn't red on day one",
+  "assertion": "For the root project of a git repository with history and no linter of its own, `swerepo init --only ci --yes` records `lint = \"gradual\"` and writes a `lint` job that runs ruff only on the Python files each change touches (`ruff check --force-exclude` on the changed files), never `ruff check .`. A new project, with no commits when SWERepo first ran there, records `lint = \"ruff\"` and checks every file: set up in one `init --only ci`, or in stages (`--only docs,agents` committed, then `--only ci`). A recorded choice is kept by a later `swerepo init --only ci` and `swerepo update --only ci`, the workflow unchanged, also where SWERepo would choose the other: a `ruff` the person recorded in an existing codebase, or a `gradual` recorded in a new one; recording one and running `update --only ci` writes the matching job. What `--projects` folders get is not part of this rule (per-project gradual linting is planned for v0.2).",
+  "scope": {
+    "paths": [
+      "swerepo/ci.py",
+      "swerepo/detect.py",
+      "swerepo/init.py",
+      "swerepo/state.py",
+      "swerepo/templates/ci/"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261125-5f22 (the owner's choice, 2026-11-25, option 1a): dogfooding on an established repository found full ruff would fail its first pull request (19 problems, 44 files to reformat). Gemini's review added the staged setup (P8-G05). Checked by breaking it: full ruff for an existing codebase, gradual for a new one, a staged setup counted as existing, and a recorded choice recomputed each fail the rule. Refreshed on the owner's watchouts: structure only (the recorded choice, the job's commands), never the plan's wording, and the root project only, so v0.2 can change what `--projects` folders get. Refreshed after SeamSpec's reviewer: the plain new project (one run, no record yet, so git is asked) is tested, a recorded choice is kept in both directions where SWERepo would choose the other, and swerepo/detect.py is in scope.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_197d9002.py",
+    "harness_sha256": "33681a6843a07a7066a4a7a4cc3745ba85e3420d504ca145f958f2edeaec14ad",
+    "assertion_sha256": "b9b2699d2891f1c1cd2fef6ff5ecee7d4e1d7d2a33da6549b1f9aa6c6e56a217"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-25T10:12:13.825573Z",
+  "approved_at": "2026-11-25T10:31:58.036849Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": false
+}

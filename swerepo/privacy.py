@@ -63,7 +63,8 @@ def _tracked(root: Path) -> list[str]:
     outside tool folders when the folder isn't a repository."""
     try:
         done = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            ["git", "--no-optional-locks", "-C", str(root), "ls-files", "-z", "--cached", "--others",
+             "--exclude-standard"],
             capture_output=True, check=False, timeout=60,
         )  # fmt: skip
     except (OSError, subprocess.TimeoutExpired):
@@ -151,6 +152,21 @@ def _plural(kind: str, count: int) -> str:
     if count == 1:
         return f"1 {kind}"
     return f"{count} {kind}es" if kind.endswith("ss") else f"{count} {kind}s"
+
+
+# How to clear a finding that isn't personal data, such as a placeholder in a test (ADR-20261125-5f22). Offered only
+# when every finding is an address or a path: the marker and `allow_paths` would let a key through too, so with a key
+# among the findings the advice is to remove it, never to allow it (review P8-G04).
+NOT_PERSONAL = (
+    "placeholders, as in tests? use a reserved domain such as example.com, add `swerepo: allow-privacy` to the "
+    "line, or list the file under [privacy] allow_paths in .swerepo.toml"
+)
+PERSONAL_KINDS = ("email address", "home-folder path")
+
+
+def how_to_clear(hits: list[Any]) -> str:
+    """NOT_PERSONAL when every one of `hits` is an address or a path, else "" (with a key among them, no way out)."""
+    return NOT_PERSONAL if hits and all(hit.kind in PERSONAL_KINDS for hit in hits) else ""
 
 
 def summary(hits: list[Any], *, shown: int = 10, place: str = "tracked files") -> str:

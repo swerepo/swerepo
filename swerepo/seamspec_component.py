@@ -270,6 +270,11 @@ def installed_version(root: Path) -> str | None:
     return match[1] if match else None
 
 
+def own_hosts(hosts: list[str]) -> list[str]:
+    """The editors `seamspec init` sets up through `--hosts` (Claude Code is its default)."""
+    return [host for host in hosts if host in ("cursor", "vscode", "antigravity")]
+
+
 def init_args(*, first: bool, ci: bool, hosts: list[str]) -> list[str]:
     """`seamspec init`'s arguments (ADR-20261124-cd64 point 1). Never `--accept-auto-run`: the consent is the
     person's, answered in their terminal."""
@@ -277,7 +282,7 @@ def init_args(*, first: bool, ci: bool, hosts: list[str]) -> list[str]:
     if first:
         args += ["--mode", "enforced"]  # an existing mode, strict included, is never lowered
     args.append("--no-ci" if ci else "--ci")
-    others = [host for host in hosts if host in ("cursor", "vscode", "antigravity")]
+    others = own_hosts(hosts)
     if others:
         args += ["--hosts", ",".join(others)]
     return args

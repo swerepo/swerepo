@@ -1,0 +1,21 @@
+{
+  "schema_version": "1",
+  "id": "de_00bb3c21",
+  "scope": {
+    "paths": [
+      "swerepo/init.py",
+      "swerepo/cli.py",
+      "swerepo/github.py"
+    ],
+    "tags": []
+  },
+  "approach": "Checking that a second run of `swerepo init --only github` changes nothing by running it again with `--yes` on a real repository (dogfooding on an established repository, 2026-11-25).",
+  "failure_symptom": "The person had just declined applying the GitHub settings in the terminal, so the plan still held the `apply` actions; `--yes` answered them, and the `swerepo` ruleset and merge settings were applied to the live repository without the person's consent (then undone by hand: ruleset deleted, merge settings restored, `[github] applied` set back to false). A second-run check must use `--dry-run` (or compare the plan), never `--yes`, on any repository where the github component runs.",
+  "source": "agent",
+  "related_invariant": "inv_ef31cc79",
+  "origin_ref": "ADR-20261125-5f22",
+  "status": "ACTIVE",
+  "retired_reason": null,
+  "decided_via": null,
+  "created_at": "2026-11-25T11:18:03.420112Z"
+}

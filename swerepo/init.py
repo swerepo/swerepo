@@ -48,6 +48,7 @@ RECORDED_VALUES = ("project", "adr_dir", "progress_dir", "commands", "test_inlin
 # used, so moving these on never loses an earlier render (ADR-20261124-7afa point 10).
 REFRESHED_VALUES = ("commands", "test_inline")
 SPEC_NAMED_BY = ("docs", "agents", "github")  # components whose files name the spec (ADR-20261124-4d76)
+DEPENDENCY_GRAPH_NOTE = "dependency-review needs GitHub's dependency graph turned on (Settings → Advanced Security)"
 
 CREATE, ADD_BLOCK, GIT_INIT, WRITE_STATE, REWRITE = "create", "add block", "git init", "write", "rewrite"
 APPLY, WAITING = "apply", "waiting"  # GitHub settings, applied through gh after the files (ADR-20261123-4e40)
@@ -91,6 +92,7 @@ class Plan:
     components: list[str]
     hosts: list[str]
     hosts_recorded: bool
+    hosts_given: bool = False  # chosen on the command line (`--editors`): recorded, replacing what was (ADR-5f22)
     actions: list[Action] = field(default_factory=list)
     state_text: str | None = None  # the new .swerepo.toml, or None if it doesn't change
     state_before: str | None = None  # .swerepo.toml as the plan read it (None: there was none)
@@ -104,6 +106,7 @@ class Plan:
     # GitHub read and compared: None when it couldn't be read; False when read but a settings file couldn't be
     # compared (missing, not JSON, or not applicable); True when both files were compared (PR #10 review)
     github_compared: bool | None = None
+    github_held: bool = False  # GitHub differs from the files, held for `--apply-github` (ADR-20261125-5f22)
     command: str = "init"  # or "update": named in the plan's first line
     # SeamSpec, run after the files are written (ADR-20261124-cd64): `seamspec init`'s arguments when it runs in the
     # person's terminal; the hygiene rules to propose; those to ask about adopting, with the locked rules to offer;
@@ -118,6 +121,7 @@ class Plan:
     seamspec_installed: str | None = None  # the SeamSpec version on this machine, when it could be read
     seamspec_doctor: bool = False  # update: report `seamspec doctor` after applying (ADR-20261124-cd64 point 8)
     spec_adopt: str | None = None  # an existing spec to record as `[adopted] spec` (ADR-20261124-4d76)
+    dependency_graph_read: bool = False  # github read the graph's state, so ci's general note isn't repeated
 
     @property
     def changes(self) -> list[Action]:
@@ -260,6 +264,9 @@ class _Context:
     before: dict[str, str] = field(default_factory=dict)  # update: `[values]` as recorded before this run
     read_github: bool = True  # False for `diff` and `status`: they show files only, so they never call gh (P6-F07)
     terminal: bool = False  # a person at a terminal: SeamSpec's own setup may run there (ADR-20261124-cd64)
+    # GitHub's settings may be planned for applying: asked for by name (`--apply-github`) or asked in a terminal;
+    # otherwise they wait, so `--yes` alone never changes GitHub (ADR-20261125-5f22 point 5)
+    apply_github: bool = False
     adopt: dict[str, str] = field(default_factory=dict)  # hygiene rule -> a locked rule of the repository's own
     seamspec_pin: str | None = None  # update: the installed SeamSpec, newer than the pin (ADR-20261124-cd64 point 8)
 
@@ -361,6 +368,10 @@ def _managed_block(
         if not _block_findable(text, content, path):
             return Action(component, KEEP, path, "ends inside an unclosed code fence: close it, then run init again")
         return Action(component, ADD_BLOCK, path, content=content, record=new_record, kind="block")
+    if record is None and path in standard.EDITOR_FILES and fingerprint(block.content) == rendered:
+        # an editor chosen again, its block as SWERepo wrote it: recorded again, nothing written (review P8-A01)
+        return Action(component, ADOPT, path, "SWERepo block, unchanged: managed again", record=new_record,
+                      kind="block", inputs=inputs, backfill=True)  # fmt: skip
     if record is None:
         return Action(component, KEEP, path, "has a SWERepo block SWERepo didn't record: kept")
     if fingerprint(block.content) != record.written:
@@ -620,9 +631,9 @@ def _docs(ctx: _Context, adr_dir: str, adopted: bool, found_spec: specs.Found) -
 def _agents(ctx: _Context, hosts: list[str]) -> list[Action]:
     c = "agents"
     actions = [_managed_block(ctx, c, "AGENTS.md", "agents/block", "# Agent instructions\n\n")]
-    if "claude" in hosts:
+    if standard.editor_chosen("CLAUDE.md", hosts):
         actions.append(_managed_block(ctx, c, "CLAUDE.md", "agents/claude"))
-    if {"antigravity", "gemini"} & set(hosts):
+    if standard.editor_chosen("GEMINI.md", hosts):
         actions.append(_managed_block(ctx, c, "GEMINI.md", "agents/gemini"))
     for path in standard.RUNBOOKS:
         actions.append(_managed_file(ctx, c, path, f"agents/{Path(path).stem}"))
@@ -718,6 +729,15 @@ class _CiResult:
     written: bool  # the workflow is created, rewritten or current: its inputs may be recorded
 
 
+def _existing_codebase(ctx: _Context) -> bool:
+    """Whether this is an existing codebase rather than a new project (ADR-20261125-5f22): as SWERepo's first run here
+    recorded it (`State.started_new`), so a new repository set up in stages stays new (review P8-G05); before any
+    record, whether the repository has commits, as for the pull-request rules (spec §10)."""
+    if ctx.state is not None and "pr" in ctx.state.doc:
+        return not ctx.state.started_new
+    return _has_commits(ctx.root)
+
+
 def _lint_mode(ctx: _Context, choice: str | None) -> tuple[str, list[str], bool]:
     """(mode, kept linters, whether the person has a choice to make) for the root project (spec §6.3). Recorded
     choices are used again; kept linters only if standard 1 knows how to run them (P4-F03)."""
@@ -729,8 +749,10 @@ def _lint_mode(ctx: _Context, choice: str | None) -> tuple[str, list[str], bool]
         return "kept", adopted, False
     names = {linter.name for linter in ctx.detection.linters}
     others = sorted(name for name in names if name in ci.KEPT_LINT)
-    if "ruff" in names or not others:
+    if "ruff" in names:
         return "ruff", [], False
+    if not others:  # never linted: an existing codebase moves to ruff gradually, not red on day one (ADR-20261125-5f22)
+        return ("gradual" if _existing_codebase(ctx) else "ruff"), [], False
     mode = "gradual" if choice == "gradual" else "kept"
     return mode, others if mode == "kept" else [], True
 
@@ -768,6 +790,9 @@ def _settings(ctx: _Context, folder: str, lint: str) -> Action:
     render = ci.settings_block(ctx.store, ruff=ruff, pytest=pytest, ruff_line_length=length)
     if render is None:
         return Action(c, KEEP, path, "ruff and pytest settings: yours")
+    foreign = _foreign_in_block(ctx, path)
+    if foreign:  # left byte for byte: never merged, rewritten or offered for deletion (review P8-A04)
+        return Action(c, CHANGED, path, foreign)
     action = _managed_block(
         ctx,
         c,
@@ -786,15 +811,47 @@ def _settings(ctx: _Context, folder: str, lint: str) -> Action:
     return action
 
 
-def _missing_tools(ctx: _Context, folder: str, lint: str, linters: list[str]) -> str:
-    """A note naming the tools a project's jobs run that `uv sync` there won't install, or ""."""
-    needed = ["pytest", *(["ruff"] if lint in ("ruff", "gradual") else linters)]
+def _foreign_in_block(ctx: _Context, path: str) -> str:
+    """When SWERepo's recorded pyproject.toml block holds a table that isn't SWERepo's (another tool's append), what
+    to do about it; otherwise ""."""
+    record = ctx.state.blocks().get(path) if ctx.state else None
+    text = ctx.read(path) if record is not None and ctx.exists(path) else None
+    if text is None:
+        return ""
+    try:
+        block = find_block(text, style=comment_style(path))
+    except BlockError:
+        return ""  # _managed_block reports broken markers
+    if block is None or fingerprint(block.content) == record.written:
+        return ""
+    return ci.foreign_note(block.content)
+
+
+def _missing_tools(ctx: _Context, folder: str, lint: str, linters: list[str], needed: list[str] | None = None) -> str:
+    """A note naming the tools a project's jobs run (or `needed`) that `uv sync` there won't install, or ""."""
+    if needed is None:
+        needed = ["pytest", *(["ruff"] if lint in ("ruff", "gradual") else linters)]
     missing = [name for name in needed if name not in ci.installed_dependencies(ctx.root, folder)]
     if not missing:
         return ""
     where = "the project's" if folder == "." else f"{folder}/'s"
     run = "" if folder == "." else f" in {folder}"
-    return f"not among {where} installed dependencies: {', '.join(missing)} (uv add --dev {' '.join(missing)}{run})"
+    note = f"not among {where} installed dependencies: {', '.join(missing)} (uv add --dev {' '.join(missing)}{run})"
+    extras = ci.extras_holding(ctx.root, folder)
+    in_extras = [f"{name} is in the optional extra `{extras[name]}`" for name in missing if name in extras]
+    if in_extras:  # uv sync installs no extras (ADR-20261125-5f22)
+        note += f"; {', '.join(in_extras)}, which uv sync doesn't install: move it to a dependency group"
+    return note
+
+
+def _agents_tools(ctx: _Context, lint: str, linters: list[str]) -> str:
+    """The tools AGENTS.md's commands run through `uv run` that `uv sync` won't install, or "": only for a project
+    uv installs; a Makefile target or Poetry runs its own (review P8-A02)."""
+    if ci.install_command(ctx.root, ".")[0] is None:
+        return ""
+    listed = commands(ctx.root, ctx.detection, linters or None, lint)
+    run = [line.split()[2] for key in ("test", "lint") for line in listed[key] if line.startswith("uv run ")]
+    return _missing_tools(ctx, ".", lint, linters, needed=list(dict.fromkeys(run)))
 
 
 def _project_inputs(ctx: _Context, folders: list[str]) -> tuple[list[Action], list[ci.Project]]:
@@ -824,6 +881,13 @@ def _project_inputs(ctx: _Context, folders: list[str]) -> tuple[list[Action], li
             project = ci.Project(folder, install, python, lint, others if lint == "kept" else [])
             note = _missing_tools(ctx, folder, project.lint, project.linters)  # each project installs on its own
             if note:
+                actions.append(Action("ci", NOTE, None, note))
+            if lint == "ruff" and not own_ruff and _existing_codebase(ctx):  # review P8-G03; ADR-20261125-5f22
+                note = (f"{folder}/: ruff checks every file of it (a listed project gets no gradual move to ruff "
+                        f"before v0.2): its lint-{project.job} job fails until its code passes ruff")  # fmt: skip
+                actions.append(Action("ci", NOTE, None, note))
+            if not ci.project_has_tests(ctx.root, list(ctx.detection.files), folder):  # review P8-G01
+                note = f"{folder}/: no tests yet: its test-{project.job} job fails until there is one"
                 actions.append(Action("ci", NOTE, None, note))
         projects.append(project)
         actions.append(_settings(ctx, folder, project.lint))
@@ -935,10 +999,18 @@ def _ci(
     missing = _missing_tools(ctx, ".", lint, linters)
     if missing and workflow.verb == CREATE:
         actions.append(Action(c, NOTE, None, missing))
+    if workflow.verb == CREATE and lint == "gradual" and not ctx.detection.linters:  # ADR-20261125-5f22
+        note = ("lint: this codebase has never been linted, so ruff checks only the files each change touches; to "
+                "check every file, fix the codebase in one pull request, then set lint = \"ruff\" under [values] in "
+                ".swerepo.toml and run swerepo update --only ci,agents")  # fmt: skip
+        actions.append(Action(c, NOTE, None, note))
+    if workflow.verb == CREATE and not ci.project_has_tests(ctx.root, list(ctx.detection.files)):  # ADR-5f22
+        note = ("no tests yet: the test job fails until there is one (pytest exits 5 when it collects none); write a "
+                "real first test, never mask the job (docs/agents/prepare-pr.md)")  # fmt: skip
+        actions.append(Action(c, NOTE, None, note))
     others = [w.path for w in ctx.detection.workflows if w.path != standard.CI_WORKFLOW]
     if workflow.verb == CREATE:  # the gap PR #9 found (ADR-20261123-4e40 point 8)
-        note = "dependency-review needs GitHub's dependency graph turned on (Settings → Advanced Security)"
-        actions.append(Action(c, NOTE, None, note))
+        actions.append(Action(c, NOTE, None, DEPENDENCY_GRAPH_NOTE))
     if others and workflow.verb == CREATE:
         audit = "uvx zizmor==1.32.0 --offline .github/workflows"
         note = f"workflow-audit also audits {', '.join(others)}: run `{audit}` before merging"
@@ -1038,7 +1110,8 @@ def _security(ctx: _Context, shared: _Workflows, contact: str | None) -> tuple[l
     actions.append(_managed_block(ctx, c, ".gitignore", "security/gitignore"))
     hits = privacy.scan(ctx.root, ctx.state.privacy_allow_paths if ctx.state else [])
     if hits:
-        message = f"privacy scan: {privacy.summary(hits)}: fix them before committing"
+        hint = privacy.how_to_clear(hits)
+        message = f"privacy scan: {privacy.summary(hits)}: fix them before committing" + (f" ({hint})" if hint else "")
     else:
         message = "privacy scan: nothing found"
     actions.append(Action(c, NOTE, None, message))
@@ -1309,25 +1382,38 @@ def _github_apply(
     else:
         ruleset_changes = github.ruleset_differences(wanted, live_ruleset) if live_ruleset else ["new"]
     if ruleset_changes and wanted is not None:
-        plan.github_apply["ruleset"] = wanted
         what = "create" if live_ruleset is None else "update: " + ", ".join(github.ruleset_changes(ruleset_changes))
-        actions.append(Action(c, APPLY, None, f'ruleset "{github.RULESET_NAME}" on the default branch ({what})'))
+        actions.append(_held(ctx, plan, "ruleset", wanted,
+                             f'ruleset "{github.RULESET_NAME}" on the default branch ({what})'))  # fmt: skip
     else:
         actions.append(Action(c, CURRENT, None, f'ruleset "{github.RULESET_NAME}" on GitHub'))
     settings_changes = github.settings_differences(settings, live_repo) if settings is not None else []
     if settings_changes and settings is not None:
-        plan.github_apply["settings"] = settings
-        actions.append(Action(c, APPLY, None, "merge settings (" + ", ".join(settings_changes) + ")"))
+        actions.append(_held(ctx, plan, "settings", settings, "merge settings (" + ", ".join(settings_changes) + ")"))
     elif settings is not None:
         actions.append(Action(c, CURRENT, None, "merge settings on GitHub"))
     try:
         graph = live_repo.get("private") is True or hub.dependency_graph()
+        plan.dependency_graph_read = True
     except github.GitHubError:
         graph = True  # can't tell: check says so; the plan doesn't guess
     if not graph:
         note = "GitHub's dependency graph is off: dependency-review needs it (Settings → Advanced Security)"
         actions.append(Action(c, NOTE, None, note))
     return actions
+
+
+HELD = "needs --apply-github, or a terminal: swerepo init --only github"
+
+
+def _held(ctx: _Context, plan: Plan, name: str, data: dict[str, Any], what: str) -> Action:
+    """A GitHub change: planned for applying when asked for (`--apply-github`, or a terminal that shows it and asks
+    first), otherwise waiting, so `--yes` alone never changes GitHub (ADR-20261125-5f22 point 5)."""
+    if ctx.apply_github:
+        plan.github_apply[name] = data
+        return Action("github", APPLY, None, what)
+    plan.github_held = True
+    return Action("github", WAITING, None, f"{what}: {HELD}")
 
 
 def apply_github(plan: Plan, root: Path, which: list[str]) -> list[str]:
@@ -1393,6 +1479,10 @@ def _seamspec(
     elif ctx.update and ctx.state is not None and ssc.newer(installed, ctx.state.seamspec_initialised):
         # a newer SeamSpec than `seamspec init` last ran with: refresh its blocks, plugin and host files, also when an
         # earlier `update --yes` already moved the CI pin (review P7-F07)
+        run_args = ssc.init_args(first=False, ci="ci" in chosen, hosts=hosts)
+    elif ctx.state is not None and set(ssc.own_hosts(hosts)) - set(
+        ctx.state.hosts if ctx.state.hosts_chosen else ctx.detection.hosts
+    ):  # an editor added (--editors), to those recorded or else detected: SeamSpec sets it up too (P8-A01, P8-A08)
         run_args = ssc.init_args(first=False, ci="ci" in chosen, hosts=hosts)
     if run_args is not None:
         shown = " ".join(["seamspec", *run_args])
@@ -1520,6 +1610,7 @@ def make_plan(
     adopt: dict[str, str] | None = None,
     terminal: bool = False,
     hold_pin: bool = False,
+    apply_github: bool = False,
 ) -> Plan:
     """What `swerepo init` would do. Writes nothing. `lint`: "kept" or "gradual" when other linters are found
     (spec §6.3); `contact`: "github", "placeholder" or an email address for SECURITY.md (ADR-20261122-a48e).
@@ -1528,7 +1619,8 @@ def make_plan(
     (spec §10). `read_github=False`: GitHub isn't read (its settings show as waiting), for `diff` and `status`.
     `adopt`: hygiene rules a locked rule of the repository's own covers, by name (`--adopt`); `terminal`: a person
     is at a terminal, so SeamSpec's own setup may run there (ADR-20261124-cd64). `hold_pin`: plan without moving the
-    SeamSpec pin, when a workflow pinning it can't take a new one (review P7-F01)."""
+    SeamSpec pin, when a workflow pinning it can't take a new one (review P7-F01). `apply_github`: GitHub's
+    settings may be applied (`--apply-github`, or a terminal that asks first); otherwise they wait."""
     call = dict(locals())
     components = resolve_components(only, skip)
     if projects is not None and "ci" not in components:
@@ -1558,19 +1650,23 @@ def make_plan(
     recorded = state.values if state else {}
     ctx = _Context(root, detection, state, store or TemplateStore(), {}, today or datetime.date.today(), update,
                    merge, enforce_pr_rules, read_github=read_github, terminal=terminal,
-                   adopt=dict(adopt or {}))  # fmt: skip
+                   adopt=dict(adopt or {}), apply_github=apply_github)  # fmt: skip
     adr_dir, adopted = _adr_dir(ctx)
     progress_dir = str((state.adopted.get("progress_dir") if state else None) or standard.PROGRESS_DIR)
     # The lint choice first, so the commands the agents block lists match the CI it gets (P4-F07).
     lint_mode, kept, lint_question = _lint_mode(ctx, lint)
-    found_spec = specs.find(root, state.adopted.get("spec") if state else None)
+    found_spec = specs.find(root, state.adopted.get("spec") if state else None, list(detection.files) or None)
     computed = compute_values(root, detection, adr_dir, progress_dir, kept, lint_mode, found_spec.name)
     ctx.before = {**computed, **{k: str(recorded[k]) for k in RECORDED_VALUES if isinstance(recorded.get(k), str)}}
     ctx.values = {**ctx.before, **({k: computed[k] for k in REFRESHED_VALUES} if update else {})}
 
     hosts_recorded = bool(state and state.hosts_chosen)
     chosen_hosts = hosts if hosts is not None else (state.hosts if hosts_recorded else list(detection.hosts))
-    plan = Plan(root.name, components, chosen_hosts, hosts_recorded or hosts is not None)
+    plan = Plan(root.name, components, chosen_hosts, hosts_recorded or hosts is not None, hosts_given=hosts is not None)
+    if hosts is not None and hosts_recorded and state is not None and set(hosts) != set(state.hosts):
+        before = ", ".join(state.hosts) or "none"
+        note = f"editors: {before} → {', '.join(hosts) or 'none'} (--editors; recorded in .swerepo.toml)"
+        plan.actions.append(Action("agents", NOTE, None, note))
     plan.command = "update" if update else "init"
     plan.state_before = _state_text(root)
 
@@ -1608,6 +1704,7 @@ def make_plan(
         components = [c for c in COMPONENTS if c in {*components, "ci"}]
     shared = _workflows(ctx, with_governance=with_governance) if {"ci", "security"} & set(components) else None
     ci_result: _CiResult | None = None
+    agents_write = False  # agents writes AGENTS.md's block in this run
     privacy: tuple[str, str] | None = None  # the privacy workflow's command and Python version, when written
     for component in components:
         if component == "ci" and shared is not None:
@@ -1630,7 +1727,12 @@ def make_plan(
         elif component == "docs":
             plan.actions += _docs(ctx, adr_dir, adopted, found_spec)
         elif component == "agents":
-            plan.actions += _agents(ctx, chosen_hosts)
+            agents_actions = _agents(ctx, chosen_hosts)
+            plan.actions += agents_actions
+            for path in standard.EDITOR_FILES:  # an editor dropped: SWERepo stops managing its file (review P8-A01)
+                if state is not None and path in state.blocks() and not standard.editor_chosen(path, chosen_hosts):
+                    plan.actions.append(Action("agents", KEEP, path, "yours now: its editor isn't chosen"))
+            agents_write = agents_actions[0].changes
             moved = isinstance(recorded.get("commands"), str) and recorded["commands"] != computed["commands"]
             if moved and not update:
                 note = "the project's commands changed since they were recorded: `swerepo update` brings them in"
@@ -1658,6 +1760,14 @@ def make_plan(
         if "docs" not in components:  # docs says so itself; otherwise say it here (review P8-F02)
             note = "your spec, named in its files: recorded as `[adopted] spec`"
             plan.actions.append(Action(named_by[0], ADOPT, found_spec.adopt, note))
+    if "agents" in components and agents_write:  # after the loop: ci is planned after agents (review P8-A07)
+        missing = _agents_tools(ctx, lint_mode, kept)
+        ci_said = any(a.component == "ci" and a.verb == NOTE and a.note == _missing_tools(ctx, ".", lint_mode, kept)
+                      for a in plan.actions)  # fmt: skip
+        if missing and not ci_said:  # the commands agents are told to run must run (ADR-20261125-5f22)
+            plan.actions.append(Action("agents", NOTE, None, f"AGENTS.md's commands won't run yet: {missing}"))
+    if plan.dependency_graph_read:  # github said whether it's on: ci's general note would repeat it (ADR-20261125-5f22)
+        plan.actions = [a for a in plan.actions if not (a.verb == NOTE and a.note == DEPENDENCY_GRAPH_NOTE)]
     if ctx.update and state is not None:
         plan.actions += _dropped(ctx, components, plan.actions)
     # A component counts as applied when init could write it: ci without a workflow isn't recorded as chosen.
@@ -1738,10 +1848,16 @@ def _new_state(
     state = State.parse(before) if before is not None else State.new()
     state.set_components([c for c in COMPONENTS if c in {*state.components, *applied}])
     for name in RECORDED_VALUES:
+        if name in REFRESHED_VALUES and name in state.values and "agents" not in applied:
+            continue  # the agents' files name the commands: recorded only when they are written (review P8-G02)
         if state.values.get(name) != ctx.values[name]:
             state.set_value(name, ctx.values[name])
-    if "agents" in applied and (not state.hosts_chosen or state.hosts != plan.hosts):
-        state.set_hosts(plan.hosts)
+    if "agents" in applied:  # only when the editors' files are written (review P8-A01)
+        if not state.hosts_chosen or set(state.hosts) != set(plan.hosts):
+            state.set_hosts(plan.hosts)
+        for path in standard.EDITOR_FILES:  # an editor no longer chosen: its file stays, SWERepo's record of it goes
+            if not standard.editor_chosen(path, plan.hosts):
+                state.remove_block(path)
     if adopted_adr_dir and state.adopted.get("adr_dir") != adopted_adr_dir:
         state.set_adopted("adr_dir", adopted_adr_dir)
     # recorded whenever a component naming the spec runs, so what its files name stays put (review P8-F02); by
@@ -1804,8 +1920,8 @@ def _new_state(
             state.set_github("copilot_review", copilot)
         # applied: GitHub was read, both files were compared, and nothing is left to apply; kept as it was when
         # GitHub couldn't be read (P5-F02, PR #10 review); false when nothing is recorded yet
-        if plan.github_compared is not None:
-            applied_now = plan.github_compared and not plan.github_apply
+        if plan.github_compared is not None:  # held for --apply-github: not applied either (review P8-A03)
+            applied_now = plan.github_compared and not plan.github_apply and not plan.github_held
         else:
             applied_now = state.github.get("applied", False)
         if state.github.get("applied") != applied_now:
