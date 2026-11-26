@@ -1,0 +1,36 @@
+{
+  "schema_version": "1",
+  "id": "inv_b5d32550",
+  "title": "PRs wait for Copilot inside ci-ok once a default-branch rule requests it; Dependabot's holds only its commits",
+  "assertion": "In the `swerepo-ci.yml` that `swerepo init` writes when the ruleset requests Copilot's review (also when github is applied on its own after ci), `ci-ok` waits for a `copilot-review` job that runs on pull requests only and whose `permissions:` block grants `pull-requests: read` and nothing else, and the `pull_request` trigger lists `types: [opened, synchronize, reopened, ready_for_review]`, so a draft marked ready runs again. Run as written, with the values its own `env:` block maps from GitHub (`GH_TOKEN`, the pull request's author, its branch's repository, the repository's default branch and whether it is private included; the fake `gh` refuses without the token, and the job never reads the pull request's base), the job behaves as follows. A draft fails at once, without asking GitHub anything, whoever opened it, Dependabot included. A pull request opened by `dependabot[bot]` passes at once, without asking for reviews or reading rules, when its branch is in this repository and every commit on it (`repos/<repository>/pulls/<number>/commits`, `--paginate`) is authored by Dependabot, verified, and committed by GitHub itself (`web-flow`), so a commit in Dependabot's name signed with someone else's key doesn't pass. Any other Dependabot pull request fails at once, even with Copilot's review in, without pausing, asking for reviews or reading rules: one with another author's commit, one linked to no account, an unverified commit, a commit with another committer or none, one from a fork, or one with no commits listed. Changes by people or agents go in a pull request of their own. For every other author, the job reads the default branch's active rules exactly once, before any review, asking exactly `repos/<repository>/rules/branches/<default branch>` with `--paginate`, the branch encoded as one path segment (`release/1.0` as `release%2F1.0`, `fix#1` as `fix%231`, `100%` as `100%25`); an empty default branch fails at once without asking anything. When no rule there has the type `copilot_code_review` exactly (none at all, other rules only, or look-alikes: `copilot_review`, `copilot_code_review_x`, another case, or the name in another field), nothing requests Copilot's review, and the job passes at once without asking for reviews or pausing: people, Renovate and a coding agent alike. When the read fails, the job fails at once without asking for reviews or pausing, Copilot's review in or not, except one answer: on a private repository, `gh` exiting non-zero with exactly this message as the whole of its stderr, `gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)` (and the error body on stdout), GitHub Free's answer where rulesets aren't available, passes at once. Anything else fails: that message on a public repository; another message starting `Upgrade to GitHub Pro`; that message with more text before its status or after it, in another case, or beside another line on stderr; any other 403, a 401, a 404 or a 500, on a private repository as on a public one. When the rules hold `copilot_code_review` (as SWERepo's ruleset writes it, last among its rules, on a later page), the job asks GitHub for exactly `repos/<repository>/pulls/<number>/reviews` with `--paginate`, never reading the rules again. It passes once that list holds a review by `copilot-pull-request-reviewer[bot]`, asking again when the first answer has none. It fails when none comes or only others reviewed (look-alike names included). Every such author waits, asking for reviews exactly 40 times with a pause after each, and fails without a review: people, look-alike names (`dependabot`, `dependabotb`, `dependabot[bot]x`, `xdependabot[bot]`), and other bots, Renovate and a coding agent included. `ci-ok`'s step fails on a pull request whose `copilot-review` didn't succeed, and on a push where it ran. With `--no-copilot-review` (also on a later run that turns the wait off) or a committed ruleset without Copilot review, there is no such job.",
+  "scope": {
+    "paths": [
+      "swerepo/ci.py",
+      "swerepo/init.py",
+      "swerepo/github.py",
+      "swerepo/cli.py",
+      "swerepo/templates/ci/"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "Replaces inv_78f19f51 (ADR-20261126-c228, review P8-C, the owner's go-ahead 2026-11-26). Dogfooding on an established repository: the pull request that adds SWERepo waited 20 minutes for a Copilot review nothing requested, because GitHub requests it only through an active ruleset rule and the ruleset is applied after that pull request merges. The job now reads the default branch's rules once (never the base, review P8-C03), encoded (P8-C01), and passes without a copilot_code_review rule; GitHub Free's 403 on a private repository passes, as the owner checked it (P8-C02); any other failed read fails. Every check of inv_78f19f51 is kept; the test adds the rules read's count, place and pages (P8-C04). Tightened after SeamSpec's reviewer: only gh's exact stderr for GitHub Free's answer passes, never a near variant, so a change in GitHub's text fails the job.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_b5d32550.py",
+    "harness_sha256": "b2f21c7bede1c97002edbd78f084f99d9da062850cfad3179846fca04839fefa",
+    "assertion_sha256": "b868df4da81ab748ffb5fb4f87545f52f7372ec66be029beff9163f905529dae"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-26T08:31:54.517554Z",
+  "approved_at": "2026-11-26T10:14:27.136410Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

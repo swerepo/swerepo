@@ -1,6 +1,6 @@
 # SWERepo — Specification
 
-**Status:** draft for the owner's review · **Version:** 0.17 (design) · **Date:** 2026-11-25
+**Status:** draft for the owner's review · **Version:** 0.18 (design) · **Date:** 2026-11-26
 **Name:** SWERepo, command `swerepo`, at `github.com/swerepo/swerepo` (renamed from Golden Repo in v0.6, ADR-20261120-1a27)
 **What changed:** Appendix A. **How the BLUEPRINT's ideas were handled:** Appendix B.
 
@@ -163,7 +163,7 @@ The standard is versioned (`standard = 1` in v0.1) and listed in full here. Each
   - **seamspec**: SeamSpec's locked rules, inside `ci-ok` so a failing rule blocks the merge (ADR-20261122-4a06): `seamspec doctor --ci`, `seamspec verify --all --ci` and `seamspec spec --check docs/EARNED_SPEC.md` (§6.8) at the pinned SeamSpec version (`[tools] seamspec`). The job is always in the workflow: without `.seamspec/config.toml` it says so and passes, so setting SeamSpec up later needs no workflow change;
   - **dependency-review**: on pull requests to public repositories, GitHub's `dependency-review-action` (fails on new dependencies with known vulnerabilities). On private repositories it needs a paid GitHub plan, so the job is skipped there by a condition in the workflow;
   - **one lint and one test job per project** listed with `--projects` (§11);
-  - **copilot-review**: where the `github` component turns Copilot review on, pull requests wait for Copilot's review (of any commit) inside `ci-ok`: the job asks GitHub every 30 seconds for up to 20 minutes, and a later push passes at once. A draft fails at once, and the workflow runs again when it is marked ready for review (ADR-20261123-a359). Pull requests opened by Dependabot (`dependabot[bot]`) pass at once while every commit is Dependabot's, verified and committed by GitHub itself, on a branch in the repository, and fail at once with any other commit: a dependency update's pull request holds only Dependabot's commits. GitHub never requests Copilot's review for them, and the person who merges reviews the update (ADR-20261123-cc8d);
+  - **copilot-review**: where the `github` component turns Copilot review on, pull requests wait for Copilot's review (of any commit) inside `ci-ok`: the job asks GitHub every 30 seconds for up to 20 minutes, and a later push passes at once. A draft fails at once, and the workflow runs again when it is marked ready for review (ADR-20261123-a359). While no active rule on the default branch requests Copilot's review (the ruleset not applied yet, or a private repository on GitHub Free, where rulesets aren't available, known only by GitHub's exact answer: `gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)` as the whole of `gh`'s stderr, so any change in GitHub's text fails the job), the job passes at once and says how to ask Copilot anyway (`gh pr edit <number> --add-reviewer @copilot`): it reads that branch's rules once, never the pull request's base, so retargeting can't skip the wait, and any other failed read fails (ADR-20261126-c228). Pull requests opened by Dependabot (`dependabot[bot]`) pass at once while every commit is Dependabot's, verified and committed by GitHub itself, on a branch in the repository, and fail at once with any other commit: a dependency update's pull request holds only Dependabot's commits. GitHub never requests Copilot's review for them, and the person who merges reviews the update (ADR-20261123-cc8d);
   - **`ci-ok`**: a single aggregating job (`if: always()`) that reads every job's result: each must succeed, except a job skipped by design (macOS off pushes, governance off pull requests, dependency review off pull requests to public repositories), which must be skipped; failed, cancelled or unexpectedly skipped jobs fail it. The ruleset requires only `ci-ok`, so adding a job never means editing GitHub settings.
 - **Installing the project:** `uv sync --locked` with a `uv.lock` (the project's own, or its uv workspace's), `uv sync` without. Projects uv can't install (Poetry's lock without uv's, no `pyproject.toml` or no `[project]` table) get no workflow in standard 1's first template, and the plan says why. Lint and tests run the project's own tools through `uv run`; the plan names those missing from its dependencies (`uv add --dev pytest ruff`), since SWERepo never edits dependencies.
 - Actions pinned to commit SHAs, `permissions: contents: read` by default, `persist-credentials: false` on checkout, `concurrency` to cancel superseded runs, a `timeout-minutes` on every job.
@@ -496,6 +496,7 @@ A **monorepo** holds several projects in one repository, for example `services/o
   3. run `swerepo init --only github` in a terminal (or with `--yes --apply-github`) to apply the ruleset and merge settings.
   Until then, `check` reports `✗ ruleset not applied (no GitHub repository yet)`.
 - **On GitHub, but without `gh`** (not installed or not logged in): the plan says the settings wait for `gh`, and the next steps are the usual branch and pull request, then `gh auth login` and `swerepo init --only github`.
+- **Before the ruleset is applied**, nothing requests Copilot's review, so CI's `copilot-review` passes without waiting (§6.2, ADR-20261126-c228). Wherever `init` or `update` leaves the ruleset unapplied while the workflow waits for Copilot (held for `--apply-github`, a terminal no, or `gh` missing or logged out), the next steps say so and give `gh pr edit <number> --add-reviewer @copilot` to ask for a review anyway; never under `--no-copilot-review`, nor when GitHub's `swerepo` ruleset already requests Copilot.
 - **Settings as code.** The ruleset and merge settings live in `.github/swerepo/ruleset.json` and `repo-settings.json`. They are the source of truth: a person may edit them (SWERepo then treats them like any edited file), `init`/`update --only github` applies them, and `check` compares the live settings with them. Two edits are never applied, and `check` reports them: a ruleset renamed away from `swerepo`, and fields in `repo-settings.json` beyond the merge settings (such as `private`).
 - **The ruleset** is named `swerepo`, so reruns find and update their own ruleset and never touch others. It targets the default branch. Long-lived environment branches (`develop`, `release`) protected the same way, with `deletion` and both squash and merge commits allowed, are planned for v0.2, Phase 9 (§20, ADR-20261124-2452).
 
@@ -704,6 +705,13 @@ Built in this order: `check` (with `--base`); then `init`, `update`/`-u` with th
 ---
 
 ## Appendix A: Revision history
+
+### 0.17 → 0.18
+
+From dogfooding on an established repository (the owner's choice, 2026-11-26; ADR-20261126-c228, after Gemini's design review P8-C):
+
+1. **The Copilot wait passes while no ruleset requests Copilot's review:** `copilot-review` reads the default branch's active rules once and passes at once without a `copilot_code_review` rule, so the pull request that adds SWERepo, and every one before the ruleset is applied, isn't red. A private repository on GitHub Free passes only on GitHub's exact "Upgrade to GitHub Pro" answer, so any change in GitHub's text fails the job; any other failed read fails (§6.2).
+2. **`init` and `update` say so** where they leave the ruleset unapplied, with the command to ask Copilot anyway (§12).
 
 ### 0.16 → 0.17
 

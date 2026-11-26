@@ -110,6 +110,9 @@ class Plan:
     # compared (missing, not JSON, or not applicable); True when both files were compared (PR #10 review)
     github_compared: bool | None = None
     github_held: bool = False  # GitHub differs from the files, held for `--apply-github` (ADR-20261125-5f22)
+    # the committed ruleset requests Copilot's review and GitHub's `swerepo` ruleset doesn't yet, so CI's
+    # copilot-review passes without waiting until it is applied (ADR-20261126-c228)
+    copilot_unrequested: bool = False
     command: str = "init"  # or "update": named in the plan's first line
     # SeamSpec, run after the files are written (ADR-20261124-cd64): `seamspec init`'s arguments when it runs in the
     # person's terminal; the hygiene rules to propose; those to ask about adopting, with the locked rules to offer;
@@ -1381,6 +1384,10 @@ def _github_apply(
         return [Action(c, NOTE, None, f"can't read GitHub's settings ({error}): nothing applied")]
     wanted, settings = rendered["ruleset"], rendered["repo-settings"]
     plan.github_compared = wanted is not None and settings is not None
+    # only an active ruleset requests Copilot: GitHub ignores a disabled or evaluate-only one (review P8-C07)
+    active = isinstance(live_ruleset, dict) and live_ruleset.get("enforcement") == "active"
+    live_copilot = active and github.has_copilot_review(live_ruleset)
+    plan.copilot_unrequested = wanted is not None and github.has_copilot_review(wanted) and not live_copilot
     if wanted is None:
         ruleset_changes = []
     else:

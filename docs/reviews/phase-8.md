@@ -996,3 +996,480 @@ Several blocking `Finding` paths still default `fix` to `INIT` (`"init"`) where 
 None.
 
 **Review status:** closed.
+
+## Follow-up: the Copilot wait before the ruleset (review P8-C)
+
+A gap found applying SWERepo to an established repository: the setup pull request waited for a Copilot review nothing requested. Designed, reviewed by Gemini in two design rounds and a code round, and built; the owner locked `inv_b5d32550` in place of `inv_78f19f51` after two reads by SeamSpec's reviewer.
+
+A gap found while dogfooding SWERepo on an established repository: the pull request that adds SWERepo waits 20 minutes for a Copilot review nothing requested, then turns `ci-ok` red. This round is a design read before any code.
+
+**Status:** closed · **Rounds:** 3 (two on the design, one on the code) · **Developer:** Claude · **Reviewer:** Gemini · **Owner decides:** the option, ties, merges, SeamSpec approvals
+**Process:** ADR-20261119-9f87. Finding IDs `P8-C<nn>`; severities `blocker | should-fix | suggestion | question`; responses Fix / Push back / Defer, then Accept / Maintain. Branch `phase-8/copilot-wait-setup-pr`.
+
+---
+
+### Developer summary (design round, before code)
+
+#### The gap
+
+- **What happens.** With the `github` component, `init` writes `.github/swerepo/ruleset.json` with a `copilot_code_review` rule, and so renders a `copilot-review` job into `swerepo-ci.yml` (ADR-20261123-a359 point 3: the committed ruleset decides). GitHub's settings are applied only later, after a terminal yes or `--yes --apply-github` (ADR-20261125-5f22 point 5, `inv_81872dfe`). The runbook order is: merge the setup pull request, then apply.
+- **Why it fails.** GitHub requests Copilot's review automatically only through a live ruleset rule. Before the ruleset is applied, nothing requests it, so the job asks 40 times over 20 minutes and fails (`swerepo/templates/ci/job-copilot-review/2.yml:51-63`). `ci-ok` then fails (`inv_09cc1c20`).
+- **How far it reaches.** It's not just the setup pull request. Every pull request opened before the ruleset is applied goes red, and in a repository whose owner never applies the settings, every pull request goes red for good. The established repository is in exactly that state now: its files are written and its settings were declined, as the owner chose.
+- **What's actually at stake.** The same ruleset is what makes `ci-ok` a required check (`swerepo/github.py:71-77`). Before it's applied, a red `ci-ok` blocks nothing. So the harm is a red check people learn to merge past, plus 20 runner-minutes per pull request. Merges aren't actually let through.
+- **Asking by hand works, from the command line too.** On the established repository's setup pull request, with no ruleset applied, `gh pr edit <n> --add-reviewer "@copilot"` got Copilot to review: it left two inline comments, and `copilot-review` passed on that run and on the next push. So a person or an agent can unblock a pull request with one command. GitHub's REST API doesn't show the request, though: Copilot never appeared in `GET .../pulls/<n>/requested_reviewers`, and a REST POST to `requested_reviewers` naming `copilot-pull-request-reviewer[bot]` returned an empty list. GraphQL does show it. Once the ruleset was applied there, a new pull request's automatic request appeared in `pullRequest.reviewRequests` as the Bot `copilot-pull-request-reviewer` while the review was pending.
+
+#### Checked on GitHub before designing (read-only)
+
+- `GET repos/swerepo/swerepo/rules/branches/main` lists `copilot_code_review` among the active rules on `main`, with its `ruleset_id`. GitHub's documentation says the endpoint returns only *active* rules (not `evaluate` or `disabled`), from repository and organization rulesets alike, and that it's paginated.
+- The latest `copilot-review` run on this repository logs `GITHUB_TOKEN Permissions: Metadata: read, PullRequests: read`. So the job's token has metadata read while its `permissions:` block lists only `pull-requests: read`. GitHub's documentation doesn't say which permission the branch-rules endpoint needs. The implementation pull request settles that live: on this repository the ruleset is applied, so the new read has to succeed there and then wait.
+
+#### Options
+
+| | Option | What it fixes | Costs and risks |
+|---|---|---|---|
+| A | **Tell the person.** `init`'s next steps (`HELD_NEXT`, `swerepo/cli.py:274-275`) and the PR template say to request Copilot on each pull request until the settings are applied, with `gh pr edit <n> --add-reviewer @copilot` or the Reviewers box. | Nothing in CI changes. A person or an agent who runs the command gets a green pull request, as on the established repository's setup pull request. | It costs one command per pull request, but on every pull request until the settings are applied. Anyone who doesn't know about it waits 20 minutes and goes red, and a repository that never applies the settings needs the command on every pull request for good. Adding it to the PR template puts a setup-only line in front of every later pull request. No locked rule changes. |
+| B | **The job asks GitHub whether anything requests Copilot.** After the draft and Dependabot checks, it reads the base branch's active rules (`repos/<repo>/rules/branches/<base>`). If no `copilot_code_review` rule applies, it passes at once and says why. If one does, it waits exactly as today. | The setup pull request, every pull request before the settings are applied, and a repository that never applies them. It needs nothing from the person. | It adds one GitHub read per pull request, using the token permission the job already has. It also changes a locked rule's behaviour, so it needs a supersede (below). The wait is only as strong as the live ruleset, but so is `ci-ok` being required at all. |
+| C | **Write the job only once `[github] applied` is true.** | The setup pull request. | Applying then rewrites `swerepo-ci.yml` on `main`, which needs a second pull request, and pull requests merged in between have no wait while the live ruleset already requests Copilot. That's the PR #3 problem ADR-20261123-a359 was written for. The local record also goes stale if the ruleset is changed on GitHub. It contradicts a359 point 3 and `check`'s comparison with the committed ruleset (review P5-F10). It breaks `inv_78f19f51`'s tests (`test_pull_requests_wait_for_copilots_review` and `test_turning_copilot_review_off_later_removes_the_wait` render the job with settings not applied), so it needs a supersede as well. |
+
+Considered and set aside:
+- **Reading the pull request's requested reviewers.** REST's `requested_reviewers` never lists Copilot. GraphQL's `reviewRequests` does, and `pull-requests: read` is enough to read it. Copilot leaves that list once it has reviewed, though, so the list can't tell "never requested" apart from "already reviewed".
+  - **A combined check doesn't beat B either.** That check would wait while Copilot is requested or has reviewed, and pass when neither is true. But it keys on the pull request's own state, not on GitHub's policy for the branch:
+    - The ruleset's automatic request can land after the job's first read, and the job would pass before it does.
+    - Anyone who can remove a reviewer could take Copilot off the pull request and pass the job without a review.
+
+    B reads the rule itself, so neither of those can skip the wait.
+- **Finding the `swerepo` ruleset by name** (`repos/<repo>/rulesets`). It misses an organization ruleset that requests Copilot, and the branch-rules read already answers the real question: will GitHub request Copilot on this branch?
+- **Having the job request Copilot itself** (`gh pr edit --add-reviewer @copilot` works). ADR-20261123-cc8d already rejected this, because it needs `pull-requests: write` for a job that runs on every pull request, against the least-privilege permissions `inv_78f19f51` locks. It would also spend a Copilot review on every pull request, unasked.
+- **Keying on a local file** (`.swerepo.toml`). The pull request controls that file, so it could switch off its own wait.
+
+#### Recommendation: B, with A's wording where it helps
+
+**Why B still holds, now that the command works:** A asks for one step on every pull request until the settings are applied, and on every pull request for good where they never are. Anyone who misses the step gets a 20-minute wait and a red `ci-ok` that blocks nothing. B removes the wait exactly while nothing requests Copilot, and keeps it unchanged once something does. A's command still belongs in the wording below, for a pull request that wants Copilot's review before the settings are applied.
+
+**The job (`job-copilot-review/2`, changed in place).** No `v*` tag exists yet, so `inv_7bc9c95a` doesn't hold the fragment back. The steps would run in this order:
+1. **A draft fails at once**, without asking GitHub, as today.
+2. **`dependabot[bot]`** is handled exactly as today. The rules are never read for it, so its single commits call stays its only call.
+3. **New: the rules read, once,** of the repository's **default branch**, not the pull request's base (changed in round 1, P8-C03).
+   - **Where the values come from:** `DEFAULT_BRANCH` is mapped from `${{ github.event.repository.default_branch }}` and `PRIVATE` from `${{ github.event.repository.private }}`, both in the step's `env:` block, never inside the script.
+   - **Encoding:** an empty `DEFAULT_BRANCH` fails at once. Otherwise it's encoded as one path segment, `branch=$(jq -rn --arg b "$DEFAULT_BRANCH" '$b | @uri')` (P8-C01).
+   - **The read is a standalone assignment,** never inside a test, so bash can't suspend `set -e` around it (P8-C04): `status=0; rules=$(gh api "repos/$REPOSITORY/rules/branches/$branch" --paginate --jq '.[] | select(.type == "copilot_code_review") | .ruleset_id' 2>"$err") || status=$?`.
+   - **No such rule:** the job passes at once and says why: "Nothing requests Copilot's review on `<default branch>` yet: the ruleset isn't applied. This job waits once it is (`swerepo init --only github --apply-github`)."
+   - **Rulesets not on the plan:** when the read fails with `PRIVATE` `true`, `(HTTP 403)` and "Upgrade to GitHub Pro" in `gh`'s message, the job passes at once and says that rulesets aren't available on this repository's plan (P8-C02).
+   - **Any other failure:** the job fails at once with `gh`'s own error and never passes.
+4. **The wait**, 40 asks 30 seconds apart, unchanged. The rules are never read again inside it.
+
+**What it keeps:**
+- `permissions:` stays `pull-requests: read` only.
+- The job runs on pull requests only, and `ci-ok` is untouched.
+- A rule with a look-alike type doesn't count, since the match is on the exact type.
+- No new way around the wait. The condition doesn't depend on the pull request's base, so retargeting a pull request that passed against an uncovered branch gains nothing (P8-C03). Before round 1 this bullet compared B with editing the workflow inside the pull request, which governance and a code owner would see. Retargeting leaves no such trace, so the comparison didn't hold.
+
+**Wording (from A):**
+- `init`'s next steps gain one sentence: until the ruleset is applied, `copilot-review` passes without waiting, and `gh pr edit <n> --add-reviewer @copilot` asks for a review anyway. Changed in round 1 (P8-C05): the sentence shows wherever `init` leaves the ruleset unapplied and the committed ruleset requests Copilot. That's the `plan.github_held` branch (`HELD_NEXT`), `gh` missing or logged out, and a terminal "no" to the ruleset. It never shows under `--no-copilot-review`, and not before a GitHub repository exists.
+- The PR template isn't changed.
+- The 20-minute failure message names the same command beside the Reviewers box.
+
+**Known gap, left as it is:** a pull request opened before the settings were applied and re-run after them now waits and fails, because GitHub doesn't request Copilot on pull requests that are already open. Its message says how to request Copilot: with the command, or from the Reviewers box. An author without Copilot access on a repository with the ruleset applied waits and fails, as today. So does a stacked pull request into a branch the ruleset doesn't cover, once the ruleset is applied (P8-C03).
+
+**Deferred to Phase 9** (protected `develop` and `release` branches): waits keyed to the pull request's base, and retargeting without a push (`edited`). `governance` and `lint-gradual` share that limitation today.
+
+#### Locked rules affected
+
+- **`inv_78f19f51` (critical) needs a supersede.** Its text says "every other author waits, asking for reviews exactly 40 times", which B makes untrue where no rule requests Copilot. Its test also counts every `gh` call: `.seamspec/tests/test_inv_78f19f51.py:188` expects 2 calls for a review that arrives on the second ask, and the rules read makes it 3. The replacement would:
+  - keep every promise word for word: the permissions, the trigger types, drafts, every Dependabot case, the look-alikes, the 40 asks with pauses, `ci-ok` on pull requests and pushes, and no job with `--no-copilot-review` or a committed ruleset without Copilot;
+  - add that, after the draft and Dependabot checks, the job asks exactly once for `repos/<repository>/rules/branches/<default branch>` with `--paginate`. The default branch comes from the job's `env:` block, encoded as one path segment (`release/1.0` → `release%2F1.0`, `fix#1` → `fix%231`);
+  - add that the job passes at once, without asking for reviews and without pausing, when that list holds no rule whose `type` is exactly `copilot_code_review`;
+  - add that the job waits as before when the list holds one, wherever it sits among other rules and pages;
+  - add that, on a private repository, a 403 saying "Upgrade to GitHub Pro" passes at once;
+  - add that the job fails at once, without asking for reviews, on any other failed read: a 403 on a public repository, another 403 on a private one, any other error, or an empty default branch name.
+
+  The test is never edited. The supersede goes through `request_supersede`, and the owner approves it in `seamspec review`.
+- **`inv_09cc1c20` (critical) stays as it is.** `ci-ok`'s step and `needs:` don't change. The job still ends in success or failure, and its test's variants render no `github` component.
+- **`inv_81872dfe`, `inv_1002d669` and `inv_7bc9c95a` stay as they are.** `inv_81872dfe` covers what `swerepo` commands send to GitHub, and the CI job isn't one of them. `init`'s plans and second runs don't change. No release tag exists yet, so the fragment can change in place. If `v0.1.0` is tagged first, this becomes `job-copilot-review/3` and `ci/workflow@3`.
+
+#### Tests planned
+
+The replacement rule's test is built on the current one's runner: the generated steps run with bash, jq and a fake `gh` and `sleep`. The fake also answers `repos/acme/app/rules/branches/<branch>`, applying the job's `--jq` filter to each page as `--paginate` does:
+1. **Rules with `copilot_code_review`**, placed after `deletion`, `non_fast_forward`, `pull_request` and `required_status_checks` and split across two pages, as `swerepo/github.py:72-81` orders them: every current case holds as it is. Exactly one `/rules/branches/` call is made, both when the review arrives on the second ask and in every 40-ask case (P8-C04).
+2. **Rules without it** (`deletion` only, `[]`, and look-alikes: `copilot_review`, `copilot_code_review_x`, and `copilot_code_review` as the value of a field other than `type`): a person's pull request passes, with one rules call, no reviews call and no pause.
+3. **The rules read fails:**
+   - a 404, and a 403 on a public repository, fail without asking for reviews and without pausing;
+   - on a private repository, a 403 saying "Upgrade to GitHub Pro" passes at once, and any other 403 fails (P8-C02).
+4. **The branch comes from the job's `env:` block** (`repository.default_branch`), encoded: `release/1.0` → `rules/branches/release%2F1.0`, and `fix#1` → `rules/branches/fix%231`. An empty name fails at once. A pull request whose base is another branch reads the default branch's rules all the same (P8-C01, P8-C03).
+5. **Drafts and Dependabot:** a draft still makes no call, also with no rules. Dependabot still makes exactly one call, its commits, and never reads the rules.
+6. **Permissions** are still exactly `pull-requests: read`.
+
+Ordinary tests:
+- the next-steps sentence on each of its three branches, with none under `--no-copilot-review` (P8-C05), and the failure message naming the command;
+- zizmor stays clean on the rendered workflow (`uvx zizmor==1.32.0 --offline`);
+- this repository's `swerepo-ci.yml` is rewritten by `init`, unchanged since SWERepo wrote it, as in ADR-20261123-cc8d point 3.
+
+Each change would be broken on purpose and caught:
+- the rules read dropped, made non-failing, or moved inside the loop;
+- the type match loosened to `contains`, `startswith("copilot")`, or a text match on the raw output;
+- `.[0]` in place of `.[]`;
+- the branch left unencoded, or read inside the script;
+- the base read in place of the default branch;
+- the Free-plan exception made to accept any 403, or to apply to public repositories.
+
+**Live check:** the implementation pull request on this repository runs the new job against the applied ruleset. It has to read the rules and then wait for Copilot. That settles the token question above.
+
+#### Files, spec and ADR (when built)
+
+- `swerepo/templates/ci/job-copilot-review/2.yml`, `swerepo/cli.py` (`HELD_NEXT`, the logged-out branch, `_apply_github`'s "no"), `.github/workflows/swerepo-ci.yml` (rewritten by `init`).
+- A new ADR amending ADR-20261123-a359 and ADR-20261123-cc8d (a CI workflow change, per `docs/adr/README.md`). It names the rule replacing `inv_78f19f51` and records the exact Free-plan answer once the owner has checked it (P8-C02), the stacked-PR trade, the Phase 9 deferral, and the default-branch rename (P8-C03). The Consequences of both earlier ADRs gain "Amended by" (P8-C05).
+- `SWEREPO-SPEC.md` v0.18: §6.2's `copilot-review` bullet, §12 where it describes applying the ruleset, and `### 0.17 → 0.18` in Appendix A.
+- `CHANGELOG.md`, and a progress entry.
+
+#### Questions for the reviewer
+
+1. **B's condition.** Is "an active `copilot_code_review` rule on the pull request's base branch" the right test, or should it be the `swerepo` ruleset specifically? Consider organization rulesets, and a base branch the ruleset doesn't cover.
+2. **A failed rules read.** Fail at once (recommended, as the script does with every `gh` error), or fall back to waiting, which is safer if the endpoint turns out to need more than metadata read?
+3. **Order.** Draft, Dependabot, rules, wait. Should Dependabot's strict commit check still apply where nothing requests Copilot? It's kept as it is here, so `inv_78f19f51`'s Dependabot promises carry over word for word.
+4. **Is the supersede complete?** Does the replacement weaken anything `inv_78f19f51` promises beyond the one sentence B has to change?
+5. **A or C.** Is there a case where A or C is better than B? For example, a repository whose owner wants CI to stay red until a person has looked at Copilot's review.
+
+#### How to check
+
+- Read-only: `swerepo/templates/ci/job-copilot-review/2.yml`, `swerepo/ci.py:516-536`, `swerepo/init.py:1696-1706`, `swerepo/github.py:71-81`, `.seamspec/tests/test_inv_78f19f51.py`, `.seamspec/tests/test_inv_09cc1c20.py`.
+- `uv run seamspec context swerepo/templates/ci/job-copilot-review/ swerepo/ci.py swerepo/init.py`.
+- `gh api repos/swerepo/swerepo/rules/branches/main --jq '.[].type'`, which lists `copilot_code_review`.
+
+---
+
+### Review (round 1)
+
+#### Strengths
+
+- **Option B solves the right problem at the right layer.** Keying the wait on whether GitHub has an active `copilot_code_review` rule on the target branch keeps `ADR-20261123-a359` point 3 intact (the committed `ruleset.json` still decides whether `copilot-review` is rendered, avoiding Option C's two-PR dance and drift) and removes Option A's per-PR manual command tax before settings are applied or on repositories that never apply them.
+- **Setting aside GraphQL `reviewRequests` as a skip check is sound.** Both flaws noted in `CODE_REVIEW.md:34-38` are real: an early CI start on `opened` or `ready_for_review` can race ahead of GitHub's ruleset attaching `copilot-pull-request-reviewer` to `reviewRequests`, and anyone able to edit reviewers could remove Copilot mid-run to pass the job without a review.
+- **Token permissions and active-only semantics match GitHub's documented contract.** GitHub's REST API documentation specifies `Metadata: read` as the sole required permission for `GET /repos/{owner}/{repo}/rules/branches/{branch}` (on private repositories and forked pull requests alike), which every `GITHUB_TOKEN` receives alongside `pull-requests: read`. The endpoint also returns active rules from both repository and organization rulesets while excluding `evaluate` and `disabled` rulesets.
+- **Draft and `dependabot[bot]` ordering preserves `inv_78f19f51`'s invariants.** Keeping draft rejection first (0 `gh` calls) and Dependabot's strict commit/committer verification second (1 `commits` call, failing closed on mixed or ≥250-commit branches even before rules are applied) carries every Dependabot guarantee over unchanged.
+
+#### Findings
+
+##### P8-C01 · `should-fix` · `swerepo/templates/ci/job-copilot-review/2.yml:18-55` (design: `CODE_REVIEW.md:51, 88`)
+
+Interpolating `$BASE` unencoded into `repos/$REPOSITORY/rules/branches/$BASE` breaks on any base branch containing `/` (`404 Not Found`) and mis-parses `#` or `%` in valid git ref names.
+
+- **Failing scenario:**
+  Step 3 proposes `gh api "repos/$REPOSITORY/rules/branches/$BASE" --paginate ...` with `BASE: ${{ github.event.pull_request.base.ref }}`. In `GET /repos/{owner}/{repo}/rules/branches/{branch}`, `{branch}` is a single URL path segment:
+  1. **Slashes in branch names (`release/1.0`, `feat/parent`):** Unencoded `/` adds path segments (`.../rules/branches/release/1.0`), returning `404 Not Found` and failing `copilot-review` (and `ci-ok`) on every pull request targeting a `release/*` or stacked `feat/*` branch.
+  2. **Valid git ref characters with URL meaning (`#`, `%`):** `git check-ref-format --branch` allows `#` and `%` (for example `fix#12` or `100%`). `gh api` parses `#12` as a URL fragment and strips it before sending the request — querying `rules/branches/fix` instead of `rules/branches/fix#12` (which would skip the wait if a ruleset targets `refs/heads/fix#*` while `fix` has no rule) — and rejects or mis-decodes raw `%`.
+  Planned test #4 (`CODE_REVIEW.md:88`) uses `base.ref = "develop"`, which has no `/`, `#`, or `%`, so it wouldn't catch an unencoded `$BASE`.
+- **Recommendation:**
+  Require non-empty `BASE` (`[ -n "${BASE:-}" ]`) and URL-encode it as a single path segment with `jq` (already used by the job and test harness): `encoded_base=$(jq -rn --arg b "$BASE" '$b | @uri')`, then query `"repos/$REPOSITORY/rules/branches/$encoded_base"`. In the replacement SeamSpec test #4, test a branch containing `/` and `#` (e.g., `release/1.0` → `repos/acme/app/rules/branches/release%2F1.0` and `fix#1` → `repos/acme/app/rules/branches/fix%231`).
+- **Developer response (Claude):** **Fix.**
+  - **Checked read-only on this repository:**
+    - `gh api repos/swerepo/swerepo/rules/branches/fix#1` sends `GET …/rules/branches/fix`, cutting off the fragment as the finding says. `fix%231` is sent as written.
+    - GitHub decodes the path: `m%61in` returns `main`'s five rules. So an encoded name reaches GitHub as the branch it names.
+  - **One correction:** an unencoded `a/b` isn't a 404 here. It's `200 []`, the same answer as for a branch that doesn't exist. So the miss would pass silently, not fail, which makes the fix more important.
+  - **Design change:**
+    - The branch is encoded as one path segment with `jq -rn --arg b "$BRANCH" '$b | @uri'`, and an empty name fails at once.
+    - After P8-C03, the branch read is the repository's default branch, not the base.
+    - Test 4 uses `release/1.0` → `release%2F1.0` and `fix#1` → `fix%231`.
+  - **Not checked:** a slash in a branch that a ruleset actually covers, since no such branch exists here. The decoding check stands in for it.
+- **Reviewer (Gemini), round 2:** **Accept.** Failing on an empty branch name and URL-encoding with `jq`'s `@uri` prevents both `#` fragment truncation and the even more dangerous `200 []` silent pass on `/` branch names, and testing `release/1.0` and `fix#1` in Test 4 locks both cases.
+
+##### P8-C02 · `should-fix` · `swerepo/templates/ci/job-copilot-review/2.yml:51-54` (design: `CODE_REVIEW.md:53, 111`; also `SWEREPO-SPEC.md:518`, `swerepo/templates/ci/workflow/2.yml:125-128`)
+
+On a private repository on GitHub's Free plan, `GET /repos/{owner}/{repo}/rules/branches/{branch}` returns HTTP `403` (`"Upgrade to GitHub Pro..."`), so failing closed on every rules-read error turns every pull request red on Free private repositories.
+
+- **Failing scenario:**
+  On a private repository under GitHub Free (personal or free organization), `swerepo init --yes` writes `.github/swerepo/ruleset.json` with `copilot_code_review` and `.github/workflows/swerepo-ci.yml` with `copilot-review`, while `_github_apply` (`swerepo/init.py:1374-1377`) leaves the ruleset unapplied because `GET repos/<slug>/rulesets` fails. When a pull request opens there, GitHub's REST API rejects `GET /repos/{owner}/{repo}/rules/branches/{branch}` with HTTP `403 Forbidden` (`"Upgrade to GitHub Pro or make this repository public to enable this feature"`). Under step 3 (`"The read fails: the job fails at once"`), `copilot-review` and `ci-ok` fail on every pull request on every private Free-plan repository — even though no ruleset can be active on that plan and `SWEREPO-SPEC.md:518` / `dependency-review` (`swerepo/templates/ci/workflow/2.yml:125-128`) are designed not to break Free private repositories.
+- **Recommendation:**
+  Keep fail-closed (`exit 1`) for all other errors (`401`, `404`, `429`, `5xx`, network errors, permission `403`s), and carve out only GitHub's Free-plan ruleset restriction on private repositories: pass `PRIVATE: ${{ github.event.repository.private }}` in `env:`, capture stderr to a temp file when `gh api` exits non-zero (keeping stdout clean on success), and when `PRIVATE = "true"` and the error contains `"Upgrade to GitHub Pro"`, exit `0` with a clear message (`"Branch rulesets aren't enforced on this private repository's plan: nothing requests Copilot's review."`). That error cannot appear on any repository with an active ruleset (which must be public or on a paid plan). Cover both this `403` (`PRIVATE=true` passes; `PRIVATE=false` or any other `403` fails) in the replacement SeamSpec rule.
+- **Developer response (Claude):** **Fix, narrowed.**
+  - **Not reproduced.** Neither the owner's account nor the `swerepo` organization (on Free) lists a private repository, and I can't create one. GitHub's REST page documents only a 200 for this endpoint, and its rulesets page doesn't say plainly whether Free covers private repositories.
+  - **Weighing the two keys:**
+    - **Matching the error text fails closed.** If GitHub changes the text, the job turns red; it never skips the wait.
+    - **Keying on `private` fails open.** "Private plus any 403" would let a paid private repository whose read is refused for any reason pass without waiting. "Private plus no ruleset" needs a second read of the same plan-gated feature, so it can't tell "none" from "not allowed".
+  - **Design change:**
+    - `PRIVATE: ${{ github.event.repository.private }}` goes in the step's `env:` block.
+    - The rules read is a standalone assignment, with `gh`'s error kept in a temporary file.
+    - The job passes only when `PRIVATE` is `true`, `gh` reports `(HTTP 403)`, and the message holds "Upgrade to GitHub Pro". It says that rulesets aren't available on this repository's plan, so nothing requests Copilot's review. Every other failure fails at once.
+    - If GitHub instead answers a private Free repository with `200 []`, the empty list already passes and the exception never fires.
+  - **Before building:** the owner runs the read-only `gh api repos/<owner>/<repo>/rules/branches/<branch>` once on a private repository on Free, and the exact status and text go into the ADR.
+  - **Checked by the owner (2026-11-26):** on a throwaway private repository on GitHub Free (since deleted), `gh api repos/<owner>/<repo>/rules/branches/main` exits non-zero. Gemini's claim holds exactly.
+    - **On stdout:** the error body, `{"message": "Upgrade to GitHub Pro or make this repository public to enable this feature.", "documentation_url": "https://docs.github.com/rest/repos/rules#get-rules-for-a-branch", "status": "403"}`.
+    - **On stderr:** `gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)`.
+    - **For the design:**
+      - Because `gh` also writes the error body to stdout, the command substitution captures it into `rules`. The script branches on `status` before reading `rules`, which the standalone `status=0; rules=$(…) || status=$?` allows. It matches the stderr line, never the captured body.
+      - The run above had no `--jq`, so the job's own filtered call isn't checked against a failing response; branching on the exit status first covers either case.
+      - The fake `gh` in the replacement rule's test does the same as the real one: the body on stdout, `gh: … (HTTP 403)` on stderr, exit 1.
+      - The new ADR quotes this status and message.
+    - **Whose login (added after SeamSpec's reviewer):** The owner's check used their own `gh` login, not the token GitHub Actions gives the job (`GITHUB_TOKEN`). If GitHub words the answer differently for that token, the exact match fails the job: `ci-ok` turns red with `gh`'s own message, and the wait is never skipped. On GitHub Free a private repository's required checks aren't enforced, so there it is a red check to fix (by matching the token's wording, through a new ADR), not a blocked merge.
+- **Reviewer (Gemini), round 2:** **Accept.** Requiring all three of `PRIVATE=true`, `(HTTP 403)`, and `"Upgrade to GitHub Pro"` on `gh`'s stderr (`gh api` skips `--jq` on non-2xx and writes `gh: <message> (HTTP 403)` to stderr) fails closed on any auth/rate-limit `403` while handling both possible Free-plan responses (`403` plan message or `200 []`).
+
+##### P8-C03 · `should-fix` · `swerepo/templates/ci/workflow/2.yml:6-9`, `swerepo/templates/ci/job-copilot-review/2.yml:11-20` (design: `CODE_REVIEW.md:51, 60, 110`; also `swerepo/github.py:77`)
+
+Changing a pull request's base branch from an uncovered branch to `main` neither re-triggers `swerepo-ci.yml` nor updates `${{ github.event.pull_request.base.ref }}` on a manual `"Re-run all jobs"`, which breaks stacked-PR re-runs and opens a diff-free way around the wait.
+
+- **Failing scenario:**
+  `swerepo-ci.yml` (`swerepo/templates/ci/workflow/2.yml:6-8`) triggers on `types: [opened, synchronize, reopened, ready_for_review]` (no `edited`) across all target branches, and `swerepo/github.py:77` sets `strict_required_status_checks_policy: False`. GitHub attaches `pull_request` check runs (`ci-ok`) to `pull_request.head.sha`.
+  1. **Stacked PRs + manual re-run:** A developer opens `feat-2` targeting `feat-1`. Under B, `rules/branches/feat-1` has no `copilot_code_review` rule, so `copilot-review` and `ci-ok` pass on `feat-2`'s `head.sha`. When `feat-1` squash-merges into `main` (and is deleted), GitHub auto-retargets `feat-2`'s base to `main` (`edited` event — no new CI run). Even if the developer clicks **"Re-run all jobs"** in Actions, `${{ github.event.pull_request.base.ref }}` is frozen in the original event payload (`feat-1`), so `copilot-review` queries `rules/branches/feat-1` again and passes without waiting for Copilot on `main`.
+  2. **Deliberate retargeting vs `CODE_REVIEW.md:60`:** `CODE_REVIEW.md:60` argues B opens no new bypass because editing `swerepo-ci.yml` in the PR already skips jobs. Unlike editing `swerepo-ci.yml` — which fails `governance` (`pr.workflows` requires an ADR), requires `@code-owner` review on `/.github/` in `team` mode, and appears in `Files changed` — opening a PR against an uncovered branch (`copilot-review` now passes instead of timing out!) and running `gh pr edit <n> --base main` leaves `Files changed` clean and keeps `head.sha`'s green `ci-ok` (the same `pull_request`-without-`edited` limitation that already affects `governance` and `lint-gradual`).
+- **Recommendation:**
+  1. Have `copilot-review` read the pull request's live base branch (or read `repos/$REPOSITORY/pulls/$NUMBER` when `GITHUB_RUN_ATTEMPT > 1` / always, since `pull-requests: read` is already granted) so **"Re-run all jobs"** after a stacked-PR retarget evaluates `main` rather than the frozen payload's old `base.ref`. Decide this before coding since an unconditional `pulls/$NUMBER` read changes the `gh` call count in the SeamSpec rule.
+  2. Weigh whether retargeting without a new push stays a documented limitation alongside `governance` and `lint-gradual` (since adding `edited` to `swerepo-ci.yml` would re-run the full test matrix on every PR description checkbox click) and record that accurate trade-off in the ADR rather than equating it to editing `swerepo-ci.yml`.
+- **Developer response (Claude):** **Fix, with a different change than recommended, and part deferred to Phase 9.**
+  - **Checked in GitHub's documentation:**
+    - A re-run uses "the same `GITHUB_SHA` … and `GITHUB_REF`" as the original event. That `base.ref` stays frozen in the payload is my inference; the page doesn't say so.
+    - `pull_request` runs by default on `opened`, `synchronize` and `reopened`.
+    - That a base change arrives as `edited` comes only from a summary of the webhook page, not from text I read.
+
+    Both scenarios hold whatever those details are, because a retarget without a push starts no run at all.
+  - **Why not a live read:** reading `pulls/<n>` fixes the re-run, but not a retarget that nobody re-runs.
+  - **Design change: the condition stops depending on the base.**
+    - The job reads the rules of the repository's default branch (`DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}`). That's the branch SWERepo's ruleset targets (`~DEFAULT_BRANCH`, `swerepo/github.py`).
+    - The question becomes "is a ruleset that requests Copilot applied here?", which is exactly the gap.
+    - **Before the ruleset is applied,** every pull request passes: the setup pull request, stacked ones, and every pull request in a repository that never applies it.
+    - **After it's applied,** every pull request waits whatever its base, as today. A pull request opened against an uncovered branch can no longer pass and then be retargeted, and a frozen `base.ref` no longer matters.
+  - **The cost:**
+    - A stacked pull request into `feat-1` keeps today's behaviour: it waits for a review nothing requests. Its failure message names `gh pr edit <n> --add-reviewer @copilot`.
+    - Gemini's answer to question 1 valued not blocking such pull requests. That precision is traded for the closed bypass.
+  - **Also corrected:** "What it keeps" no longer equates this with editing the workflow.
+  - **Deferred to Phase 9** (protected `develop` and `release` branches): waits keyed to the base, and retargeting without a push (`edited`). `governance` and `lint-gradual` share the retargeting limitation.
+  - **Left as is, documented in the ADR:** if the default branch is renamed between a run and its re-run, the re-run reads the old name, which has no rules, and passes. Only an administrator can rename the default branch, and an administrator can bypass the ruleset anyway.
+- **Reviewer (Gemini), round 2:** **Accept.** Reading `repository.default_branch` instead of `base.ref` is a stronger fix for standard 1 (where SWERepo's ruleset targets `~DEFAULT_BRANCH`): it closes both the diff-free `--base` retarget bypass and the frozen-`base.ref` re-run issue while still honouring organization rulesets, and deferring per-base waits plus `edited` retargeting to Phase 9 alongside `governance` and `lint-gradual` is the right boundary.
+
+##### P8-C04 · `suggestion` · `.seamspec/tests/test_inv_78f19f51.py:84-105, 184-227` (design: `CODE_REVIEW.md:71-91, 97`)
+
+Three gaps in the planned replacement test for `inv_78f19f51` would let real bugs in the rules check slip past mutation testing.
+
+- **Failing scenario:**
+  1. **`copilot_code_review` at index `0` (`CODE_REVIEW.md:85`):** In SWERepo's real ruleset (`swerepo/github.py:72-81`), `copilot_code_review` is `rules[4]` (after `deletion`, `non_fast_forward`, `pull_request`, and `required_status_checks`), and `--paginate` across multiple rulesets outputs concatenated JSON arrays (`[...]\n[...]`). If the test's active-rules fixture puts `copilot_code_review` first in a single-element list, a bug using `.[0]` instead of `.[]` passes all 6 planned tests while treating every real `swerepo` ruleset as having no Copilot rule.
+  2. **Rules read placed inside the 40-attempt loop:** `test_inv_78f19f51.py:224` counts only `[c for c in _lines(...) if "/reviews" in c]`. If the `rules/branches/` call were accidentally placed inside `for attempt in $(seq 1 40)` (40 rules calls + 40 reviews calls), the 40-attempt timeout assertions on `/reviews` and `sleeps` would still pass.
+  3. **One-sided look-alike (`CODE_REVIEW.md:86`):** `copilot_code_review_x` catches `contains("copilot_code_review")`, but wouldn't catch `startswith("copilot")` or a raw text match (`grep copilot_code_review`) when `"copilot_code_review"` appears in a non-`type` field.
+- **Recommendation:**
+  In the replacement test: (1) put `copilot_code_review` after other rules in the default fixture (matching `swerepo/github.py:72-81`, ideally across two paginated arrays or multi-rule JSON); (2) assert `[c for c in calls if "/rules/branches/" in c]` has length `1` in both `first_review_at=2` and the 40-attempt timeout loop (and ensure the `gh api` rules call is a standalone assignment, never inside `if [ -z "$(gh api ...)" ]`, where bash suppresses `set -e`); and (3) include `"copilot_review"` and a non-`type` `"copilot_code_review"` field in the no-rule fixture.
+- **Developer response (Claude):** **Fix, all three.**
+  1. **Fixture order:** the default fixture puts `copilot_code_review` after `deletion`, `non_fast_forward`, `pull_request` and `required_status_checks`, as `swerepo/github.py:72-81` orders them, split across two pages. The fake `gh` applies the job's `--jq` filter to each page, as `--paginate` does.
+  2. **Exactly one rules read:** the test asserts exactly one `/rules/branches/` call in the case where the review arrives on the second ask and in every 40-ask case. In the script, the read is a standalone assignment (`status=0; rules=$(gh api … 2>"$err") || status=$?`), never inside a test where bash suspends `set -e`.
+  3. **Look-alikes:** the no-rule fixture holds `copilot_review`, `copilot_code_review_x`, and `copilot_code_review` as the value of a field other than `type`.
+
+  The planned breakages gain `.[0]` in place of `.[]`, the read moved inside the loop, `startswith("copilot")`, and a text match on the raw output.
+- **Reviewer (Gemini), round 2:** **Accept.** Splitting the five rules across two pages, asserting a single `/rules/branches/` call, using a standalone `status=0; rules=$(...) || status=$?` assignment (with `mktemp` rather than `$RUNNER_TEMP`, which is unset in local pytest), and adding both prefix and non-`type` look-alikes covers every mutation case.
+
+##### P8-C05 · `suggestion` · `swerepo/cli.py:274-275, 288-289, 391-405` (design: `CODE_REVIEW.md:62-66, 103-106`)
+
+Updating only `HELD_NEXT` misses terminal runs where the person declines applying the ruleset (and `gh` logged-out runs), prints even under `--no-copilot-review`, and the docs plan omits `ADR-20261123-cc8d` and `SWEREPO-SPEC.md` Appendix A.
+
+- **Failing scenario:**
+  1. **Terminal `no` and logged-out `gh` (`swerepo/cli.py:288-289, 392-398`):** `HELD_NEXT` runs only when `plan.github_held` is `True` (`init --yes` without `--apply-github`). When someone runs `swerepo init` in a terminal and answers `n` to applying the ruleset — the exact flow on the established repository (`CODE_REVIEW.md:16`) — `ctx.apply_github` was `True`, so `plan.github_held` is `False` and the person never sees the new Copilot note (nor do they when `gh` is logged out at lines 395-398).
+  2. **`--no-copilot-review`:** Running `swerepo init --no-copilot-review --yes` sets `plan.github_held = True` for the ruleset and merge settings while writing no `copilot-review` job; an unconditional sentence in `HELD_NEXT` about `copilot-review` passing without waiting contradicts `--no-copilot-review`.
+  3. **ADR and spec cross-references (`CODE_REVIEW.md:104-106`):** `docs/adr/ADR-20261123-cc8d-dependency-bots.md:7,50` also names `inv_78f19f51` (which superseded `inv_faa5bef5`), and `SWEREPO-SPEC.md` v0.18 needs an `Appendix A` (`### 0.17 → 0.18`) entry alongside `§6.2` and `§12`.
+- **Recommendation:**
+  Print the Copilot-before-ruleset note whenever the `github` ruleset remains unapplied (`plan.github_held`, terminal `no` on `"ruleset"` in `_apply_github`, or `github_waits and plan.github_remote`) **and** Copilot review is enabled for the repository. Also reference `ADR-20261123-cc8d` alongside `ADR-20261123-a359` in the new ADR and add `0.17 → 0.18` to `SWEREPO-SPEC.md` Appendix A.
+- **Developer response (Claude):** **Fix.**
+  - **When the note prints:** the Copilot note prints whenever `init` leaves the ruleset unapplied and the committed ruleset requests Copilot. That covers three branches:
+    - the `plan.github_held` branch;
+    - `gh` missing or logged out (`github_waits and plan.github_remote`);
+    - a terminal "no" to the ruleset in `_apply_github` (`swerepo/cli.py:279-290`).
+
+    It never prints under `--no-copilot-review` or with a committed ruleset without Copilot. It also doesn't print where there's no GitHub repository yet: no pull request can run until the settings step after the push.
+  - **ADR and spec:** the new ADR amends ADR-20261123-cc8d as well as ADR-20261123-a359, and names the rule replacing `inv_78f19f51`. Both ADRs gain an "Amended by" line in their Consequences. `SWEREPO-SPEC.md` gains `### 0.17 → 0.18` in Appendix A.
+  - **Tests:** one test per branch shows the note, and `--no-copilot-review` shows none.
+- **Reviewer (Gemini), round 2:** **Accept.** Covering `plan.github_held` (in `update` at `swerepo/cli.py:497-498` too, if `HELD_NEXT` is shared), logged-out `gh`, and terminal `"no"` on `"ruleset"` gated on Copilot review being enabled — plus amending `ADR-20261123-cc8d` and adding `SWEREPO-SPEC.md` Appendix A `0.17 → 0.18` — resolves every part of `P8-C05`.
+
+#### Answers to questions for the reviewer
+
+1. **B's condition (`rules/branches/<base>` vs the `swerepo` ruleset by name):** Checking active `copilot_code_review` rules on `<base>` via `repos/<repo>/rules/branches/<base>` is the right test — it honours organization rulesets automatically, ignores `evaluate` and `disabled` rulesets, and doesn't block PRs targeting branches where GitHub won't auto-request Copilot, provided `<base>` is URL-encoded (`P8-C01`) and live `base.ref` / retargeting is handled (`P8-C03`).
+2. **A failed rules read:** Fail at once (`exit 1`), **except** for GitHub's Free-plan private-repository `403` (`"Upgrade to GitHub Pro..."`), which should pass at once with an explanation (`P8-C02`). Falling back to a 20-minute wait on general API errors would hide auth/endpoint bugs behind timeouts, whereas `Metadata: read` is already guaranteed for `GITHUB_TOKEN` on paid private and all public repositories.
+3. **Order (Draft → Dependabot → rules → wait):** Yes — keeping Dependabot's strict commit/committer check ahead of the rules read is right. A mixed human+Dependabot branch shouldn't pass before ruleset application only to start failing afterwards, and keeping it second preserves every `inv_78f19f51` Dependabot guarantee and single-call count untouched.
+4. **Is the supersede complete?** Almost — every existing promise of `inv_78f19f51` carries over, and adding URL-encoded `<base>` (`P8-C01`), the private Free-plan `403` case (`P8-C02`), live `base.ref` if adopted (`P8-C03`), and the multi-rule / single-rules-call / look-alike assertions (`P8-C04`) makes the replacement airtight.
+5. **Is A or C ever better than B?** **C** is never better (it needs a second PR after applying settings and drifts if GitHub rulesets change). **A** is preferable only in one niche: a repository whose owner cannot or won't use GitHub rulesets (for instance no admin permission or a private Free repo) *and* still wants CI to fail whenever an author forgets `gh pr edit <n> --add-reviewer @copilot`. That shouldn't be the default because it breaks every setup PR and every repo that declines rulesets; with B + A's `gh pr edit` hint (noting that CI won't wait for a manual request until a ruleset is active), the default works out of the box.
+
+---
+
+**Verdict:** Design direction approved (Option B + A's hint), with 0 blockers, 3 `should-fix` (`P8-C01` to `P8-C03`), and 2 `suggestion` (`P8-C04`, `P8-C05`) to fold in before building.
+
+**Developer (Claude), round 1:**
+- `P8-C01` · **Fix:** the branch name is encoded as one path segment with `jq`'s `@uri`, and an empty one fails. Checked read-only: `gh` drops everything after `#`, and GitHub decodes `%`-encoded names. An unencoded `a/b` returns `200 []`, so the miss would have passed silently.
+- `P8-C02` · **Fix, narrowed:** the job passes only on a private repository whose read fails with an HTTP 403 saying "Upgrade to GitHub Pro". Every other failure still fails. Not reproduced (no private repository on Free to try, and GitHub doesn't document the answer), so the owner checks it once before building. If GitHub answers `200 []` instead, the empty list already passes.
+- `P8-C03` · **Fix, with a different change:** the job reads the default branch's rules, not the base's. That closes the retarget route and makes a frozen `base.ref` irrelevant. Stacked pull requests keep today's wait once the ruleset is applied. Waits keyed to the base, and retargeting without a push, are deferred to Phase 9.
+- `P8-C04` · **Fix:** the rule sits among other rules across two pages, exactly one rules read is asserted, look-alikes are added, and the read is a standalone assignment.
+- `P8-C05` · **Fix:** the next-steps sentence shows wherever the ruleset is left unapplied with Copilot review on, and never under `--no-copilot-review`. cc8d is amended too, and Appendix A gets its entry.
+
+The design sections above now include these changes. P8-C03's change goes against Gemini's answer to question 1, which valued not blocking pull requests into branches no ruleset covers. Still design only: waiting for Gemini's Accept or Maintain on each finding.
+
+---
+
+### Review (round 2)
+
+**Verdict:** Ready to build — `P8-C01` to `P8-C05` are all accepted (once the owner runs the one read-only Free-plan check noted in `P8-C02`).
+
+#### New findings
+
+None.
+
+---
+
+### Developer summary (build, for review)
+
+Built as designed and accepted in round 2, after the owner's go-ahead (2026-11-26). Nothing is committed yet. Branch `phase-8/copilot-wait-setup-pr`.
+
+#### Where each change is
+
+| Finding / part | Where |
+|---|---|
+| The rules read, once, after the draft and Dependabot checks | `swerepo/templates/ci/job-copilot-review/2.yml:54-80`, changed in place (no `v*` tag yet). `DEFAULT_BRANCH` and `PRIVATE` come through `env:` (lines 20-21). |
+| `P8-C01`: the branch as one path segment, and an empty name failing | the same file, the `jq -rn --arg b "$DEFAULT_BRANCH" '$b \| @uri'` line, and the empty-name check before it |
+| `P8-C02`: GitHub Free's 403 on a private repository | the same file, lines 70-71. It branches on the exit status first, then passes only when `PRIVATE` is `true` and the whole of `gh`'s stderr is exactly `gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)`, compared as a string. Every other failure prints `gh`'s error and fails. This was tightened after SeamSpec's reviewer: the first version matched a pattern. |
+| `P8-C03`: the default branch, never the base | the job reads `github.event.repository.default_branch`. `pull_request.base` appears nowhere in it. |
+| `P8-C04`: a standalone read, outside the loop | `status=0; rules=$(gh api … 2>"$err") \|\| status=$?`, before `for attempt` (line 81) |
+| `P8-C05`: the note | `swerepo/cli.py:278-295` (`COPILOT_NOTE`, `_copilot_note`). `_apply_github` now also returns whether the person said no to the ruleset (line 298). The note prints after `init`'s next steps (line 428) and `update`'s (line 523). `swerepo/init.py:115, 1387-1388` (`Plan.copilot_unrequested`): the committed ruleset requests Copilot and GitHub's `swerepo` ruleset doesn't. |
+| A's command in the messages | the job's pass and failure messages name `gh pr edit <number> --add-reviewer @copilot`. |
+| This repository | `.github/workflows/swerepo-ci.yml`, rewritten by `swerepo update --yes --only ci`, unchanged since SWERepo wrote it. Only the job's lines differ, and `.swerepo.toml` records the new fingerprint. |
+| Docs | ADR-20261126-c228 (ACCEPTED; it quotes the owner's 403 check), "Amended by" in ADR-20261123-a359 and ADR-20261123-cc8d, `SWEREPO-SPEC.md` v0.18 (§6.2, §12, Appendix A), `CHANGELOG.md`, `docs/progress/20261126-copilot-wait-before-ruleset.md` |
+
+#### Tests
+
+`tests/test_copilot_wait.py` has 20 tests (25 with the parameters).
+
+**The note:**
+- shown when the ruleset is held for `--apply-github`, by `init` and by `update`;
+- shown after a terminal "no" to the ruleset;
+- shown with `gh` logged out;
+- not shown after a terminal "yes" to the ruleset, or with `--yes --apply-github`;
+- never shown with `--no-copilot-review`, with or without `gh` logged in;
+- not shown before a GitHub repository exists;
+- not shown when GitHub's ruleset already requests Copilot and only the merge settings are held.
+
+**The job,** run as written with bash, jq and a fake `gh` that writes a failure's body on stdout and `gh: … (HTTP …)` on stderr, as the owner's check showed:
+- the values come through `env:`, nothing reads `pull_request.base`, and permissions stay `pull-requests: read`;
+- no rule, `[]`, and look-alikes each pass with one rules read;
+- Copilot's rule last on a second page waits 40 times, or passes once Copilot has reviewed, with one rules read;
+- `main`, `release/1.0`, `fix#1` and `100%` are encoded; an empty name fails asking nothing;
+- six failed reads: only the Free-plan 403 on a private repository passes;
+- drafts and Dependabot never read the rules.
+
+#### SeamSpec
+
+**`inv_b5d32550` (critical, proposed)** replaces `inv_78f19f51`, and the supersede is requested. `seamspec verify --proposed inv_b5d32550` passes. Its test is `inv_78f19f51`'s with every check kept, plus:
+- the two new `env:` values;
+- a fake `gh` that answers the rules page by page and fails as the real one does;
+- exactly one rules read, outside the loop, in the case where the review arrives on the second ask and in every 40-ask case;
+- Dependabot never reading the rules;
+- the no-rule pass for people, Renovate and a coding agent (look-alikes, another case, and the name in another field included);
+- the encoded names;
+- seven failed reads.
+
+**Until the owner approves the swap in `seamspec review`,** `inv_78f19f51` fails: its `_job_env` doesn't know `DEFAULT_BRANCH` and `PRIVATE`. That is expected, and its test isn't edited.
+
+#### Broken on purpose
+
+Each was run against `tests/test_copilot_wait.py`, and for the job also against `inv_b5d32550`'s test: **19 breakages, all caught.**
+- **The job (14, caught by both test files):**
+  - `.[0]` in place of `.[]`;
+  - the read moved inside the loop;
+  - `startswith("copilot")`, `contains`, or a text match on the raw output;
+  - the base read through `env:`, or the branch's expression inside the script;
+  - a non-failing read;
+  - an unencoded branch;
+  - the read dropped;
+  - the read before Dependabot's checks;
+  - the empty-name check dropped;
+  - any 403 passing;
+  - the exception on public repositories too.
+- **The note (5):** the terminal "no" missed; the logged-out path missed; the `update` path missed; GitHub's live Copilot rule ignored; the `ci_copilot_review` check dropped. The last one was first missed: under `--no-copilot-review` the note was only kept off by `copilot_unrequested`, until a test with `gh` logged out covered it.
+
+#### Checks
+
+- **Tests:** `uv run pytest` passes, 860 tests, and again with `GITHUB_ACTIONS=true`.
+- **Lint:** `uv run ruff check .` and `uv run ruff format --check .` are clean (one line of `swerepo/cli.py` reformatted).
+- **Workflows:** `uvx zizmor==1.32.0 --offline .github/workflows` reports nothing.
+- **Privacy:** `uv run swerepo privacy` finds nothing.
+- **`uv run swerepo check --ci --base main`** exits 0. Two warnings: the proposal waiting for review, and `seamspec doctor`'s note that 20 rules are marked critical, which was there before.
+- **`uv run seamspec verify --all`:** every locked rule passes but `inv_78f19f51` (2 of its cases), as expected until the owner approves the swap to `inv_b5d32550`. `seamspec verify --proposed inv_b5d32550` passes.
+
+#### Questions for the reviewer
+
+1. `_apply_github` now returns a tuple, to tell a "no" to the ruleset apart from a "no" to the settings. Is that cleaner than recording it on the plan?
+2. The note reads `.swerepo.toml` after applying (`ci_copilot_review`) to know whether the workflow waits. Is there a case where that record and the written workflow disagree?
+
+Waiting for Gemini's code review.
+
+---
+
+### Review (round 3: code)
+
+#### Strengths
+
+- **`swerepo/templates/ci/job-copilot-review/2.yml` is tight and fail-closed on every error path.** Drafts still fail first with zero `gh` calls, `dependabot[bot]` still runs its single-call commit/committer check second without touching branch rules, empty `DEFAULT_BRANCH` fails immediately, `jq -rn --arg b "$DEFAULT_BRANCH" '$b | @uri'` encodes `/`, `#`, and `%` cleanly, `status=0; rules=$(gh api … 2>"$err") || status=$?` avoids bash `set -e` suppression while keeping stderr out of `$rules` and discarding non-2xx error JSON before `[ -z "$rules" ]`, and `^gh: Upgrade to GitHub Pro.*\(HTTP 403\)$` with `PRIVATE=true` matches the owner's verified GitHub Free output (`ADR-20261126-c228` point 4) without opening any other `403`.
+- **`inv_b5d32550` preserves every check of `inv_78f19f51` and matches its assertion clause for clause.** Checked line by line against `.seamspec/invariants/inv_78f19f51.json` and `.seamspec/tests/test_inv_78f19f51.py`: all trigger, permission, `later=False/True`, draft, 7-case Dependabot, reviewer look-alike, 40-ask/40-sleep, `ci-ok`, `--no-copilot-review`, and committed-ruleset checks remain intact, while adding the two-page five-rule `APPLIED` fixture, single-rules-read assertions, rule-type look-alikes (`NONE_REQUESTS`), `@uri` path encoding (`release/1.0`, `fix#1`, `100%`, `""`), and seven failed-read cases.
+- **Repository dogfooding, tests, spec v0.18, ADRs, and changelog are completely aligned.** `.github/workflows/swerepo-ci.yml` differs from `main` only by the `copilot-review` fragment (with `.swerepo.toml`'s `rendered` and `written` fingerprints matching), `tests/test_copilot_wait.py` covers all 25 parameterized cases cleanly, and `SWEREPO-SPEC.md` (`§6.2`, `§12`, Appendix A `0.17 → 0.18`), `ADR-20261126-c228`, the `"Amended by"` lines in `ADR-20261123-a359` and `ADR-20261123-cc8d`, `docs/adr/README.md`, `CHANGELOG.md`, and `docs/progress/20261126-copilot-wait-before-ruleset.md` all match the code.
+
+#### Answers to questions for the reviewer
+
+1. **`_apply_github` returning `(lines, declined)` vs recording on `Plan`:** Returning `(lines, declined)` is cleaner. `Plan` captures what `make_plan` computed before applying, whereas `declined` is an interactive choice made after `apply(plan, path)` has already run; keeping post-apply prompt answers as return values avoids mutating `Plan` during execution.
+2. **Can `state.values.get("ci_copilot_review")` disagree with `.github/workflows/swerepo-ci.yml`?** Only if the user hand-edited `.github/workflows/swerepo-ci.yml` to remove or add `copilot-review` (or deleted the workflow) after SWERepo recorded it, which `swerepo check` already flags under `ci.copilot-review`. Across every SWERepo-managed flow — including `init --only github` without `ci` (`ci_copilot_review` unset) and `init --only github --no-copilot-review` when a user-edited `swerepo-ci.yml` is kept (`ci_result.written` is `False` at `swerepo/init.py:1890`, so `ci_copilot_review` stays `"true"`, matching the kept workflow on disk) — `ci_copilot_review` agrees with the workflow on disk.
+
+#### Findings
+
+##### P8-C06 · `suggestion` · `swerepo/templates/ci/job-copilot-review/2.yml:62-75` (also `.github/workflows/swerepo-ci.yml:225-238`)
+
+`err=$(mktemp)` is never removed when the step exits, leaving temporary files behind in the host's `TMPDIR` whenever the step runs in `pytest` or `seamspec verify`.
+
+- **Failing scenario:**
+  Line 62 creates `err=$(mktemp)` before calling `gh api`, and lines 70, 73, 79, 87, and 94 exit without removing `$err`. On ephemeral GitHub runners the VM is discarded, but locally `tests/test_copilot_wait.py` and `.seamspec/proposed/inv_b5d32550/test_inv_b5d32550.py` execute `_script(job)` directly in `bash` without overriding `TMPDIR`, leaking dozens of `tmp.*` files into the machine's system temporary directory on every `pytest` and `seamspec verify --all` run.
+- **Recommendation:**
+  Add `trap 'rm -f "$err"' EXIT` immediately after `err=$(mktemp)` in `swerepo/templates/ci/job-copilot-review/2.yml:62` (and refresh `.github/workflows/swerepo-ci.yml` via `swerepo update --yes --only ci`), or set `TMPDIR` to `folder` inside the test harnesses alongside cleaning up `$err` right after line 74.
+- **Developer response (Claude):** **Fix.**
+  - **Confirmed:** `$err` was never removed. Each local run of the job left one file in the system's temporary folder.
+  - **The fix:** `trap 'rm -f "$err"' EXIT` right after `err=$(mktemp)` (`swerepo/templates/ci/job-copilot-review/2.yml:63`).
+    - Every way out keeps its exit status: the passes (no rule, Free plan, Copilot reviewed), the failed read, and the wait running out. A trap without its own `exit` doesn't change the status.
+    - Draft and Dependabot leave before the file exists.
+    - This repository's `swerepo-ci.yml` was refreshed with `swerepo update --yes --only ci`.
+  - **The test:** `tests/test_copilot_wait.py::TestTheJob::test_no_temporary_file_is_left_behind` runs those five ways out with `TMPDIR` set to a test folder, checking each exit status and that the folder is empty after.
+    - macOS's own `mktemp` ignores `TMPDIR` when called without a template, while GNU's on the runners honours it. So the test puts a `mktemp` on `PATH` that makes its file in that folder. Without it, the first breakage below wasn't caught here.
+  - **Broken on purpose, all caught:** the trap dropped, a trap that removes nothing, and a trap that ends in `exit 0` and swallows the status.
+  - **The proposed rule:** `inv_b5d32550`'s test reads the rendered job and needs no change. `seamspec verify --proposed inv_b5d32550` still passes.
+  - **Left alone:** the files earlier local runs left behind can't be told apart from other programs' files, so I didn't delete any.
+
+##### P8-C07 · `suggestion` · `swerepo/init.py:1387-1388`
+
+`live_copilot` checks whether GitHub's `swerepo` ruleset contains a `copilot_code_review` rule without checking whether that ruleset is `"active"`, suppressing `COPILOT_NOTE` when the live ruleset is `"disabled"` or `"evaluate"`.
+
+- **Failing scenario:**
+  Suppose GitHub already has a `swerepo` ruleset with `"type": "copilot_code_review"`, `"enforcement": "disabled"` (or `"evaluate"`). Running `swerepo init --only github --yes` sees `"enforcement"` differs and holds the ruleset (`plan.github_held = True`). Because `github.has_copilot_review(live_ruleset)` (`swerepo/github.py:142-145`) inspects only `rules` and not `enforcement`, `live_copilot` at `swerepo/init.py:1387` is `True` and `plan.copilot_unrequested` becomes `False` — suppressing `COPILOT_NOTE` even though GitHub's `/rules/branches/<default>` ignores non-active rulesets and `copilot-review` in CI will pass without waiting until the active ruleset is applied.
+- **Recommendation:**
+  Require `live_ruleset.get("enforcement") == "active"` in `swerepo/init.py:1387` (`live_copilot = isinstance(live_ruleset, dict) and live_ruleset.get("enforcement") == "active" and github.has_copilot_review(live_ruleset)`).
+- **Developer response (Claude):** **Fix.**
+  - **Confirmed:** `github.has_copilot_review` reads only `rules`, so a disabled or evaluate-only `swerepo` ruleset with Copilot's rule kept the note off, while the job, which reads only active rules, wouldn't wait.
+  - **The fix:** `swerepo/init.py:1388-1389`. The live ruleset counts only when its `enforcement` is `active`.
+  - **The test:** `test_only_an_active_ruleset_on_github_requests_copilot` covers `disabled` and `evaluate`, where the note shows, and `active`, where it doesn't.
+  - **Broken on purpose, both caught:** the check dropped, and `!= "evaluate"` in place of `== "active"`.
+
+---
+
+**Verdict:** Approved with two small `suggestion`s (`P8-C06`, `P8-C07`) — 0 blockers, 0 `should-fix`.
+
+**Developer (Claude), round 3:**
+- `P8-C06` · **Fix:** the step removes its temporary file on every way out, with its exit status kept, and this repository's workflow is refreshed through `update`. The test checks five ways out with a `mktemp` that writes to a test folder (macOS's own ignores `TMPDIR`). Three breakages, all caught.
+- `P8-C07` · **Fix:** a live `swerepo` ruleset counts as requesting Copilot only while it is `active`. Tested for `disabled`, `evaluate` and `active`. Two breakages, both caught.
+- **Answers taken:** `_apply_github` keeps returning `(lines, declined)`, and nothing else changed.
+- **Checks:** `uv run pytest` passes 864 tests, also with `GITHUB_ACTIONS=true`. ruff check and format are clean, zizmor reports nothing, and `swerepo privacy` finds nothing. `swerepo check --ci --base main` exits 0, with the same two warnings (the proposal waiting, and `seamspec doctor`'s note on critical rules). `seamspec verify --all` fails only on `inv_78f19f51` (2 cases), as expected until the swap; `verify --proposed inv_b5d32550` passes.
+- Nothing committed. Waiting for Gemini's Accept, the owner's approval of `inv_b5d32550` in `seamspec review`, and the owner's go-ahead to commit.
+
+**Developer (Claude), after SeamSpec's reviewer (2026-11-26):**
+- **The finding:** the Free-plan exception was looser than the rule and the ADR said. It accepted any stderr line matching `^gh: Upgrade to GitHub Pro.*\(HTTP 403\)$`, and no test told the two apart.
+- **The fix:** the whole of `gh`'s stderr must equal the line the owner saw (`swerepo/templates/ci/job-copilot-review/2.yml:70-71`).
+  - **Why not `grep -Fxq`:** it would still pass that line printed beside another line. The owner's check showed stderr holding that one line only, and anything else is a different answer.
+  - **Trailing newlines** are dropped by `$(cat …)`, so the line with or without its final newline is the same answer.
+  - This repository's `swerepo-ci.yml` was refreshed with `swerepo update --yes --only ci`.
+- **The tests:** six near variants added to `tests/test_copilot_wait.py` and to `inv_b5d32550`'s test, each failing:
+  - another "Upgrade to GitHub Pro" message;
+  - more text before the status;
+  - more text after it;
+  - the line followed by another line;
+  - the line after another line;
+  - the line in lower case.
+
+  The exact line on a private repository still passes.
+- **Broken on purpose:** the old pattern fails four cases in each test file, and `grep -Fxq` fails the two with another line.
+- **The rule:** `inv_b5d32550` is re-proposed under the same id. Its assertion now says "exactly this message as the whole of its stderr" and lists what fails. `seamspec verify --proposed inv_b5d32550` passes, and the supersede request stands.
+- **Docs:** ADR-20261126-c228 point 4, spec §6.2 and Appendix A, and the progress entry say the same: the exact message only, so any change in GitHub's text fails the job.
+- **Checks:** `uv run pytest` passes 870 tests, also with `GITHUB_ACTIONS=true`. ruff check and format are clean, zizmor reports nothing, and `swerepo privacy` finds nothing. `swerepo check --ci --base main` exits 0, with the same two warnings. `seamspec verify --all` fails only on `inv_78f19f51` (2 cases), as expected until the swap; `verify --proposed inv_b5d32550` passes.
+
+**Review status:** closed.

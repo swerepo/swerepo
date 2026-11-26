@@ -41,3 +41,4 @@ GitHub's `copilot_code_review` rule (`review_on_push: false`) reviews a pull req
 - A pull request's CI takes as long as Copilot's review, usually a few minutes. The 20-minute limit makes a missing review a visible failure, not a hang.
 - Later pushes to the same pull request pass the job at once.
 - *Amended by ADR-20261123-cc8d:* pull requests opened by Dependabot (`dependabot[bot]`) with only its own commits pass at once. GitHub never requests Copilot's review for them, so they would otherwise always fail.
+- *Amended by ADR-20261126-c228:* the job reads the default branch's rules once and passes at once while no active `copilot_code_review` rule is there (the ruleset not applied yet, or a private repository on GitHub Free), so the pull request that adds SWERepo doesn't wait for a review nothing requested. Once a rule is there, every pull request waits as before.

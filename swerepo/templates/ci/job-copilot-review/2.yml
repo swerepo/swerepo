@@ -1,6 +1,7 @@
   # Merges wait for Copilot's review of the pull request, of any commit (ADR-20261123-a359): asked every 30
   # seconds for up to 20 minutes; a later push passes at once. Re-run the job if the review came later.
   # Dependabot's own pull requests don't wait: GitHub never requests Copilot for them (ADR-20261123-cc8d).
+  # Nor does any pull request while no ruleset on the default branch requests Copilot (ADR-20261126-c228).
   copilot-review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -16,6 +17,8 @@
           DRAFT: ${{ github.event.pull_request.draft }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PRIVATE: ${{ github.event.repository.private }}
         run: |
           set -euo pipefail  # a failing gh call stops the job with its own error, not a 20-minute wait
           if [ "${DRAFT:-false}" = "true" ]; then
@@ -48,6 +51,36 @@
               exit 1
               ;;
           esac
+          # GitHub requests Copilot's review only through an active `copilot_code_review` rule. Read the default
+          # branch's rules once, whatever the pull request's base, so retargeting can't skip the wait: no such rule
+          # (the ruleset isn't applied yet), nothing to wait for (ADR-20261126-c228).
+          if [ -z "${DEFAULT_BRANCH:-}" ]; then
+            echo "GitHub gave no default branch: can't tell whether a ruleset requests Copilot's review."
+            exit 1
+          fi
+          branch=$(jq -rn --arg b "$DEFAULT_BRANCH" '$b | @uri')  # one path segment: release/1.0, fix#1
+          err=$(mktemp)
+          trap 'rm -f "$err"' EXIT  # every way out removes it, keeping the step's exit status
+          status=0
+          rules=$(gh api "repos/$REPOSITORY/rules/branches/$branch" --paginate \
+            --jq '.[] | select(.type == "copilot_code_review") | .ruleset_id' 2>"$err") || status=$?
+          if [ "$status" -ne 0 ]; then
+            # A private repository on GitHub Free has no rulesets, so nothing requests Copilot. gh's stderr must be
+            # exactly the one line GitHub gave there (ADR-20261126-c228): any other text fails, never skipping a wait.
+            free="gh: Upgrade to GitHub Pro or make this repository public to enable this feature. (HTTP 403)"
+            if [ "${PRIVATE:-}" = "true" ] && [ "$(cat "$err")" = "$free" ]; then
+              echo "Rulesets aren't available on this private repository's plan: nothing requests Copilot's review."
+              exit 0
+            fi
+            cat "$err" >&2
+            exit "$status"
+          fi
+          if [ -z "$rules" ]; then
+            echo "Nothing requests Copilot's review on $DEFAULT_BRANCH yet: the ruleset isn't applied. This job waits"
+            echo "once it is (swerepo init --only github --apply-github). To have Copilot review this pull request"
+            echo "anyway: gh pr edit $NUMBER --add-reviewer @copilot"
+            exit 0
+          fi
           for attempt in $(seq 1 40); do
             # one line per review by Copilot, on any page of the list
             reviewed=$(gh api "repos/$REPOSITORY/pulls/$NUMBER/reviews" --paginate \
@@ -59,5 +92,6 @@
             echo "Waiting for Copilot's review ($attempt of 40)."
             sleep 30
           done
-          echo "No review from Copilot after 20 minutes: request it from the Reviewers box, then re-run this job."
+          echo "No review from Copilot after 20 minutes: request it (gh pr edit $NUMBER --add-reviewer @copilot, or the"
+          echo "Reviewers box), then re-run this job."
           exit 1

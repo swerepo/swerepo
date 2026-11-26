@@ -55,3 +55,4 @@ The owner's decisions, 2026-11-23:
 - Dependabot's pull requests can merge once their checks pass and the owner merges them. #12–#14 need their CI re-run once this is on `main`.
 - Updates arrive a week after release. Security updates, if turned on, still come as soon as a fix exists.
 - Dependabot's changes to the workflows SWERepo manages make those files "changed by you". `update` (Phase 6) merges them with template changes three ways.
+- *Amended by ADR-20261126-c228:* `inv_78f19f51` is to be replaced by a rule that keeps all of it and adds the read of the default branch's rules, which comes after Dependabot's checks: Dependabot's pull requests are decided exactly as here, and never read the rules.
