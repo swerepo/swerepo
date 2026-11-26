@@ -339,7 +339,8 @@ def pytest_testpaths(root: Path, folder: str = ".") -> list[str] | None:
                 return _paths(parser.get(section, "testpaths", fallback=""))
         except (configparser.Error, UnicodeDecodeError):
             return None
-    pytest = _tool(_own_pyproject(base), "pytest")
+    # the whole file: pytest reads SWERepo's block too, `testpaths` a person added there included (PR #23 review)
+    pytest = _tool(_whole_pyproject(base), "pytest")
     if isinstance(pytest, dict) and isinstance(pytest.get("ini_options"), dict):
         found = pytest["ini_options"].get("testpaths")
         if isinstance(found, list):

@@ -63,7 +63,8 @@ The owner decided on 2026-11-25: gradual ruff for a codebase never linted, and a
      - a repeated name counts once, and an empty list or `none` with other names is wrong usage, also at the terminal question;
      - a dropped editor's file stays and is the person's now: its record goes on the next `agents` run, and `check` doesn't miss it meanwhile;
      - choosing it again manages its block again when the block is as SWERepo wrote it;
-     - an added non-Claude editor (beyond those recorded, or detected when none are) runs `seamspec init` again where SeamSpec is set up and in the run.
+     - an added non-Claude editor runs `seamspec init` again where SeamSpec is set up and in the run. What it set up is recorded under `[seamspec] hosts` only once it succeeds (before that, the editors recorded or detected), so an editor added while it waits is still set up later (Copilot on PR #23).
+   - **Refreshed values follow their file:** `[values] commands` and `test_inline` move on only when the agents' file naming them (`AGENTS.md`'s block, `prepare-pr.md`) takes the new render, so a kept edit still shows the commands as stale (Copilot on PR #23).
    - **The `AGENTS.md` tools note** comes only for a project `uv sync` installs, for the tools its commands run through `uv run` (a Makefile target or Poetry runs its own), and once: it is added after every component is planned, unless `ci` already said it.
 
 **Alternatives considered:**

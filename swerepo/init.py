@@ -47,6 +47,9 @@ RECORDED_VALUES = ("project", "adr_dir", "progress_dir", "commands", "test_inlin
 # What `update` takes from the project as it is now, not from `[values]`: each record keeps the values its own render
 # used, so moving these on never loses an earlier render (ADR-20261124-7afa point 10).
 REFRESHED_VALUES = ("commands", "test_inline")
+# The file each refreshed value is rendered into: the value moves on only when that file takes the new render, so a
+# person's kept edits still show as stale commands (PR #23 review)
+REFRESHED_IN = {"commands": "AGENTS.md", "test_inline": "docs/agents/prepare-pr.md"}
 SPEC_NAMED_BY = ("docs", "agents", "github")  # components whose files name the spec (ADR-20261124-4d76)
 DEPENDENCY_GRAPH_NOTE = "dependency-review needs GitHub's dependency graph turned on (Settings → Advanced Security)"
 
@@ -112,6 +115,7 @@ class Plan:
     # person's terminal; the hygiene rules to propose; those to ask about adopting, with the locked rules to offer;
     # and whether to write the earned spec
     seamspec_run: list[str] | None = None
+    seamspec_hosts: list[str] = field(default_factory=list)  # the editors `seamspec_run` sets up (its --hosts)
     seamspec_propose: list[str] = field(default_factory=list)
     seamspec_ask: list[str] = field(default_factory=list)
     seamspec_locked: list[tuple[str, str]] = field(default_factory=list)
@@ -1454,6 +1458,15 @@ def _has_commits(root: Path) -> bool:
 # --- seamspec (ADR-20261124-cd64) ----------------------------------------------------------------------
 
 
+def _seamspec_basis(ctx: _Context) -> list[str]:
+    """The editors SeamSpec was set up with: `[seamspec] hosts` once recorded; before that, the editors recorded for
+    `agents`, or else those detected, as `seamspec init` was given them."""
+    assert ctx.state is not None
+    if ctx.state.seamspec_hosts is not None:
+        return ctx.state.seamspec_hosts
+    return ssc.own_hosts(ctx.state.hosts if ctx.state.hosts_chosen else list(ctx.detection.hosts))
+
+
 def _seamspec(
     ctx: _Context, plan: Plan, components: list[str], shared: _Workflows | None, hosts: list[str], adr_dir: str
 ) -> list[Action]:
@@ -1480,11 +1493,11 @@ def _seamspec(
         # a newer SeamSpec than `seamspec init` last ran with: refresh its blocks, plugin and host files, also when an
         # earlier `update --yes` already moved the CI pin (review P7-F07)
         run_args = ssc.init_args(first=False, ci="ci" in chosen, hosts=hosts)
-    elif ctx.state is not None and set(ssc.own_hosts(hosts)) - set(
-        ctx.state.hosts if ctx.state.hosts_chosen else ctx.detection.hosts
-    ):  # an editor added (--editors), to those recorded or else detected: SeamSpec sets it up too (P8-A01, P8-A08)
+    elif ctx.state is not None and set(ssc.own_hosts(hosts)) - set(_seamspec_basis(ctx)):
+        # an editor SeamSpec hasn't set up yet (--editors): it sets it up too (P8-A01, P8-A08, PR #23 review)
         run_args = ssc.init_args(first=False, ci="ci" in chosen, hosts=hosts)
     if run_args is not None:
+        plan.seamspec_hosts = ssc.own_hosts(hosts)
         shown = " ".join(["seamspec", *run_args])
         if found is None:
             note = f"SeamSpec isn't installed: uv tool install seamspec=={pin}, then run swerepo init again"
@@ -1848,10 +1861,15 @@ def _new_state(
     state = State.parse(before) if before is not None else State.new()
     state.set_components([c for c in COMPONENTS if c in {*state.components, *applied}])
     for name in RECORDED_VALUES:
-        if name in REFRESHED_VALUES and name in state.values and "agents" not in applied:
-            continue  # the agents' files name the commands: recorded only when they are written (review P8-G02)
+        if name in REFRESHED_VALUES and name in state.values and not _takes_render(plan, REFRESHED_IN[name]):
+            continue  # recorded only when the file naming it is written (review P8-G02, PR #23 review)
         if state.values.get(name) != ctx.values[name]:
             state.set_value(name, ctx.values[name])
+    moving = "agents" in applied and (not state.hosts_chosen or set(state.hosts) != set(plan.hosts))
+    if moving and ctx.state is not None and state.seamspec_hosts is None and ssc.Ledger.read(ctx.root).set_up:
+        # what SeamSpec was set up with, kept before `[agents] hosts` moves on, so an editor added while
+        # `seamspec init` waits is still set up later (PR #23 review)
+        state.set_seamspec_hosts(_seamspec_basis(ctx))
     if "agents" in applied:  # only when the editors' files are written (review P8-A01)
         if not state.hosts_chosen or set(state.hosts) != set(plan.hosts):
             state.set_hosts(plan.hosts)
@@ -1943,6 +1961,12 @@ def _new_state(
         return None
     plan.actions.append(Action("state", WRITE_STATE, FILE_NAME, "components: " + ", ".join(state.components)))
     return after
+
+
+def _takes_render(plan: Plan, path: str) -> bool:
+    """Whether the agents' file at `path` takes this run's render: written, merged, or already current. Kept as the
+    person edited it (or a conflict), it doesn't."""
+    return any(a.component == "agents" and a.path == path and a.verb in (*WRITES, CURRENT) for a in plan.actions)
 
 
 def _backfill_all(ctx: _Context, state: State) -> None:
@@ -2138,6 +2162,8 @@ def apply_seamspec(plan: Plan, root: Path, store: TemplateStore | None = None) -
                 state.set_pr_rules(enforce=True)
         if "seamspec" not in state.components:
             state.set_components([c for c in COMPONENTS if c in {*state.components, "seamspec"}])
+        if state.seamspec_hosts != plan.seamspec_hosts:  # the editors it has now set up (PR #23 review)
+            state.set_seamspec_hosts(plan.seamspec_hosts)
         version = ssc.installed_version(root)
         if ssc.released(version) and state.seamspec_initialised != version:
             state.set_seamspec_initialised(str(version))  # what `seamspec init` last ran with (review P7-F07)

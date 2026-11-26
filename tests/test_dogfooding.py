@@ -573,3 +573,71 @@ class TestGeminiReviewCode:
         make(fresh, {"docs/adr/README.md": "# Decisions\n", "docs/adr/0001-x.md": "x\n"})
         adr = [f for f in run_check(fresh, only=["docs"]).findings if f.item == "docs.adr-index"]
         assert all(f.fix == "init" for f in adr)
+
+
+class TestCopilotReviewPR23:
+    """Copilot's review of PR #23."""
+
+    def test_testpaths_set_in_swerepos_block_count(self, tmp_path: Path):
+        root = git_init(tmp_path / "app")
+        make(root, {"pyproject.toml": '[project]\nname = "app"\nrequires-python = ">=3.12"\n',
+                    "tests/conftest.py": "", "scripts/test_connection.py": "def test_x(): pass\n"})  # fmt: skip
+        apply(ci_plan(root), root)
+        text = (root / "pyproject.toml").read_text()
+        assert "[tool.pytest.ini_options]\n" in text
+        text = text.replace("[tool.pytest.ini_options]\n", '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n')
+        (root / "pyproject.toml").write_text(text)  # a person's edit inside SWERepo's block
+        assert ci.pytest_testpaths(root) == ["tests"]
+        assert not ci.project_has_tests(root, ["tests/conftest.py", "scripts/test_connection.py"])
+        tests = next(f for f in run_check(root, only=["ci"]).findings if f.item == "ci.tests")
+        assert tests.status == MISSING and not tests.blocking
+
+    def test_commands_move_on_only_with_the_file_that_names_them(self, project: Path):
+        cli("init", "--path", str(project), "--only", "agents", "--editors", "none", "--yes")
+        before = State.load(project).values["commands"]
+        text = (project / "AGENTS.md").read_text()
+        (project / "AGENTS.md").write_text(text.replace("## Working rules", "## Working rules (ours)"))
+        make(project, {"Makefile": "test:\n\tuv run pytest\n"})
+        kept = cli("update", "--path", str(project), "--only", "agents", "--yes")  # no --merge: the block is kept
+        assert kept.exit_code == 0, kept.output
+        assert "(ours)" in (project / "AGENTS.md").read_text()
+        assert State.load(project).values["commands"] == before  # still what AGENTS.md says
+        stale = make_plan(project, today=TODAY, only=["agents"], hosts=[])
+        assert any("the project's commands changed since they were recorded" in a.note for a in stale.actions)
+        merged = cli("update", "--path", str(project), "--only", "agents", "--yes", "--merge")
+        assert merged.exit_code == 0 and "make test" in State.load(project).values["commands"], merged.output
+
+    @pytest.mark.parametrize("succeeds", [True, False])
+    def test_an_editor_added_while_seamspec_waits_is_set_up_later(self, project: Path, monkeypatch, succeeds: bool):
+        import subprocess
+
+        from swerepo import init as init_module
+        from swerepo import seamspec_component as ssc
+        from swerepo.init import apply_seamspec
+
+        make(project, {".seamspec/config.toml": 'mode = "enforced"\n'})
+        cli("init", "--path", str(project), "--only", "agents", "--editors", "claude", "--yes")
+        monkeypatch.setattr(ssc, "command", lambda: "seamspec")
+        monkeypatch.setattr(ssc, "installed_version", lambda root: None)
+        monkeypatch.setattr(ssc.Ledger, "read", classmethod(lambda cls, root: _ledger()))
+        waiting = make_plan(project, today=TODAY, only=["agents", "seamspec"], hosts=["claude", "antigravity"])
+        assert waiting.seamspec_run is None  # no terminal: seamspec init waits
+        apply(waiting, project)
+        state = State.load(project)
+        assert set(state.hosts) == {"claude", "antigravity"} and state.seamspec_hosts == []  # what SeamSpec has
+        later = make_plan(project, today=TODAY, only=["seamspec"], terminal=True)  # a later run, in a terminal
+        assert later.seamspec_run == ["init", "--ci", "--hosts", "antigravity"]
+        later.seamspec_propose = []
+        real = subprocess.run
+
+        def fake_run(args, **kwargs):
+            if args[:2] == ["seamspec", "init"]:
+                return subprocess.CompletedProcess(args, 0 if succeeds else 1)
+            return real(args, **kwargs)
+
+        monkeypatch.setattr(init_module.subprocess, "run", fake_run)
+        apply_seamspec(later, project)
+        recorded = State.load(project).seamspec_hosts
+        assert recorded == (["antigravity"] if succeeds else [])
+        again = make_plan(project, today=TODAY, only=["seamspec"], terminal=True)
+        assert (again.seamspec_run is None) is succeeds  # set up once it succeeded; asked again until then

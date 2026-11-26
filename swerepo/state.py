@@ -228,6 +228,20 @@ class State:
         self._table("seamspec")["initialised"] = version
 
     @property
+    def seamspec_hosts(self) -> list[str] | None:
+        """`[seamspec] hosts`: the editors `seamspec init` last set up here (its `--hosts`), recorded only once it
+        succeeds, so an editor added while it waits is still set up later; None when not recorded (PR #23 review)."""
+        seamspec = self.doc.get("seamspec")
+        value = seamspec.get("hosts") if seamspec is not None else None
+        return None if value is None else [str(h) for h in value]
+
+    def set_seamspec_hosts(self, hosts: list[str]) -> None:
+        _text_list(hosts, key="seamspec.hosts")
+        array = tomlkit.array()
+        array.extend(hosts)
+        self._table("seamspec")["hosts"] = array
+
+    @property
     def tools(self) -> dict[str, str]:
         """Versions of other tools the workflows pin (`[tools]`), e.g. `seamspec`."""
         table = self.doc.get("tools")
@@ -579,6 +593,8 @@ def _validate(doc: TOMLDocument, running: str = __version__) -> None:
         _check_adopted(name, rule_id)
     if "initialised" in seamspec:
         _check_tool("seamspec.initialised", seamspec["initialised"])
+    if "hosts" in seamspec:
+        _text_list(seamspec["hosts"], key="seamspec.hosts")
     tools = data.get("tools", {})
     if not isinstance(tools, dict):
         raise StateError("tools: must be a table of versions")

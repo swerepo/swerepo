@@ -53,6 +53,11 @@
   - the proposed rule tests `update` as it does `init`.
 - **SeamSpec, approved by the owner on 2026-11-25** (30 rules in force; `docs/EARNED_SPEC.md` regenerated): `inv_81872dfe` (critical) replaces `inv_ef31cc79`, which said `--yes` applies GitHub's settings, and the dead end `de_00bb3c21` is recorded. Before the owner's review, SeamSpec's reviewer found `--yes` in a terminal untested; the test now covers it and a terminal's yes, and fails when the `and not yes` guard is dropped from `init` or `update`.
 
+- **Copilot's review of PR #23**, three findings, each fixed and broken on purpose and caught (five breakages):
+  - `testpaths` set inside SWERepo's `pyproject.toml` block count for `ci.tests`;
+  - the editors `seamspec init` set up are recorded (`[seamspec] hosts`) only once it succeeds;
+  - `[values] commands` and `test_inline` move on only when their file takes the new render.
+
 ## Next
 
 - The pull request.
