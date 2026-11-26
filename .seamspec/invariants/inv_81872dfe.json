@@ -1,0 +1,36 @@
+{
+  "schema_version": "1",
+  "id": "inv_81872dfe",
+  "title": "Check, init's plan and threads only read GitHub; init and update change it only with --apply-github or a terminal yes",
+  "assertion": "With a repository on GitHub and `gh` logged in (a fake `gh` that logs every call and its request body), `swerepo check` (text and `--json`, before and after the ruleset files exist), `swerepo init --dry-run` and `swerepo threads` only read: REST calls use GET only, and GraphQL sends a query, never a mutation (in its arguments or on stdin, with `--input -` or `--input=-`). Every other `gh` call counts as a change, however it is spelled: `-X PUT`, `-XPUT`, `--method PUT`, `--method=PUT`, or a body (`-f`, `-F`, `--field`, `--raw-field`, `--input`, attached or not) with no method. `swerepo check --ci` doesn't call `gh` at all, with or without the ruleset files. `swerepo init --only github` and `swerepo update --only github` change nothing on GitHub: with `--yes` alone, without a terminal (a first `init`, a second one, which says \"Nothing to do.\", and `update`) and in a terminal (where nothing is asked either); with `--apply-github` but without `--yes` and without a terminal (each exits 2, with settings to apply); without `--yes` and without a terminal (`init`, with files to write, exits 2); and, for each command in a terminal, when the person says no at \"Apply?\", or is asked about the ruleset and the merge settings and says no to both. Changes come only with `--yes --apply-github`, or in a terminal with a yes at \"Apply?\" and a yes to each: then `init` and `update` each change only the repository's merge settings and the ruleset named `swerepo`, updating that ruleset in place when there is one and creating it when there is none, never touching another ruleset, and sending exactly the committed `ruleset.json` and `repo-settings.json`.",
+  "scope": {
+    "paths": [
+      "swerepo/github.py",
+      "swerepo/threads.py",
+      "swerepo/check.py",
+      "swerepo/init.py",
+      "swerepo/cli.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261125-5f22 point 5 (the owner's choice, 2026-11-25, after Gemini's design review P8-A03): GitHub's settings change only when asked for by name. Replaces inv_ef31cc79, whose `--yes` applied them: a second run with `--yes`, meant only as a check, applied them on an established repository against the owner's no (SeamSpec dead end de_00bb3c21). Every read-only promise of inv_ef31cc79 is kept with the same checks; added: --yes alone on a first and a second init and on update, --apply-github without --yes or a terminal, and update --yes --apply-github creating the ruleset. Critical, as inv_ef31cc79 was. Tightened after Gemini's code review (P8-A10): update is tested like init for a terminal's no, for updating and creating the ruleset, and without --yes; the assertion says which command each clause covers. Tightened after SeamSpec's reviewer: `--yes` in a terminal (where the code's guard is `interactive ... and not yes`) changes nothing and asks nothing; a terminal yes to both changes only the swerepo ruleset and merge settings, sending the committed files; exit 2 is stated for runs with something to apply.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_81872dfe.py",
+    "harness_sha256": "eee0b11bbd5447e1b188c20027d2648d38dca9425eed5ee7319c852db02bf068",
+    "assertion_sha256": "f8d4a8f3702ba78d879069c519f961be31c779bbcb5d2533f280d6fa524d5396"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-26T03:12:08.023043Z",
+  "approved_at": "2026-11-26T04:41:54.340456Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": true
+}

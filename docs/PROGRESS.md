@@ -10,11 +10,12 @@ What is being built now and next. The log of what each change did is in [progres
 - SWERepo's own release workflow, in this repository only (ADR-20261124-4699);
 - two rules guarding the shipped package (ADR-20261124-41e9).
 
-Before that: Phase 7, the `seamspec` component and the hygiene rules ([PR #20](https://github.com/swerepo/swerepo/pull/20)). 28 SeamSpec rules are in force.
+Before that: Phase 7, the `seamspec` component and the hygiene rules ([PR #20](https://github.com/swerepo/swerepo/pull/20)). 30 SeamSpec rules are in force.
 
 ## Next
 
 - **Owner, on GitHub:** secret scanning and push protection are on (2026-11-23); Dependabot security updates are still off (Settings → Advanced Security).
+- **Dogfooding** on an established repository (ADR-20261125-5f22): a codebase never linted moves to ruff gradually, a project without tests is warned and agents are told to write a real one, `--editors`, GitHub's settings applied only when asked for by name (`--apply-github`), a table appended inside SWERepo's `pyproject.toml` block named and left alone, and `check`'s "Next:" naming what fixes each gap. Pull request next.
 - **Phase 8, in order:**
   1. the implementation PR (the native `SPEC.md`, removing `openspec` and `release`, the refreshed `docs`, `agents` and `github` templates applied here, `release.yml`, and the two rules), with Gemini's review;
   2. dogfooding `check` and `init` on an established repository of the owner's;

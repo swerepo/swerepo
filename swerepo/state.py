@@ -228,6 +228,20 @@ class State:
         self._table("seamspec")["initialised"] = version
 
     @property
+    def seamspec_hosts(self) -> list[str] | None:
+        """`[seamspec] hosts`: the editors `seamspec init` last set up here (its `--hosts`), recorded only once it
+        succeeds, so an editor added while it waits is still set up later; None when not recorded (PR #23 review)."""
+        seamspec = self.doc.get("seamspec")
+        value = seamspec.get("hosts") if seamspec is not None else None
+        return None if value is None else [str(h) for h in value]
+
+    def set_seamspec_hosts(self, hosts: list[str]) -> None:
+        _text_list(hosts, key="seamspec.hosts")
+        array = tomlkit.array()
+        array.extend(hosts)
+        self._table("seamspec")["hosts"] = array
+
+    @property
     def tools(self) -> dict[str, str]:
         """Versions of other tools the workflows pin (`[tools]`), e.g. `seamspec`."""
         table = self.doc.get("tools")
@@ -261,6 +275,13 @@ class State:
         """Whether pull-request rules fail `check --ci` (`[pr] enforce`; enforced when absent)."""
         pr = self.doc.get("pr")
         return True if pr is None else bool(pr.get("enforce", True))
+
+    @property
+    def started_new(self) -> bool:
+        """Whether SWERepo's first run here found no commits: pull-request rules recorded as enforced from the start,
+        with no warn-only date (`[pr] warn_since` is set only for a repository that already had history, spec §10)."""
+        pr = self.doc.get("pr")
+        return pr is not None and bool(pr.get("enforce", True)) and "warn_since" not in pr
 
     @property
     def exempt_authors(self) -> list[str]:
@@ -378,6 +399,11 @@ class State:
         files = self.doc.get("files")
         if files is not None and path in files:
             del files[path]
+
+    def remove_block(self, path: str) -> None:
+        blocks = self.doc.get("blocks")
+        if blocks is not None and path in blocks:
+            del blocks[path]
 
     def _table(self, name: str) -> Table:
         if name not in self.doc:
@@ -567,6 +593,8 @@ def _validate(doc: TOMLDocument, running: str = __version__) -> None:
         _check_adopted(name, rule_id)
     if "initialised" in seamspec:
         _check_tool("seamspec.initialised", seamspec["initialised"])
+    if "hosts" in seamspec:
+        _text_list(seamspec["hosts"], key="seamspec.hosts")
     tools = data.get("tools", {})
     if not isinstance(tools, dict):
         raise StateError("tools: must be a table of versions")

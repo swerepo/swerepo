@@ -2,7 +2,7 @@
 
 # Spec: what this code guarantees
 
-28 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
+30 rules in force. A person approved each one, and each has a test that must keep passing. This document is generated from the SeamSpec ledger: it lists what was approved, and nothing else.
 
 ## Rules in force
 
@@ -29,7 +29,7 @@ Every ADR file (ADR-YYYYMMDD-xxxx-title.md) in the ADR folder ([adopted] adr_dir
 - **Test:** `.seamspec/tests/test_inv_5c45ea08.py` (pytest)
 - **Id:** `inv_5c45ea08`
 
-### `swerepo` (21 rules)
+### `swerepo` (23 rules)
 
 #### A fingerprint ignores only line endings, trailing whitespace, trailing blank lines and a BOM
 
@@ -141,16 +141,6 @@ In the `.github/workflows/swerepo-ci.yml` that `swerepo init` writes, the `test`
 - **Test:** `.seamspec/tests/test_inv_2c3b6053.py` (pytest)
 - **Id:** `inv_2c3b6053`
 
-#### check, init's plan and threads only read GitHub; init changes the swerepo ruleset and merge settings only after a yes
-
-With a repository on GitHub and `gh` logged in (a fake `gh` that logs every call and its request body), `swerepo check` (text and `--json`, before and after the ruleset files exist), `swerepo init --dry-run` and `swerepo threads` only read: REST calls use GET only, and GraphQL sends a query, never a mutation (in its arguments or on stdin, with `--input -` or `--input=-`). Every other `gh` call counts as a change, however it is spelled: `-X PUT`, `-XPUT`, `--method PUT`, `--method=PUT`, or a body (`-f`, `-F`, `--field`, `--raw-field`, `--input`, attached or not) with no method. `swerepo check --ci` doesn't call `gh` at all, with or without the ruleset files. `swerepo init --only github` changes nothing on GitHub: without `--yes` and without a terminal, when the person says no at "Apply?", or when they are asked about the ruleset and the merge settings and say no to both. With `--yes` it changes only the repository's merge settings and the ruleset named `swerepo`: it updates that ruleset in place, or creates it when there is none, and never touches another ruleset. What it sends is exactly the committed `ruleset.json` and `repo-settings.json`.
-
-- **Applies to:** `swerepo/github.py`, `swerepo/threads.py`, `swerepo/check.py`, `swerepo/init.py`, `swerepo/cli.py`
-- **Approved by:** Vamshidhar Pandrapagada, 2026-11-24, in the terminal
-- **Test:** `.seamspec/tests/test_inv_ef31cc79.py` (pytest)
-- **Critical:** always shown to the agent in full
-- **Id:** `inv_ef31cc79`
-
 #### The pre-push privacy hook refuses a push adding a secret, says where not what, and never replaces your hook
 
 After `swerepo hook install`, a real `git push`, run through this checkout's `swerepo`, is refused when its new commits add an AWS access key, a GitHub token, a personal email address or a home-folder path. That holds on an existing branch, on a new branch, and when the secret sits in an earlier commit with clean commits after it. What the push prints, on either stream, names the kind, the commit and `file:line`, and contains neither the matched text nor a piece of it (the user name, the email's domain, the file name in the path, the middle of a key or token). Nothing reaches the remote. Clean pushes go through, the first push of a branch and a later one alike, and the later commit arrives on the remote. `swerepo hook install` never replaces a pre-push hook of the person's own: it exits 1, leaves that hook byte for byte (CRLF line endings) with its mode, and names the full line to add: `swerepo privacy --pre-push --remote "${1:-}"`. A hook that is a link is the person's too, even when it points to text that looks like SWERepo's: the link and what it points to stay as they were.
@@ -241,6 +231,35 @@ The wheel built from this repository (through the build backend's PEP 517 hook: 
 - **Critical:** always shown to the agent in full
 - **Id:** `inv_3f05e701`
 
+#### A codebase never linted isn't red on day one
+
+For the root project of a git repository with history and no linter of its own, `swerepo init --only ci --yes` records `lint = "gradual"` and writes a `lint` job that runs ruff only on the Python files each change touches (`ruff check --force-exclude` on the changed files), never `ruff check .`. A new project, with no commits when SWERepo first ran there, records `lint = "ruff"` and checks every file: set up in one `init --only ci`, or in stages (`--only docs,agents` committed, then `--only ci`). A recorded choice is kept by a later `swerepo init --only ci` and `swerepo update --only ci`, the workflow unchanged, also where SWERepo would choose the other: a `ruff` the person recorded in an existing codebase, or a `gradual` recorded in a new one; recording one and running `update --only ci` writes the matching job. What `--projects` folders get is not part of this rule (per-project gradual linting is planned for v0.2).
+
+- **Applies to:** `swerepo/ci.py`, `swerepo/detect.py`, `swerepo/init.py`, `swerepo/state.py`, `swerepo/templates/ci/`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-25, in the terminal
+- **Test:** `.seamspec/tests/test_inv_197d9002.py` (pytest)
+- **Id:** `inv_197d9002`
+
+#### Missing tests never fail check --ci
+
+In a git repository where `swerepo init --only ci --yes` wrote `swerepo-ci.yml`, with no file named `test_*.py` or `*_test.py` outside the folders pytest skips by default (dot-folders such as `.seamspec/`, and `build`, `dist`, `venv`, `node_modules`, `*.egg`, `CVS`, `_darcs`, `{arch}`) and under the project's `testpaths` when it sets them: `swerepo check --only ci --json` reports `ci.tests` as missing with `blocking` false and nothing blocking; `swerepo check --only ci --ci` exits 0, printing no annotation outside GitHub Actions and, in GitHub Actions, one `::warning` per non-blocking gap and no `::error`. Once a test exists under `tests/`, `ci.tests` is no longer reported.
+
+- **Applies to:** `swerepo/check.py`, `swerepo/ci.py`, `swerepo/detect.py`, `swerepo/init.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-25, in the terminal
+- **Test:** `.seamspec/tests/test_inv_260277fe.py` (pytest)
+- **Id:** `inv_260277fe`
+
+#### Check, init's plan and threads only read GitHub; init and update change it only with --apply-github or a terminal yes
+
+With a repository on GitHub and `gh` logged in (a fake `gh` that logs every call and its request body), `swerepo check` (text and `--json`, before and after the ruleset files exist), `swerepo init --dry-run` and `swerepo threads` only read: REST calls use GET only, and GraphQL sends a query, never a mutation (in its arguments or on stdin, with `--input -` or `--input=-`). Every other `gh` call counts as a change, however it is spelled: `-X PUT`, `-XPUT`, `--method PUT`, `--method=PUT`, or a body (`-f`, `-F`, `--field`, `--raw-field`, `--input`, attached or not) with no method. `swerepo check --ci` doesn't call `gh` at all, with or without the ruleset files. `swerepo init --only github` and `swerepo update --only github` change nothing on GitHub: with `--yes` alone, without a terminal (a first `init`, a second one, which says "Nothing to do.", and `update`) and in a terminal (where nothing is asked either); with `--apply-github` but without `--yes` and without a terminal (each exits 2, with settings to apply); without `--yes` and without a terminal (`init`, with files to write, exits 2); and, for each command in a terminal, when the person says no at "Apply?", or is asked about the ruleset and the merge settings and says no to both. Changes come only with `--yes --apply-github`, or in a terminal with a yes at "Apply?" and a yes to each: then `init` and `update` each change only the repository's merge settings and the ruleset named `swerepo`, updating that ruleset in place when there is one and creating it when there is none, never touching another ruleset, and sending exactly the committed `ruleset.json` and `repo-settings.json`.
+
+- **Applies to:** `swerepo/github.py`, `swerepo/threads.py`, `swerepo/check.py`, `swerepo/init.py`, `swerepo/cli.py`
+- **Approved by:** Vamshidhar Pandrapagada, 2026-11-26, in the terminal
+- **Test:** `.seamspec/tests/test_inv_81872dfe.py` (pytest)
+- **Critical:** always shown to the agent in full
+- **Replaces:** check, init's plan and threads only read GitHub; init changes the swerepo ruleset and merge settings only after a yes (`inv_ef31cc79`)
+- **Id:** `inv_81872dfe`
+
 ### `swerepo/templates` (1 rule)
 
 #### What a release shipped never changes: its templates and the renders built in code
@@ -307,6 +326,9 @@ These were approved once and are no longer checked.
 - **A .swerepo.toml from a newer SWERepo or standard loads, but an older SWERepo never overwrites it** (`inv_070db19c`): A .swerepo.toml written by a newer SWERepo version, or in a newer standard, loads even when it names components this version doesn't know, but this older SWERepo refuses to save over it and leaves the file unchanged.
   - Retired because: GitHub Copilot's review of PR #2 showed the rule's promise (an older SWERepo never overwrites a newer file) was broken for a new or stale state saved over a newer file on disk, a path the test didn't exercise. Code fixed in b827f00; the replacement's test covers loaded, new and stale states.
   - Replaced by An older SWERepo never replaces a .swerepo.toml from a newer SWERepo or standard, loaded, new or stale (`inv_71e4b33d`).
+- **check, init's plan and threads only read GitHub; init changes the swerepo ruleset and merge settings only after a yes** (`inv_ef31cc79`): With a repository on GitHub and `gh` logged in (a fake `gh` that logs every call and its request body), `swerepo check` (text and `--json`, before and after the ruleset files exist), `swerepo init --dry-run` and `swerepo threads` only read: REST calls use GET only, and GraphQL sends a query, never a mutation (in its arguments or on stdin, with `--input -` or `--input=-`). Every other `gh` call counts as a change, however it is spelled: `-X PUT`, `-XPUT`, `--method PUT`, `--method=PUT`, or a body (`-f`, `-F`, `--field`, `--raw-field`, `--input`, attached or not) with no method. `swerepo check --ci` doesn't call `gh` at all, with or without the ruleset files. `swerepo init --only github` changes nothing on GitHub: without `--yes` and without a terminal, when the person says no at "Apply?", or when they are asked about the ruleset and the merge settings and say no to both. With `--yes` it changes only the repository's merge settings and the ruleset named `swerepo`: it updates that ruleset in place, or creates it when there is none, and never touches another ruleset. What it sends is exactly the committed `ruleset.json` and `repo-settings.json`.
+  - Retired because: The owner decided (2026-11-25, ADR-20261125-5f22 point 5, after Gemini's design review P8-A03) that GitHub's settings change only when asked for by name: a terminal's yes after each is shown, or `--yes --apply-github`. `--yes` alone now writes the files and never changes GitHub. inv_ef31cc79's test applies the settings with `--yes` alone, so it no longer describes the agreed behaviour. Its read-only promises are all kept, with the same checks, in inv_81872dfe, which adds: `--yes` alone on a first and second `init` and on `update` changes nothing; `--apply-github` without `--yes` or a terminal exits 2 with nothing changed; `init` and `update` with `--yes --apply-github` send exactly the committed files to the `swerepo` ruleset and merge settings only. Why: a second `init --yes`, meant as a check, applied the settings on an established repository against the owner's no (dead end de_00bb3c21).
+  - Replaced by Check, init's plan and threads only read GitHub; init and update change it only with --apply-github or a terminal yes (`inv_81872dfe`).
 - **Pull requests wait for Copilot's review inside ci-ok** (`inv_faa5bef5`): In the `swerepo-ci.yml` that `swerepo init` writes when the ruleset requests Copilot's review (also when github is applied on its own after ci), `ci-ok` waits for a `copilot-review` job that runs on pull requests only and whose `permissions:` block grants `pull-requests: read` and nothing else, and the `pull_request` trigger lists `types: [opened, synchronize, reopened, ready_for_review]`, so a draft marked ready runs again. Run as written, with the values its own `env:` block maps from GitHub (`GH_TOKEN` included; the fake `gh` refuses without it), the job asks GitHub for exactly `repos/<repository>/pulls/<number>/reviews` with `--paginate`. It passes once that list holds a review by `copilot-pull-request-reviewer[bot]`, asking again when the first answer has none. It fails when none comes or only others reviewed (look-alike names included), and fails at once on a draft, without asking. `ci-ok`'s step fails on a pull request whose `copilot-review` didn't succeed, and on a push where it ran. With `--no-copilot-review` (also on a later run that turns the wait off) or a committed ruleset without Copilot review, there is no such job.
   - Retired because: Dependabot's first pull requests (#12–#14) were all blocked: GitHub requests Copilot's review only for authors who have Copilot, so the wait timed out and ci-ok failed on every dependency update. The owner decided (ADR-20261123-cc8d) that pull requests opened by dependabot[bot] or renovate[bot] pass the wait at once; their tests and dependency-review still run and the person merging reviews them. The job now reads the pull request's author, which the old test doesn't know. inv_78f19f51 keeps everything inv_faa5bef5 locked and adds the bot cases, including look-alike names and other bots that still wait.
   - Replaced by Pull requests wait for Copilot's review inside ci-ok; Dependabot's holds only its own commits (`inv_78f19f51`).
@@ -326,3 +348,6 @@ Approaches that were tried and did not work. They carry no test; they are here s
 - **Tried:** Keep `git diff <ref>` (working tree against a commit) from writing .git/index by adding `git --no-optional-locks`.
   - **Why it failed:** With an out-of-date index (a file touched but unchanged), `git --no-optional-locks diff --name-status <ref>` still rewrote .git/index (mtime changed; git 2.50). The switch does not cover `git diff`. Fix used: run that diff with GIT_INDEX_FILE pointing at a temporary copy of the index. Plain `git diff-index` without refreshing doesn't write but reports touched-but-unchanged files as modified.
   - Applies to `swerepo/check.py`, `swerepo/prrules.py`, `swerepo/detect.py` · recorded 2026-11-21 · `de_a22b43fe`
+- **Tried:** Checking that a second run of `swerepo init --only github` changes nothing by running it again with `--yes` on a real repository (dogfooding on an established repository, 2026-11-25).
+  - **Why it failed:** The person had just declined applying the GitHub settings in the terminal, so the plan still held the `apply` actions; `--yes` answered them, and the `swerepo` ruleset and merge settings were applied to the live repository without the person's consent (then undone by hand: ruleset deleted, merge settings restored, `[github] applied` set back to false). A second-run check must use `--dry-run` (or compare the plan), never `--yes`, on any repository where the github component runs.
+  - Applies to `swerepo/init.py`, `swerepo/cli.py`, `swerepo/github.py` · recorded 2026-11-25 · `de_00bb3c21`

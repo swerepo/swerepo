@@ -452,3 +452,547 @@ Two inline comments, each reproduced as a test before the fix, and each fix brok
 
 - **The `docs` folder, whatever its case** (`swerepo/spec.py`): `Docs/SPEC.md` wasn't a candidate, so `check` reported the spec missing and `init` wrote a second, root `SPEC.md`. The folder name is now compared case-insensitively too, and the path is recorded as it is spelled.
 - **Several specs, without `docs` in the run** (`swerepo/init.py`): `init --only agents` or `--only github` named `SPEC.md` without saying there were several candidates. The plan now lists them and says how to record one, on the running component's line, once; `docs` still says it itself when it runs.
+
+## Follow-up: dogfooding (review P8-G)
+
+The dogfooding fixes (ADR-20261125-5f22), reviewed by Gemini as Phase 8's process asks; closed after two rounds.
+
+**Status:** closed · **Rounds:** 2 · **Developer:** Claude · **Reviewer:** Gemini · **Owner decides:** ties, merges, SeamSpec approvals
+**Process:** ADR-20261119-9f87. Finding IDs `P8-G<nn>`; severities `blocker | should-fix | suggestion | question`; responses Fix / Push back / Defer, then Accept / Maintain.
+
+---
+
+### Review (round 1)
+
+Verified on branch `phase-8/dogfooding` (working tree against `main`): `pytest` (795 passed), `ruff check .` and `ruff format --check .` (clean), `seamspec verify --all` (28 locked invariants passed), `swerepo check --ci --base main` (exit 0), `swerepo privacy` (nothing found), plus empirical dry runs in temporary repositories.
+
+#### Strengths
+
+- **Recorded lint choices stay stable across reruns and `update` (`swerepo/init.py:726-731`):** `_lint_mode` checks `recorded in ("ruff", "gradual")` and `adopted` *before* `ctx.detection.linters`. That prevents SWERepo's own `[tool.ruff]` block (added to `pyproject.toml` during gradual setup) from flipping a `"gradual"` repository to full `"ruff"` on a rerun or `swerepo update`.
+- **Non-blocking `ci.tests` warning and clear agent guidance (`swerepo/check.py:353-355`, `swerepo/templates/agents/prepare-pr/3.md:4`):** `ci.tests` uses `blocking=False`, so it emits a `::warning` annotation under `--ci`, keeps `exit_code == 0`, and doesn't pollute `Report.next_step()`. `agents/prepare-pr@3` gives agents actionable guidance (write a real test anchored in the spec's behaviours; never mask, skip or remove the job), reinforcing `hygiene/ci-tests` (`inv_11ce8c5b`), and is already dogfooded in `docs/agents/prepare-pr.md`.
+- **Clean deduplication of the dependency-graph note (`swerepo/init.py:957-958, 1341-1348, 1680-1681`):** `plan.dependency_graph_read` drops `ci`'s generic `DEPENDENCY_GRAPH_NOTE` whenever `github` actually read the repository's state (printing the specific `"is off"` note once when off on a public repo, and nothing when already on or on a private repo where `dependency-review` is skipped), while preserving `ci`'s note when `gh` is unavailable or `--only ci` runs alone.
+- **Extras detection and test hygiene (`swerepo/ci.py:333-345`, `tests/test_dogfooding.py`, `tests/test_check.py:59`, `tests/test_init_ci.py:66`):** `ci.extras_holding` normalises package names with `packaging` and handles malformed entries safely; locked rule `inv_ab57c6ff` is respected by keeping `how_to_clear` out of `check`'s finding; and existing test fixtures were updated with real test files rather than weakening assertions.
+
+#### Findings
+
+##### P8-G01 · `should-fix` · `swerepo/ci.py:282-292` (also `swerepo/init.py:833, 952`, `swerepo/check.py:353`)
+
+`ci.has_tests` counts files that `pytest` skips by default (including `.seamspec/`), ignores `testpaths`, and is never called per `--projects` folder.
+
+- **Failing scenario:**
+  1. **`.seamspec/` and dot-directories:** A new project with no tests sets up SWERepo (`swerepo init` with `seamspec` and `ci`, or `seamspec` followed by `ci`). SeamSpec writes `.seamspec/proposed/inv_<id>/test_inv_<id>.py` (and `.seamspec/tests/test_inv_<id>.py` once approved) for SWERepo's hygiene rules. `list_files` returns those paths, so `ci.has_tests(list_files(ctx.root))` matches `test_inv_<id>.py` and returns `True` — silencing `swerepo check`'s `ci.tests` warning (and `init --only ci`'s plan note). Meanwhile, `uv run pytest` skips `.*` by default (`norecursedirs` defaults to `.*`, `build`, `dist`, `CVS`, `_darcs`, `{arch}`, `*.egg`, `venv`) and **exits `5`** ("no tests collected") in `swerepo-ci.yml`.
+  2. **`testpaths` configuration:** A project configures `[tool.pytest.ini_options] testpaths = ["tests"]` in `pyproject.toml` (or `pytest.ini` / `setup.cfg` / `tox.ini`) with an empty `tests/` (or only `tests/conftest.py`), while keeping a helper script such as `scripts/test_connection.py` or `examples/test_demo.py`. `uv run pytest` searches only `tests/` and exits `5`, whereas `ci.has_tests` scans the entire repository and returns `True`.
+  3. **`--projects` folders never checked:** `ci.has_tests` accepts `folder: str = "."` (tested in `tests/test_dogfooding.py:82`), yet neither `init._project_inputs` (`swerepo/init.py:821-838`) nor `check._ci` (`swerepo/check.py:353`) calls `has_tests(files, folder)` for `--projects` folders. In `swerepo init --projects services/api,services/worker` where `services/api/tests/test_api.py` exists and `services/worker/` has no tests, root `has_tests(list_files(ctx.root))` returns `True` (because `prefix = ""` matches `services/api/tests/test_api.py`) and `services/worker/` is never checked — leaving `test-services-worker` to fail `ci-ok` with pytest exit code `5` without any warning from `init` or `check`.
+- **Recommendation:**
+  - In `ci.has_tests`, ignore path segments matching pytest's default `norecursedirs` (`.*`, `build`, `dist`, `venv`, `*.egg`, plus configured `norecursedirs` if read), scope discovery under `folder` to configured `testpaths` (and `python_files`) when declared in the project's pytest config, and don't let tests inside separate project roots satisfy the root `.` check when root `testpaths` doesn't include them.
+  - Call `ci.has_tests(files, folder)` for each listed `--projects` folder in `init._project_inputs` and `check._ci` (e.g. `ci.tests:<folder>` with `blocking=False`), reusing the file list already collected.
+- **Developer response (Claude):** **Fix**, with one sub-point pushed back.
+- **What counts as a test:** `ci.has_tests` follows pytest's discovery. Folders pytest skips by default (`.*`, which covers `.seamspec/`, and `build`, `dist`, `venv`, `node_modules`, `*.egg`, `CVS`, `_darcs`, `{arch}`) don't count, and `testpaths` is read the way pytest reads it (`pytest.ini` first, then `pyproject.toml`, `tox.ini`, `setup.cfg`) through `ci.pytest_testpaths` and `ci.project_has_tests`.
+- **Listed projects:** each `--projects` folder gets a plan note naming its `test-<job>`, and a `check` warning, `ci.tests.<folder>`, that never blocks.
+- **Pushed back:** tests inside a listed project still count for the root. The root `test` job runs `uv run pytest` from the root, and pytest collects them from there, so the root job doesn't exit 5. Not counting them would warn about a job that passes.
+- **Tests:** `test_g01_*`. Breaking the skipped folders, `testpaths`, the order of `pytest.ini`, the project note and the project check are each caught.
+- **Reviewer (round 2):** Accept. Verified `PYTEST_SKIPS`, `pytest_testpaths` (matching pytest's own config precedence across `pytest.ini`, `.pytest.ini`, `pyproject.toml`, `tox.ini` and `setup.cfg`), and the per-project plan note (`swerepo/init.py:850-852`) and non-blocking `ci.tests.<folder>` finding (`swerepo/check.py:357-360`). Accept the pushback on root collection: when root `testpaths` is unset, `uv run pytest` at the root descends into subdirectories and does collect a listed project's tests (so the root `test` job passes rather than exiting 5), whereas when root `testpaths` is set (e.g. `["tests"]`), `project_has_tests` scopes to it and warns if root `tests/` is empty.
+
+---
+
+##### P8-G02 · `should-fix` · `swerepo/init.py:948-950, 1761-1763` (also `SWEREPO-SPEC.md:180`, `docs/adr/ADR-20261125-5f22-a-codebase-never-linted-moves-to-ruff-gradually-and-a-projec.md:27`)
+
+Following the gradual-to-full ruff migration instruction (`swerepo update --only ci`) leaves `AGENTS.md` and `docs/agents/prepare-pr.md` on gradual ruff commands and masks the drift in `.swerepo.toml`.
+
+- **Failing scenario:**
+  1. On an existing unlinted repository (with commits), `swerepo init` selects `lint = "gradual"` and writes `.github/workflows/swerepo-ci.yml`, `AGENTS.md` (`agents/block@3`), and `docs/agents/prepare-pr.md` (`agents/prepare-pr@3`) with `uv run ruff check --force-exclude <changed .py files>` and `uv run ruff format --check --force-exclude <changed .py files>`.
+  2. Later, the maintainer fixes formatting across the repository and follows the exact instruction in the plan note (`swerepo/init.py:949-950`), `SWEREPO-SPEC.md:180`, and `ADR-20261125-5f22:27`: sets `lint = "ruff"` under `[values]` in `.swerepo.toml` and runs `swerepo update --only ci`.
+  3. `.github/workflows/swerepo-ci.yml` updates to full `uv run ruff check .` and `uv run ruff format --check .`, while `--only ci` skips `agents` — leaving `AGENTS.md` and `docs/agents/prepare-pr.md` instructing agents to lint only changed files.
+  4. At the same time, `_new_state` (`swerepo/init.py:1761-1763`) unconditionally updates `[values] commands` and `test_inline` in `.swerepo.toml` to full ruff even though `agents` did not run. Because `recorded["commands"]` now matches `computed["commands"]`, a later `swerepo init` no longer emits `"the project's commands changed since they were recorded"` (`swerepo/init.py:1653`), and `swerepo check` reports both `AGENTS.md` and `docs/agents/prepare-pr.md` as `✓ (current)`.
+- **Recommendation:**
+  - Change the migration command in `swerepo/init.py:950`, `SWEREPO-SPEC.md:180`, and `ADR-20261125-5f22:27` from `swerepo update --only ci` to `swerepo update` (or `swerepo update --only ci,agents`).
+  - In `_new_state` (`swerepo/init.py:1761-1763`), avoid advancing `[values] commands` and `test_inline` when `agents` wasn't applied in that run, so `init` still detects command drift after a `--only ci` update.
+- **Developer response (Claude):** **Fix.**
+- **The instruction** in the plan note, spec §6.3 and the ADR is now `swerepo update --only ci,agents`.
+- **`_new_state`** no longer moves `[values] commands` and `test_inline` on when `agents` isn't applied, since the agents' files name them. So the drift stays visible until those files are written.
+- **A changed test:** `tests/test_update.py::test_p6_f04_*` had asserted the old behaviour, that `update --only docs` moves `commands` on. It now asserts they stay until `--only agents --merge` writes the agents' files, and then move on. P6-F04's point, that the older records keep their base, is unchanged.
+- **Tests:** `test_g02_*`. Recording the commands anyway is caught.
+- **Reviewer (round 2):** Accept. Verified `swerepo update --only ci,agents` across `swerepo/init.py:966`, `SWEREPO-SPEC.md:180` and `ADR-20261125-5f22:27`, `_new_state` holding `REFRESHED_VALUES` until `agents` is applied (`swerepo/init.py:1778-1779`), and `tests/test_update.py::test_p6_f04_a_partial_update_keeps_every_older_records_base` still asserting the older-record `inputs` backfill before `--only agents --merge` moves `commands` on.
+
+---
+
+##### P8-G03 · `should-fix` · `swerepo/init.py:832` (also `SWEREPO-SPEC.md:180, 477`)
+
+`SWEREPO-SPEC.md` §6.3 and §11 together imply per-project gradual ruff for `--projects`, whereas `_project_inputs` writes full ruff without warning — leaving `ci-ok` red on day one in established unlinted monorepos.
+
+- **Failing scenario:**
+  `ADR-20261125-5f22:30` defers per-project gradual linting to Phase 10, and `_project_inputs` (`swerepo/init.py:832`) sets `lint = "ruff" if own_ruff or not others else "kept"`. However, `SWEREPO-SPEC.md:180` (§6.3) states without qualification that an unlinted codebase in a repository with commits moves to ruff gradually, and `SWEREPO-SPEC.md:477` (§11) states that ruff and pytest settings (§6.3) go into each listed project's `pyproject.toml` *"with that project's own linter detection and choice"*. When someone runs `swerepo init --projects services/api` on an existing unlinted monorepo, the plan prints `"lint: this codebase has never been linted, so ruff checks only the files each change touches"` (`swerepo/init.py:948`), yet `lint-services-api` runs `uv run ruff check .` and `uv run ruff format --check .` over every file in `services/api/` without any note in the plan, failing `ci-ok` on the first pull request.
+- **Recommendation:**
+  - Align `SWEREPO-SPEC.md` (§6.3 and/or §11) with `ADR-20261125-5f22` point 1: state explicitly that `--projects` subprojects without an existing linter get full ruff in v0.1, with per-project gradual linting coming in v0.2 (Phase 10).
+  - In `_project_inputs` (`swerepo/init.py:832-836`), when `_has_commits(ctx.root)` is true and a listed subproject has no linter (`not own_ruff and not others`), emit a plan `NOTE` stating that `<folder>/` checks every file with ruff (unlike the root gradual job) so the root note doesn't mislead the user.
+- **Developer response (Claude):** **Fix.**
+- **The plan** notes, for a listed project in an existing codebase with no linter of its own: "`<folder>/`: ruff checks every file of it (a listed project gets no gradual move to ruff before v0.2): its `lint-<job>` job fails until its code passes ruff".
+- **Spec §6.3 and ADR point 1** say listed projects get full ruff in v0.1.
+- **Tests:** `test_g03_*`. Dropping the note is caught.
+- **Reviewer (round 2):** Accept. Verified the per-project full-ruff note in `swerepo/init.py:846-849` (which also fires if a new `--projects` folder is added later) and the aligned wording in `SWEREPO-SPEC.md:180` and `ADR-20261125-5f22:30`.
+
+---
+
+##### P8-G04 · `should-fix` · `swerepo/privacy.py:158-167` (also `SWEREPO-SPEC.md:191`)
+
+`privacy.how_to_clear` prints suppression advice (`swerepo: allow-privacy`, `[privacy] allow_paths`) when a secret/key is present alongside an email or path, and `SWEREPO-SPEC.md` §6.4 attributes the hint to `swerepo-privacy.yml` and `swerepo check`.
+
+- **Failing scenario:**
+  1. **Mixed secret + personal hit (`swerepo/privacy.py:165-167`):** `how_to_clear(hits)` returns `NOT_PERSONAL` whenever `any(hit.kind in PERSONAL_KINDS for hit in hits)` is true. If a scan finds both a placeholder email (`tests/test_mail.py:4`) and a leaked token or test private key (`tests/fixtures.py:10`), `swerepo init` prints:
+     `privacy scan: 1 email address, 1 private key in tracked files (tests/test_mail.py:4, tests/fixtures.py:10): fix them before committing (placeholders, as in tests? use a reserved domain such as example.com, add swerepo: allow-privacy to the line, or list the file under [privacy] allow_paths in .swerepo.toml)`
+     Because `privacy.line_kinds` (`swerepo/privacy.py:118`) returns `[]` before checking `SECRETS` when `swerepo: allow-privacy` appears on the line, and `privacy.scan` (`swerepo/privacy.py:140`) skips `allow_paths` before checking `SECRETS`, both mechanisms actually **do** wave keys and tokens through — contradicting the comment `"a key is never waved through"`. Showing that hint when a secret was found invites an agent or user to suppress the file or line instead of removing the key.
+  2. **Spec vs code (`SWEREPO-SPEC.md:191`):** `SWEREPO-SPEC.md:191` says of `.github/workflows/swerepo-privacy.yml` and `swerepo check --only security`: *"Findings name the file and line, never what was found, and say how to clear one that isn't personal: a reserved example domain, the `swerepo: allow-privacy` marker, or `[privacy] allow_paths`."* Neither `swerepo check --only security` (locked by `inv_ab57c6ff`) nor `swerepo privacy` (`swerepo/cli.py:615`, run by `swerepo-privacy.yml`) prints `how_to_clear`; only `swerepo init`'s plan note (`swerepo/init.py:1058-1059`) does.
+- **Recommendation:**
+  1. In `swerepo/privacy.py:167`, require `bool(hits) and all(hit.kind in PERSONAL_KINDS for hit in hits)` so any secret hit suppresses the clearance hint until the secret is removed (and consider clarifying in `NOT_PERSONAL` that allowances are for placeholder addresses or paths, never keys).
+  2. Update `SWEREPO-SPEC.md:191` so it accurately places the clearance hint on `init`'s privacy scan note (and on `swerepo privacy`'s stderr if desired, never `swerepo check`).
+- **Developer response (Claude):** **Fix.**
+- **The hint** now needs every finding to be an address or a path: `how_to_clear` returns nothing with a key among them, or with no findings.
+- **The code comment** is corrected: the marker and `allow_paths` would let a key through, and that's why the hint is withheld then.
+- **Spec §6.4** now places the hint in `init`'s plan only, never in `check`'s finding.
+- **Tests:** `test_g04_*`. Showing the hint with a key is caught.
+- **Reviewer (round 2):** Accept. Verified `how_to_clear` (`hits and all(hit.kind in PERSONAL_KINDS for hit in hits)`) and its updated comment in `swerepo/privacy.py:157-169`, plus `SWEREPO-SPEC.md:191` scoping the hint to `init`'s plan only.
+
+---
+
+##### P8-G05 · `question` · `swerepo/init.py:736-737, 1376-1384`
+
+Is `_has_commits(ctx.root)` alone the right test for an existing codebase across staged `init`, committed `uv init` scaffolds, and unpacked codebases without git history?
+
+- **Failing scenario:**
+  Using `_has_commits` matches §10's warn-only pull-request rule (`[pr] enforce = false`) and handles squash-imported codebases (1 commit, dozens of unlinted files), which is a clear advantage over commit-count thresholds. Three edge cases pull the other way:
+  1. **Staged `init` on a brand-new repository (`SWEREPO-SPEC.md` §10's recommended sequence):** A developer creates a new repository (no commits yet), runs `swerepo init --only docs,agents` (`_has_commits` is `False`, so `AGENTS.md` and `prepare-pr.md` get full `ruff check .` and `.swerepo.toml` records `[pr] enforce = true`, with no `lint` value recorded yet), commits that PR/branch, and next runs `swerepo init --only ci,security`. Now `_has_commits` is `True` and `recorded` `lint` is `None`, so `_lint_mode` switches to `"gradual"` — contradicting both `[pr] enforce = true` and the `AGENTS.md` written in step 1.
+  2. **Committing `uv init` output before `swerepo init`:** A user who runs `uv init && git add . && git commit -m "Initial commit"` before `swerepo init` has 1 commit and no linter, so a brand-new 1-file project gets `lint = "gradual"` (`--force-exclude <changed .py files>` in `AGENTS.md`) instead of full `ruff`.
+  3. **Existing unlinted codebase before its first git commit:** A user unpacking or copying an existing unlinted Python codebase into a directory and running `swerepo init` before committing has `_has_commits == False`, so it gets full `ruff` and fails `lint` on its first pull request.
+- **Recommendation:**
+  - **Staged `init` (1)** can be fixed cleanly with what `.swerepo.toml` already records: when `ctx.state is not None and ctx.state.pr_enforce and ctx.state.pr_warn_since is None`, SWERepo already recorded on the first run that the repository started with no commits, so `_lint_mode` can keep `"ruff"`.
+  - For **(2) and (3)**, please confirm whether keeping `_has_commits` as the single shared definition of "existing" (with the plan note explaining how to switch to `lint = "ruff"`) is the deliberate trade-off.
+- **Developer response (Claude):** **Fix** for (1); (2) and (3) are a deliberate trade-off.
+1. **A new repository set up in stages:** as recommended. `State.started_new` reads what SWERepo's first run recorded (`[pr] enforce` with no `warn_since`), and `_existing_codebase` uses it whenever `[pr]` is recorded, falling back to "has commits" only before any record. The same helper decides the listed-project note (P8-G03). Test: `test_g05_*`; making it ask git again is caught.
+2. **A committed `uv init` scaffold** gets gradual ruff. That's harmless: ruff still checks every file the project grows by, and the plan says how to switch to full ruff.
+3. **An unpacked codebase before its first commit** gets full ruff. The plan's tools and lint notes show it, and the person can commit first. Guessing "existing" from file counts would be a second, fuzzier rule.
+
+Keeping one shared definition, the one the pull-request rules already use (§10), is the deliberate choice, now with the recorded start taking precedence.
+- **Reviewer (round 2):** Accept. Verified `State.started_new` (`swerepo/state.py:265-270`, which also stays `False` after `update --enforce-pr-rules` because `warn_since` remains in `[pr]`) and `_existing_codebase` (`swerepo/init.py:723-729`). Agree with the trade-off on (2) and (3): keeping a single deterministic rule aligned with §10 is cleaner than adding file-count heuristics, gradual ruff on a committed `uv init` scaffold still checks every touched file with a clear note on switching to full ruff, and an unpacked non-git codebase shows its lint mode upfront in the plan.
+
+---
+
+##### P8-G06 · `suggestion` · `swerepo/check.py:353, 1163` (also `swerepo/detect.py:203, 228`, `.seamspec/tests/test_inv_294c48c9.py:42`)
+
+Avoid running a second `git ls-files` subprocess in `check._ci`, and pass `--no-optional-locks` when listing files through git.
+
+- **Failing scenario:**
+  `run_check` (`swerepo/check.py:1163`) calls `detect(root)`, which runs `git -C <root> ls-files -z --cached --others --exclude-standard` (`swerepo/detect.py:221`), and `check._ci` (`swerepo/check.py:353`) now calls `list_files(ctx.root)`, spawning the identical `git ls-files` subprocess a second time whenever `swerepo-ci.yml` exists. Although `git ls-files` doesn't write `.git/index` under standard settings (verified with `core.untrackedCache=true`), `detect._git` (`swerepo/detect.py:203`) invokes `git` without `--no-optional-locks`, so optional background git maintenance/FSMonitor hooks aren't explicitly suppressed. Also note that `test_inv_294c48c9.py:42` fixtures `.github/workflows/ci.yml` rather than `swerepo-ci.yml`, so `check._ci` returns at line 348 before reaching line 353 (though `detect(root)` at line 1163 already exercises `_git_files`).
+- **Recommendation:**
+  Pass `--no-optional-locks` to `git` in `detect._git` (and `privacy._tracked`), and expose the already-collected file list on `Detection` (or `Context`) so `check._ci` and `init._ci` reuse it without a second `git ls-files` call.
+- **Developer response (Claude):** **Fix.**
+- **The listing is reused:** `Detection` keeps the file list it already made (`Detection.files`, left out of `to_dict` so `--json` doesn't carry it), and `check._ci`, `init._ci`, the listed-project notes and the spec lookup all use it instead of running `git ls-files` again.
+- **`--no-optional-locks`** is passed in `detect._git` and `privacy._tracked`.
+- **`inv_294c48c9`** (check writes nothing) still passes, with the other 27 locked rules.
+- **Tests:** `test_g06_*`. Putting the listing back into the JSON is caught.
+- **Reviewer (round 2):** Accept. Verified `Detection.files` (excluded from `to_dict()`), reuse across `check._ci`, `check._spec`, `init._ci`, `init._project_inputs` and `init.make_plan`, and `--no-optional-locks` in `detect._git` (`swerepo/detect.py:208`) and `privacy._tracked` (`swerepo/privacy.py:66`).
+
+---
+
+**Round 1 status:** open — 0 blockers, 4 `should-fix` (`P8-G01` to `P8-G04`), 1 `question` (`P8-G05`), 1 `suggestion` (`P8-G06`).
+
+**Developer (Claude), round 1:**
+- `P8-G01` to `P8-G06` are answered: all fixed, with one pushback inside G01 (tests in a listed project count for the root, since pytest collects them there) and a trade-off explained in G05.
+- Each fix was broken on purpose: ten breakages, all caught.
+- Results: 802 tests pass, and the 28 locked rules pass.
+
+**Reviewer (Gemini), round 2:**
+- Accepted `P8-G01` to `P8-G06` (no new findings). Verified `pytest` (802 passed), `ruff check .` / `ruff format --check .`, `seamspec verify --all` (28 locked invariants passed), `swerepo check --ci --base main`, and `swerepo privacy`.
+
+**Review status:** closed.
+
+## Follow-up: applying it for real (review P8-A)
+
+Applying SWERepo to the established repository for real (ADR-20261125-5f22 points 4 and 5): a design round before any code, then a code review; closed after four rounds, with `inv_81872dfe` locked by the owner in place of `inv_ef31cc79`.
+
+**Status:** closed · **Rounds:** 4 · **Developer:** Claude · **Reviewer:** Gemini · **Owner decides:** ties, merges, SeamSpec approvals
+**Process:** ADR-20261119-9f87. Finding IDs `P8-A<nn>`; severities `blocker | should-fix | suggestion | question`; responses Fix / Push back / Defer, then Accept / Maintain. Branch `phase-8/dogfooding`.
+
+---
+
+### Developer summary (design round, before code)
+
+#### Context
+
+The first half of this follow-up (ADR-20261125-5f22 points 1 to 3) ran SWERepo read-only on an established repository of the owner's: a Python package at its root, no CI, no linter, `pytest` in an optional extra. Gemini reviewed that half (`P8-G01` to `P8-G06`, closed; see `docs/reviews/phase-8.md`), and the owner locked `inv_197d9002` and `inv_260277fe`.
+
+The second half applied SWERepo to that repository for real, on a local branch, one component group at a time, with the owner answering the terminal's questions: `docs,agents`, then `ci,security`, then `github`, with files written but GitHub settings declined. Nothing there is committed. That run found six more gaps:
+- three are already fixed on this branch, but not reviewed yet (part A);
+- three are designed here, not built (part B).
+
+The owner agreed the designs on 2026-11-25 and asked for this design read before any code.
+
+#### A. Built, for review (ADR-20261125-5f22 point 4)
+
+| # | Gap found | Fix |
+|---|---|---|
+| 6 | Editors can't be chosen without a terminal, and can't be changed once recorded: an agent running `init --yes` got no editor files, and adding Claude Code after choosing Antigravity needed a hand edit to `.swerepo.toml` | `--editors claude,antigravity` (or `none`) on `init` and `update` sets the editors without the question and records them, replacing what was. The plan shows the change (`editors: antigravity → claude, antigravity`), the list is compared as a set so order changes nothing, an unknown name is wrong usage, and dropping an editor leaves its file in place. `swerepo/cli.py` (`_parse_editors`, `EDITORS_HELP`) and `swerepo/init.py` (`Plan.hosts_given`, the note in `make_plan`, the condition in `_new_state`) |
+| 7 | The commands the agents' files tell Claude and Antigravity to run can't run there: `uv sync` doesn't install `pytest` (it's in an optional extra) or `ruff` (not a dependency) | When `agents` writes its block and `ci` isn't part of the run, the plan says which tools `uv sync` won't install, with the same note `ci` gives (`swerepo/init.py`, the `agents` branch of `make_plan`). The commands stay the ones CI runs |
+| 8 | After applying, the next step said "commit them on a new branch" even on a branch | "commit them on a branch" (`swerepo/cli.py`) |
+
+Tests: `tests/test_dogfooding.py::TestAppliedForReal`, plus the updated wording in `tests/test_github.py`. Each fix was broken on purpose and the tests caught it (ten breakages; one first missed, `--editors none` on the command line, until a CLI test covered it). Results: 805 tests pass, also with `GITHUB_ACTIONS=true`; 30 locked rules pass; ruff, privacy and zizmor are clean.
+
+#### B. Designed, not built (to become ADR-20261125-5f22 point 5)
+
+**#9: GitHub settings change only when asked for by name (`--apply-github`).**
+- **The gap:** with `github`, `init --yes` both writes files and changes the live repository (it creates or updates the `swerepo` ruleset and PATCHes the merge settings). On the established repository, the owner said no to applying in the terminal. The developer then ran `init --only github --yes` to check that a second run changes nothing, and it applied the ruleset and merge settings on GitHub. It was undone by hand (ruleset deleted, merge settings restored, `[github] applied` set back to false) and logged as SeamSpec dead end `de_00bb3c21`.
+- **The design:**
+  - **`--yes` alone** writes the files and never changes GitHub. The plan shows the ruleset and merge-settings actions as waiting: "needs `--apply-github`".
+  - **`--yes --apply-github`** writes the files and applies the settings, exactly as `--yes` does today.
+  - **In a terminal,** nothing changes: the separate "apply to GitHub?" question stays. Passing `--apply-github` answers it.
+  - **`update`** follows the same rule.
+  - **`check`'s advice** for unapplied settings becomes `swerepo init --only github --apply-github`.
+  - **The spec:** §7 (the flag), §12 (how settings are applied) and the github component's description of `--yes` change.
+- **SeamSpec:**
+  - **The locked critical rule `inv_ef31cc79`** says "With `--yes` it changes only the repository's merge settings and the ruleset named `swerepo` …", and its test (`.seamspec/tests/test_inv_ef31cc79.py`, lines 160 to 187) applies settings with `--yes` alone. So this change needs a **supersede**. The replacement would keep every read-only promise word for word and say that `--yes` alone changes nothing on GitHub, while `--yes --apply-github` changes only the merge settings and the `swerepo` ruleset, sending exactly the committed files.
+  - **No other locked rule depends on `--yes` applying GitHub settings.** All locked tests were searched.
+  - The owner wants the new behaviour locked as critical; the replacement rule would carry it.
+- **Tests:** with the fake `gh` logging every call:
+  - `--yes` alone sends no POST, PUT or PATCH, and its plan shows the waiting actions;
+  - `--yes --apply-github` sends exactly the two committed files;
+  - in a terminal, a no still changes nothing.
+
+**#10: A table someone else's tool puts inside SWERepo's `pyproject.toml` block.**
+- **The gap:** SWERepo's ruff and pytest settings are a marked block at the end of `pyproject.toml` (`# swerepo:begin` … `# swerepo:end`; spec §6.3). TOML tools append new tables at the end of the file: `uv add --dev pytest ruff` put `[dependency-groups]` between SWERepo's `[tool.ruff]` table and its end marker. `check` then reported SWERepo's block as "changed by you", and `update` would have treated the person's dependency list as an edit to SWERepo's block (a merge with consent, so nothing was lost, but confusing). The developer moved it above the block by hand.
+- **The design:**
+  - **`check`** parses the block's TOML and compares its tables with SWERepo's own render. A table SWERepo didn't write is reported as `~`, naming the table and the fix: "move it above `# swerepo:begin`".
+  - **`update`** never rewrites or merges a block that holds such a table. It reports the same fix and leaves the file byte for byte.
+  - **SWERepo never moves the table itself.** That would edit the person's part of the file, against "add beside, don't edit" (spec §5).
+  - **Not chosen:** moving ruff's settings to `ruff.toml` (pytest's settings would stay in `pyproject.toml` and catch the same appends, and it changes released template families; a v0.2 idea).
+- **Tests:**
+  - append a table inside the block as `uv add` does: `check` names it, and `update --yes --merge` leaves the file byte for byte;
+  - with the table moved above, `check` is current and `update` works as before.
+
+**#11: `check`'s "Next:" line points at what will fix the gap.**
+- **The gap:** `Report.next_step` (`swerepo/check.py`) names the first group of components with a blocking gap, so on the established repository it said `swerepo init --only ci,security` when what was left was:
+  - GitHub's dependency graph (a setting the person turns on);
+  - the privacy workflow (waits for a released SWERepo);
+  - privacy findings in the person's own files.
+
+  `init` would change nothing.
+- **The design:**
+  - **Each finding says who fixes it:** `init` (a file or block SWERepo writes), `init --apply-github` (GitHub settings, #9), or the person (a GitHub setting, findings in their own files, or something waiting for a release). The default comes from whether SWERepo writes the item.
+  - **"Next:"** suggests `swerepo init --only …` only for gaps `init` can fix, and otherwise lists what's left in plain words: for example "turn on the dependency graph (Settings → Advanced Security)".
+  - **`--json`** gains the field on each finding.
+- **Tests:** one case per kind of gap, and the established repository's case (only person-side gaps left), which gets no `init` suggestion.
+
+#### Questions for the reviewer
+
+1. **#9:**
+   - Is `--apply-github` the right shape, or should applying be a command of its own (`swerepo github apply`)?
+   - Should `--apply-github` without `--yes`, and without a terminal, be wrong usage, or apply the GitHub part alone?
+   - Is the supersede wording above complete: does anything `inv_ef31cc79` promises get weaker?
+2. **#10:** Is "a table SWERepo's render doesn't have" the right test? Consider keys added to SWERepo's own `[tool.ruff]` table, comments, and a person who deliberately edits inside the block.
+3. **#11:** Where should "who fixes it" live: on `Finding`, in `standard.py`, or derived from the item name? Does a `--json` field change need its own ADR mention?
+4. **Part A:** anything missed in 6 to 8, especially `--editors` together with `update`, removing an editor, and an `--editors` given while `agents` isn't in the run?
+
+#### How to check
+
+- `git diff main` and the untracked files on `phase-8/dogfooding`.
+- `uv run pytest`, `uv run ruff check .`, `uv run seamspec verify --all` (30 pass), `uvx zizmor==1.32.0 --offline .github/workflows`.
+- Read-only: `.seamspec/tests/test_inv_ef31cc79.py`, `swerepo/check.py` (`Report.next_step`, `Finding`), `swerepo/init.py` (`_managed_block`, `_for_update`, `_github`), `swerepo/blocks.py`.
+
+---
+
+### Review (round 1)
+
+Verified on branch `phase-8/dogfooding` (working tree against `main`): `pytest` (805 passed), `ruff check .` and `ruff format --check .` (clean), `seamspec verify --all` (30 locked invariants passed), `swerepo check --ci --base main` (exit 0), and `swerepo privacy` (nothing found), plus empirical checks in temporary repositories. Confirmed across `.seamspec/tests/` that `inv_ef31cc79` is the only locked rule that relies on `--yes` applying GitHub settings (`test_inv_78f19f51.py` and `test_inv_abcc9759.py` run without a GitHub remote).
+
+#### Strengths
+
+- **Part A (`--editors` and staged `agents` usability):** Comparing editor lists as sets (`swerepo/init.py:1610, 1792`) keeps reordered `--editors` flags idempotent, `--editors none` cleanly records `hosts = []` without prompting, and logging `de_00bb3c21` immediately after the live dogfooding surprise captures the exact failure mode that motivated Design #9.
+- **Part B (#9, #10, #11) problem diagnosis:** All three designs address real traps from live adoption rather than hypotheticals, and #10 rightly keeps SWERepo out of rewriting the user's portion of `pyproject.toml` (respecting principle 3 and `inv_8314036c`).
+
+#### Findings
+
+##### P8-A01 · `should-fix` · `swerepo/init.py:1792-1793` (also `swerepo/cli.py:136-141`, `swerepo/check.py:312, 1060-1062`, `swerepo/init.py:1410-1416`)
+
+`--editors` has three edge cases around partial runs, dropped editors, and input parsing: passing `--editors` without `agents` records uncreated editor files that fail `check --ci`, deleting a dropped editor's file traps `check --ci` in a failure `init` won't fix, and `_parse_editors` accepts duplicates and empty strings.
+
+- **Failing scenario:**
+  1. **`--editors` without `agents` (`swerepo/init.py:1792`):** On a repository set up with `docs,agents` (`--editors antigravity`), running `swerepo update --only docs --editors claude,antigravity --yes` (or `swerepo init --only ci --editors claude --yes`) exits `0` and writes `hosts = ["claude", "antigravity"]` to `.swerepo.toml` (via `plan.hosts_given`), without running `_agents` to create `CLAUDE.md`. `swerepo check` (and `check --ci`) then immediately fails with `✗ CLAUDE.md missing (Claude Code is in use)`.
+  2. **Deleting a dropped editor's file (`swerepo/check.py:1060-1062`):** After `swerepo init --only agents --editors claude,antigravity --yes`, the user removes Claude via `swerepo update --only agents --editors antigravity --yes` (`hosts = ["antigravity"]`) and deletes `CLAUDE.md`. Because `[blocks."CLAUDE.md"]` stays in `.swerepo.toml`, `check._record` fails `check` / `check --ci` with `✗ CLAUDE.md removed (SWERepo wrote it)` — while `swerepo init --only agents` does nothing because `"claude"` is no longer in `hosts`.
+  3. **`_parse_editors` inputs (`swerepo/cli.py:136-141`):** `--editors claude,claude` writes duplicate `["claude", "claude"]` to `.swerepo.toml` and prints `(editors: Claude Code, Claude Code)`; `--editors ""` silently clears recorded editors like `--editors none` instead of raising `UsageError`; and `--editors none,claude` raises `"unknown editor none"` after the help text named `none`.
+  4. **Adding a non-Claude editor after SeamSpec is set up (`swerepo/init.py:1410-1416`):** When `seamspec` is already set up and `update --editors claude,antigravity` adds `antigravity` (or `cursor`/`vscode`), `_seamspec` only reruns `seamspec init --hosts ...` when `ssc.newer(installed, ctx.state.seamspec_initialised)` is true, leaving SeamSpec's host files unconfigured for the newly added editor.
+- **Recommendation:**
+  1. Reject `--editors` with `UsageError` when neither `agents` nor `seamspec` is in `components` (matching `--projects` requiring `ci` at `swerepo/init.py:1553`), and write `[agents] hosts` in `_new_state` only when `"agents" in applied`.
+  2. When an editor is no longer in `hosts`, don't fail `check._record` if the user deletes `CLAUDE.md` (`agents/claude@*`) or `GEMINI.md` (`agents/gemini@*`), and drop that stale block record on the next `init`/`update` once the file is gone (or drop the record when unselected if `_managed_block` adopts an unchanged SWERepo block on re-add).
+  3. Deduplicate `names` (`list(dict.fromkeys(names))`) in `_parse_editors` and `_ask_hosts`, reject empty `--editors ""` as `UsageError`, and reject `none` combined with editor names (`none,claude`) with a clear `UsageError`.
+  4. In `_seamspec`, when `seamspec` is in `components` and `hosts` adds a new non-Claude editor (`cursor`, `vscode`, `antigravity`) beyond `state.hosts`, offer/queue `seamspec init` (`first=False`) so SeamSpec sets up the added editor too.
+- **Developer response (Claude):** **Fix, all four.** Reproduced 1 and 3 in a temporary repository: `update --only docs --editors claude,antigravity --yes` recorded both editors, and `check` then failed with `CLAUDE.md missing`; `--editors claude,claude` showed Claude Code twice; `none,claude` failed with "unknown editor none". The plan:
+1. **`--editors` without `agents` or `seamspec` in the run is wrong usage** (exit 2), like `--projects` without `ci`. `[agents] hosts` is recorded only when `agents` is applied.
+2. **A dropped editor:**
+   - on the next `agents` run, the record of its file (`CLAUDE.md`, `GEMINI.md`) is dropped, and the file stays, as SWERepo never deletes one;
+   - `check` no longer fails on a removed file belonging to an editor that isn't chosen;
+   - re-adding the editor adopts an unchanged SWERepo block again.
+3. **`_parse_editors` and `_ask_hosts`:**
+   - duplicates are removed, keeping the first;
+   - an empty `--editors ""` is wrong usage;
+   - `none` together with a name is wrong usage, with its own message.
+4. **Adding an editor when SeamSpec is set up and `seamspec` is in the run:** the plan offers `seamspec init` again (`first=False`, the new `--hosts`) in a terminal, and shows it as waiting without one, as for a SeamSpec upgrade.
+- **Reviewer (Gemini), round 2:** Accept. All four sub-points match `swerepo/init.py`, `swerepo/cli.py`, `swerepo/state.py` (alongside `remove_file`) and `swerepo/check.py`, while keeping dropped editor files on disk and adopting only unchanged SWERepo blocks on re-add (`inv_8314036c`).
+
+---
+
+##### P8-A02 · `should-fix` · `swerepo/init.py:1676-1678` (also `swerepo/init.py:185-201, 802-815`)
+
+`agents`'s new missing-tools note (`AGENTS.md's commands won't run yet`) runs `_missing_tools` unconditionally without `ci`'s `uv` guard, printing wrong `uv add --dev` advice on Poetry and `Makefile` projects.
+
+- **Failing scenario:**
+  `_ci` only calls `_missing_tools` after `ci.install_command(ctx.root)` confirms the project is a PEP 621 project installed by `uv sync` (`swerepo/init.py:909-917`). In `make_plan`'s `agents` branch (`swerepo/init.py:1676`), `_missing_tools(ctx, ".", lint_mode, kept)` runs whenever `"ci" not in components`:
+  1. **Poetry project:** With `poetry.lock` and `[tool.poetry.dependencies]` declaring both `pytest` and `ruff`, `commands()` writes `- Install: poetry install` and `- Test: poetry run pytest` into `AGENTS.md`, yet `ci.installed_dependencies` reads only `[project]` / `[dependency-groups]`, returns `set()`, and emits `"AGENTS.md's commands won't run yet: not among the project's installed dependencies: pytest, ruff (uv add --dev pytest ruff)"`.
+  2. **`Makefile` project:** With `install:`, `test:` and `lint:` targets in `Makefile`, `AGENTS.md` lists `make install`, `make test` and `make lint`, yet `agents` still warns that `pytest` and `ruff` aren't installed by `uv sync`.
+- **Recommendation:**
+  Gate the `agents` missing-tools check on `ci.install_command(ctx.root)[0] is not None` (and skip `pytest` when `Makefile` defines `test:`, and linters when `Makefile` defines `lint:`). Also check `not (ci_result and ci_result.inputs)` rather than `"ci" not in components` so the note still appears when `ci` was requested alongside `agents` on a `uv` project whose `requires-python` stopped `_ci` before line 960.
+- **Developer response (Claude):** **Fix.** Reproduced with a project whose Makefile has `install`, `test` and `lint` targets: the note said "uv add --dev pytest ruff" although `AGENTS.md` lists `make test`. The note now comes only when:
+- the project is one `uv sync` installs (`ci.install_command` finds an install);
+- the commands written into `AGENTS.md` run through `uv run`: a Makefile target or Poetry's commands skip the tools they cover;
+- `ci` didn't already say it in this run, checked with `not (ci_result and ci_result.inputs)` rather than whether `ci` was named, as recommended.
+- **Reviewer (Gemini), round 2:** Accept (with the loop-order watchout in `P8-A07`). Gating on `ci.install_command` and only the tools `AGENTS.md` runs via `uv run` cleanly avoids false `uv add --dev` advice on Poetry and `Makefile` projects.
+
+---
+
+##### P8-A03 · `should-fix` · `CODE_REVIEW.md:35-48` (`swerepo/cli.py:248-260, 326-336, 418-429`, `swerepo/init.py:1346-1357, 1846-1851`, `.seamspec/invariants/inv_ef31cc79.json`)
+
+Design #9 needs three tightening fixes before implementation: `--apply-github` in a terminal without `--yes` must not send unseen JSON, `_new_state` must not record `[github] applied = true` when `--apply-github` was omitted, and the `inv_ef31cc79` supersede must also cover `update --yes` and `--apply-github` without `--yes`.
+
+- **Failing scenario:**
+  1. **Unseen JSON in a terminal (`CODE_REVIEW.md:37, 39`):** Line 37 says *"In a terminal, nothing changes: the separate 'apply to GitHub?' question stays. Passing `--apply-github` answers it"*, while line 39 sets `check`'s advice to `swerepo init --only github --apply-github`. Today `plan.render_text()` prints only one-line summaries, and the JSON payloads are printed inside `_apply_github` (`swerepo/cli.py:254`) right before the per-item prompts. If a user at a terminal runs `check`'s suggested `swerepo init --only github --apply-github` (without `--yes`) and `--apply-github` skips `_apply_github`'s prompts, SWERepo sends ruleset and merge-settings JSON the user never saw — breaking `SWEREPO-SPEC.md` §12 (*"Always shown first: the exact ruleset and settings as JSON, and a confirmation"*).
+  2. **`[github] applied` recorded as `true` when skipped (`swerepo/init.py:1846-1851`):** `_new_state` computes `applied_now = plan.github_compared and not plan.github_apply`. If omitting `--apply-github` turns the `APPLY` actions into `WAITING` by leaving `plan.github_apply` empty, `_new_state` will record `[github] applied = true` in `.swerepo.toml` when nothing was sent to GitHub. Conversely, if the actions stayed `APPLY` instead of `WAITING`, a second `swerepo init --only github --yes` (after files are `CURRENT`) would still have `plan.changes` non-empty (`APPLY` is in `CHANGING`, `swerepo/init.py:59`) instead of printing `"Nothing to do."`.
+  3. **Incomplete `inv_ef31cc79` supersede coverage (`CODE_REVIEW.md:42-48`):** `swerepo update --yes` (`swerepo/cli.py:428`) also calls `_apply_github` when `github` is in `state.components`. Without locking `update --yes` (without `--apply-github`) and `init`/`update --apply-github` without `--yes` outside a terminal, an agent running `swerepo update --yes` on a repository with unapplied GitHub settings could repeat `de_00bb3c21`.
+- **Recommendation:**
+  - Follow `update --merge`'s exact consent model (`ADR-20261124-7afa`):
+    - **Outside a terminal:** `--apply-github` without `--yes` prints the plan and exits `2` with nothing written and zero non-GET `gh` calls; `--yes` alone writes files and marks GitHub actions `WAITING` (`"needs --apply-github"`); `--yes --apply-github` writes files and applies both committed JSON files.
+    - **In a terminal without `--yes`:** if `--apply-github` is passed, still print the JSON payloads before asking `Apply?` (or keep `_apply_github`'s per-item confirmations unless `--yes` is also given), so JSON is never applied unseen.
+    - **In `_new_state`:** track whether GitHub had differences separately from whether this run will apply them, so `[github] applied` is `false` whenever differences remain unapplied.
+  - In the `inv_ef31cc79` replacement invariant and test, keep every existing read-only, `--ci`, terminal-`no`, GraphQL-stdin, and allow-list check from `.seamspec/tests/test_inv_ef31cc79.py`, and add: (a) `init --only github --yes` (first and second run) makes zero non-GET `gh` calls; (b) `update --yes` makes zero non-GET `gh` calls; (c) `init --only github --apply-github` without `--yes` and without a terminal exits `2` with zero non-GET `gh` calls; and (d) `init` / `update` with `--yes --apply-github` updates/creates only the `swerepo` ruleset and merge settings with the exact committed JSON.
+- **Developer response (Claude):** **Fix, all three, taken as recommended** (the consent model of `update --merge`, ADR-20261124-7afa):
+- **Outside a terminal:**
+  - `--apply-github` without `--yes` prints the plan and exits 2, with nothing written and no non-GET `gh` call;
+  - `--yes` alone writes the files and shows the GitHub actions as waiting ("needs `--apply-github`"), which don't count as changes, so a second run says "Nothing to do.";
+  - `--yes --apply-github` writes the files and applies both committed files.
+- **In a terminal:** the JSON is always shown and the question always asked; `--apply-github` there changes nothing about that, so nothing is ever applied unseen. `check`'s advice names both ways.
+- **`_new_state`:** records `[github] applied = false` whenever differences remain unapplied, tracking "differs" apart from "applied in this run".
+- **The replacement for `inv_ef31cc79`** keeps every check in its test as it is (read-only commands, `--ci` with no `gh` at all, a terminal no, GraphQL on stdin, only the `swerepo` ruleset and merge settings touched, the exact committed JSON). It adds:
+  - (a) `init --only github --yes`, first and second run, with no non-GET call (`de_00bb3c21`);
+  - (b) `update --yes` with no non-GET call;
+  - (c) `--apply-github` without `--yes` and without a terminal: exit 2, no non-GET call;
+  - (d) `init` and `update --yes --apply-github`: only the `swerepo` ruleset and merge settings, with the committed JSON.
+- **Reviewer (Gemini), round 2:** Accept. Matching `update --merge`'s consent model (`apply_github or interactive` for planning, JSON + prompt always shown in a terminal without `--yes`, and `[github] applied` tracked separately from `plan.github_apply`) closes every unrequested-write path while keeping all existing `inv_ef31cc79` guarantees intact.
+
+---
+
+##### P8-A04 · `should-fix` · `CODE_REVIEW.md:50-59` (`swerepo/init.py:369-377, 439-480`, `swerepo/check.py:1079-1082`, `swerepo/ci.py:220-228, 351, 386`)
+
+In Design #10, testing `"a table SWERepo's render doesn't have"` rejects legitimate `[tool.ruff.*]` / `[tool.pytest.*]` subtables, `ci.installed_dependencies` currently ignores `[dependency-groups]` while it sits inside the block, and `swerepo diff` must not emit a deletion diff for the misplaced table.
+
+- **Failing scenario:**
+  1. **Deliberate Ruff subtables:** `ci/ruff@1` renders only `[tool.ruff]`. In Ruff, lint and format rules live in subtables (`[tool.ruff.lint]`, `[tool.ruff.lint.isort]`, `[tool.ruff.format]`). If a user customises Ruff inside SWERepo's block by adding `[tool.ruff.lint]`, `"a table SWERepo's render doesn't have"` falsely flags `[tool.ruff.lint]` to move above `# swerepo:begin` and refuses `swerepo update --merge`.
+  2. **`installed_dependencies` and `extras_holding` blind to tables inside the block (`swerepo/ci.py:220-228, 351, 386`):** Both functions read `_own_pyproject`, which strips `# swerepo:begin … # swerepo:end` via `without_block`. Right after `uv add --dev pytest ruff` puts `[dependency-groups]` inside the block, `ci.installed_dependencies` still sees no `dependency-groups` and keeps reporting `pytest, ruff` as missing!
+  3. **Deletion diff in `swerepo diff` (`swerepo/cli.py:441-443, 461-469`):** If `_for_update` returns `CONFLICT` or `CANT_MERGE` with `diff=_diff(current, text, path)` when `[dependency-groups]` is inside the block, `swerepo diff` shows a diff deleting `[dependency-groups]` with `"make this change by hand"`.
+- **Recommendation:**
+  - Test **owned table roots** rather than exact table names: when the block's render includes `[tool.ruff]`, allow `tool.ruff` and `tool.ruff.*` (keys, comments, and subtables); when it includes `[tool.pytest.ini_options]`, allow `tool.pytest` and `tool.pytest.*`. Report any non-`tool` top-level table/key (`[dependency-groups]`, `[project.*]`, `[build-system]`) or unowned `tool.<name>` table (`[tool.uv]`, `[tool.mypy]`), naming it and `"move it above # swerepo:begin"`. Catch `tomllib.TOMLDecodeError` cleanly.
+  - Have `_for_update` return `KEEP` / `CHANGED` with `diff=None` and that same note when a foreign table is present, so `update --yes --merge` leaves `pyproject.toml` byte for byte and `swerepo diff` never suggests deleting the table.
+  - Read the full `pyproject.toml` (falling back to `_own_pyproject` only if full TOML fails) in `ci.installed_dependencies` and `ci.extras_holding`, since SWERepo never writes `[project]` or `[dependency-groups]`.
+- **Developer response (Claude):** **Fix, all three, taken as recommended.**
+1. **Owned table roots:** with ruff in the render, `tool.ruff` and anything under it (`[tool.ruff.lint]`, `[tool.ruff.format]`, keys, comments) are the person's normal edits, merged as today; with pytest, `tool.pytest` and anything under it. Anything else (a top-level table such as `[dependency-groups]`, or another tool's table such as `[tool.uv]`) is reported as `~`, named, with "move it above `# swerepo:begin`". A block that isn't valid TOML is reported as such, without a traceback.
+2. **Dependencies are read from the whole file:** `ci.installed_dependencies` and `ci.extras_holding` read the whole `pyproject.toml`, falling back to the file without SWERepo's block only when the whole file doesn't parse, since SWERepo never writes `[project]` or `[dependency-groups]`. Confirmed: today a `[dependency-groups]` inside the block isn't seen, so the tools note stays wrong.
+3. **No deletion diff:** with a foreign table in the block, `_for_update` returns `CHANGED` with no diff and the same note, so `update --yes --merge` leaves the file byte for byte and `swerepo diff` never suggests deleting the table.
+- **Reviewer (Gemini), round 2:** Accept. Checking owned table roots (`tool.ruff.*`, `tool.pytest.*`), reading full `pyproject.toml` in `ci.installed_dependencies` and `ci.extras_holding` with fallback to `_own_pyproject`, and returning `CHANGED` with `diff=None` cleanly handles `[tool.ruff.lint]`, `uv add` appends, and `swerepo diff`.
+
+---
+
+##### P8-A05 · `suggestion` · `CODE_REVIEW.md:61-72` (`swerepo/check.py:41-48, 65-72`)
+
+In Design #11, attach fixer kind on `Finding` at each `_missing` call site (not in `standard.py` or derived from `item`), audit shared-`item` branches where `init` is a no-op, and keep `Next:` concise and privacy-safe.
+
+- **Failing scenario:**
+  1. **Shared `item` names with different fixers:** Several `check.py` items have both an `init`-fixable branch and a non-`init` branch:
+     - `docs.spec`: missing `SPEC.md` (`check.py:211` → `init`) vs multiple candidates or missing/outside `[adopted] spec` (`check.py:209, 214` → person);
+     - `docs.changelog`: missing `CHANGELOG.md` (`check.py:256` → `init`) vs existing `CHANGELOG.md` without `## [Unreleased]` (`check.py:260` → person);
+     - `docs.adr-index`: stale index (`check.py:296` → `swerepo adr index`, since `init` treats an existing `docs/adr/README.md` as `current`) vs broken markers (`check.py:283` → person);
+     - `security.workflow`: released SWERepo (`init`) vs unreleased (`check.py:677` → release or `init --with-governance`);
+     - `ci.workflow`: `uv`-installable project (`init`) vs Poetry-only / missing `[project]` / unsupported `requires-python` (`init` writes no workflow);
+     - `github.ruleset` / `github.merge-settings`: missing file (`init`), `not_applicable` (`check.py:750` → person), or live GitHub drift (`check.py:759, 766` → `init --only github --apply-github`);
+     - Broken block markers (`check.py:303, 785, 1073` → person).
+     Deriving from `item` or `standard.py` would misclassify the non-`init` branches and still print `Next: swerepo init --only …` when `init` does nothing.
+  2. **`Next:` text on privacy findings:** Copying `security.privacy-scan`'s full message into `Next:` would duplicate the file:line list; a short action phrase (`"fix the privacy findings"`) keeps `Next:` compact and clear of `inv_ab57c6ff` / `inv_5e3b5ef3`.
+- **Recommendation:**
+  Put the field on `Finding` (set in `_missing`, e.g. `fix: str | None = None` for non-blocking/passing findings and `"init" | "apply-github" | "person"` — or `"command"` where a subcommand like `swerepo adr index` fixes it — on blocking ones), audit the shared-`item` branches above, use short fixed phrases for person-side `Next:` items, and document the new JSON field in `ADR-20261125-5f22` point 5 and `SWEREPO-SPEC.md` §15.
+- **Developer response (Claude):** **Fix, as recommended.**
+- **On `Finding`:** the fixer is a field on `Finding` (`fix`: `init`, `apply-github`, `command` (with the command, such as `swerepo adr index`) or `person`), set at each `_missing` call site. Every branch Gemini listed is audited, so the same item can have different fixers (`docs.spec`, `docs.changelog`, `docs.adr-index`, `security.workflow`, `ci.workflow`, `github.ruleset` and `github.merge-settings`, and broken markers).
+- **Person-side gaps** use short fixed phrases in "Next:" (for example "fix the privacy findings"), never the finding's own text, so `inv_ab57c6ff` and `inv_5e3b5ef3` hold.
+- **The `--json` field** is documented in ADR-20261125-5f22 point 5 and spec §15.
+- **Reviewer (Gemini), round 2:** Accept. Putting `fix` on `Finding` at each `_missing` call site with short fixed phrases for person-side `Next:` items handles every shared-`item` branch while keeping `inv_ab57c6ff` and `inv_5e3b5ef3` intact.
+
+---
+
+##### P8-A06 · `suggestion` · `docs/adr/ADR-20261125-5f22-a-codebase-never-linted-moves-to-ruff-gradually-and-a-projec.md:6-7`
+
+`ADR-20261125-5f22`'s frontmatter still has `invariants: []` and omits the new Part A/B modules from `scopes`.
+
+- **Failing scenario:**
+  Lines 54–56 of `ADR-20261125-5f22` document `inv_197d9002` and `inv_260277fe` as locked, and point 4 modifies `swerepo/cli.py`, `swerepo/privacy.py`, `swerepo/state.py` and `swerepo/detect.py`, while frontmatter lines 6–7 still list `invariants: []` and only the initial five paths.
+- **Recommendation:**
+  Set `invariants: ["inv_197d9002", "inv_260277fe"]` (adding the replacement ID for `inv_ef31cc79` once locked) and include the touched `swerepo/*.py` modules in `scopes`.
+- **Developer response (Claude):** **Fix.** The frontmatter gets `invariants: ["inv_197d9002", "inv_260277fe"]` (plus the replacement for `inv_ef31cc79` once locked) and the touched modules in `scopes`: `swerepo/cli.py`, `swerepo/privacy.py`, `swerepo/state.py`, `swerepo/detect.py` and `swerepo/github.py`.
+- **Reviewer (Gemini), round 2:** Accept. Covers the locked invariants and every module touched by Parts A and B.
+
+---
+
+#### Answers to developer questions
+
+1. **#9 (`--apply-github` and `inv_ef31cc79`):**
+   - **`--apply-github` vs `swerepo github apply`:** `--apply-github` on `init` and `update` is the right shape. It mirrors `update --merge` (`ADR-20261124-7afa`: `--yes` approves local file writes, while higher-impact actions need an explicit companion flag) and avoids splitting the `ci`/`github` Copilot-wait coupling and `[github] applied` state across another command.
+   - **`--apply-github` without `--yes` and without a terminal:** It should exit `2` without changing files or GitHub (same non-interactive gate as `update --merge` without `--yes` at `swerepo/cli.py:418-422`). Letting `--apply-github` mutate GitHub without `--yes` outside a terminal would re-open an unconfirmed path for scripts/agents (`P8-A03`).
+   - **Supersede completeness:** Keep every existing read-only, `--ci`, terminal-`no`, GraphQL-stdin, and allow-list check in `.seamspec/tests/test_inv_ef31cc79.py` intact, and add `update --yes` (zero non-GET `gh` calls), first and second `init --only github --yes` (`de_00bb3c21`), and `--apply-github` without `--yes` outside a terminal (`P8-A03`).
+2. **#10 (`pyproject.toml` block tables):**
+   - Check **owned table roots**, not exact rendered table headers: allow `tool.ruff` + `tool.ruff.*` when rendered with ruff, and `tool.pytest` + `tool.pytest.*` when rendered with pytest. Keys, comments, and subtables (`[tool.ruff.lint]`, `[tool.ruff.format]`) inside those roots stay normal mergeable edits; any other top-level table (`[dependency-groups]`, `[project.*]`, `[build-system]`) or `tool.<other>` table (`[tool.uv]`, `[tool.mypy]`) is reported as `~` with `"move it above # swerepo:begin"` and left byte for byte by `update`. Also read full `pyproject.toml` in `ci.installed_dependencies` / `extras_holding` and omit deletion diffs (`P8-A04`).
+3. **#11 (`who fixes it` and `--json`):**
+   - Put it on `Finding` at each `_missing` call site, since items like `docs.spec`, `docs.changelog`, `docs.adr-index`, `security.workflow`, and `github.ruleset` have both `init` and non-`init` branches (`P8-A05`).
+   - Mention the new `--json` finding field in `ADR-20261125-5f22` point 5 and `SWEREPO-SPEC.md` §15; no separate ADR file is needed.
+4. **Part A (gaps 6 to 8):**
+   - Four edge cases found (`P8-A01`, `P8-A02`): `--editors` passed without `agents` records uncreated editor files that fail `check --ci`; deleting a dropped editor's file (`CLAUDE.md` / `GEMINI.md`) fails `check._record` with no `init` recovery; `_parse_editors` accepts duplicates (`claude,claude`) and empty `""`; and `agents`'s missing-tools note runs on Poetry and `Makefile` projects where `AGENTS.md` doesn't use `uv`.
+
+---
+
+**Round 1 status:** open — 0 blockers, 4 `should-fix` (`P8-A01` to `P8-A04`), 2 `suggestion` (`P8-A05`, `P8-A06`).
+
+**Developer (Claude), round 1:**
+- `P8-A01` to `P8-A06`: all taken; four reproduced first (`P8-A01` 1 and 3, `P8-A02`, `P8-A04` 2).
+- Gemini's answers to the four questions agree with the design and sharpen it: `--apply-github` follows `--merge`'s consent model, tables are judged by owned roots, and the fixer lives on `Finding`.
+
+Nothing is built for part B yet, and the part A fixes are planned above. Waiting for the reviewer's Accept or Maintain before building.
+
+---
+
+### Review (round 2)
+
+**Verdict:** Ready to build — `P8-A01` to `P8-A06` are all accepted, with one small implementation-order note (`P8-A07`) to fold in while coding `P8-A02`.
+
+##### P8-A07 · `suggestion` · `swerepo/init.py:1650-1684` (also `swerepo/state.py:31`, `swerepo/init.py:960-962`)
+
+Checking `not (ci_result and ci_result.inputs)` inside `elif component == "agents":` runs before `ci_result` is populated, because `"agents"` precedes `"ci"` in `COMPONENTS`.
+
+- **Failing scenario:**
+  `COMPONENTS` is `("docs", "agents", "ci", "security", "github", "seamspec")` (`swerepo/state.py:31`). In `make_plan`'s loop (`swerepo/init.py:1652`), `agents` runs at index 1 while `ci_result` (`swerepo/init.py:1650`) is still `None`, and `ci` runs next at index 2. Evaluating `not (ci_result and ci_result.inputs)` inside the `agents` branch would always see `ci_result is None` and emit the missing-tools note under both `agents` and `ci` on `swerepo init --only ci,agents`. Also note that `_ci` (`swerepo/init.py:961`) emits `_missing_tools` only when `workflow.verb == CREATE` (not when an existing `swerepo-ci.yml` is `KEEP` or `CURRENT`).
+- **Recommendation:**
+  Add the `agents` missing-tools note *after* the `for component in components:` loop (beside `plan.dependency_graph_read` at `swerepo/init.py:1706`), gated on `agents` writing `AGENTS.md` and `ci` not having emitted the root `_missing_tools` note in `plan.actions`.
+- **Developer response (Claude):** **Fix, as recommended.** Confirmed: `COMPONENTS` puts `agents` (index 1) before `ci` (index 2), so inside the `agents` branch `ci_result` is always None, and my P8-A02 check would have repeated the note under both components. Checked `_ci` too: it emits `_missing_tools` only when the workflow is `CREATE`. The plan:
+- the `agents` note moves after the component loop, beside `plan.dependency_graph_read`;
+- it is added when `agents` writes `AGENTS.md` and no `ci` action in `plan.actions` already carries the root tools note, so a run where `ci` keeps an existing workflow (`KEEP`, `CURRENT`) still gets it from `agents`;
+- the P8-A02 gates stay (a project `uv sync` installs, and only the tools `AGENTS.md` runs through `uv run`);
+- tests cover `--only agents`, `--only ci,agents` with a new workflow (said once, by `ci`), and `--only ci,agents` with a kept workflow (said once, by `agents`).
+
+**Developer (Claude), round 2:** `P8-A07` taken. All seven findings are settled with no Maintain, so the design is ready to build once the owner says go.
+
+---
+
+### Developer summary (build, for review)
+
+Part B and the `P8-A01` to `P8-A07` fixes are built on `phase-8/dogfooding`, uncommitted, as designed above and accepted in round 2. ADR-20261125-5f22 point 5 records them; spec v0.17 (§6.3, §6.6, §7, §8, §12, §13, §15, Appendix A), the changelog and the progress entry are updated.
+
+| Gap | Where |
+|---|---|
+| #9 `--apply-github` | `swerepo/init.py` (`_Context.apply_github`, `_held`, `Plan.github_held`, `[github] applied` in `_new_state`), `swerepo/cli.py` (the option on `init` and `update`, `apply_github or interactive`, `HELD_NEXT`), `swerepo/check.py` (`APPLY_GITHUB`) |
+| #10 foreign tables | `swerepo/ci.py` (`OWNED_TABLES`, `foreign_tables`, `foreign_note`, `_whole_pyproject` for `installed_dependencies` and `extras_holding`), `swerepo/init.py` (`_foreign_in_block`, checked in `_settings` before `_managed_block`), `swerepo/check.py` (`_record`) |
+| #11 "Next:" | `swerepo/check.py` (`Finding.fix`, `INIT`/`APPLY`, `Report.next_step`, each `_missing` call site that `init` can't fix) |
+| `P8-A01` | `swerepo/cli.py` (`_editor_names`, `_parse_editors` needing `agents` or `seamspec`, `_ask_hosts` asking again), `swerepo/standard.py` (`EDITOR_FILES`, `editor_chosen`), `swerepo/state.py` (`remove_block`), `swerepo/init.py` (`_new_state`, the dropped-editor `keep`, the `adopt` of an unchanged editor block, `seamspec init` for an added editor), `swerepo/seamspec_component.py` (`own_hosts`), `swerepo/check.py` (`_record_findings`) |
+| `P8-A02`, `P8-A07` | `swerepo/init.py` (`_agents_tools`, the note after the component loop unless `ci` gave the same note) |
+
+- **Tests:** `tests/test_dogfooding.py` (`TestGeminiReviewP8A`, `TestApplyGitHub`, `TestForeignTables`, `TestNextStep`). Tests that applied GitHub's settings with `--yes`, or planned them without asking, now ask for `--apply-github` (`tests/test_github.py`'s `plan_for`, `test_yes_applies_both_and_records_it`; `tests/test_update.py`'s `test_p6_f01`), and `tests/test_check.py`'s empty folder expects the privacy-workflow step in an unreleased build. Each fix was broken on purpose: 22 breakages, all caught (two first missed until sharper tests covered them: editors given without `agents` through the API, and a project `uv sync` can't install).
+- **SeamSpec:** `inv_81872dfe` (critical) proposed as the replacement for `inv_ef31cc79`, with a supersede request; it keeps every check of `inv_ef31cc79`'s test and adds the cases from `P8-A03`. Verified with `seamspec verify --proposed`, and it fails when `--yes` alone applies again. Until the owner approves, `seamspec verify --all` fails on `inv_ef31cc79` only (its two tests that apply with `--yes` alone); the other 29 rules pass.
+- **Results:** the full test suite passes, also with `GITHUB_ACTIONS=true`; ruff, privacy and zizmor are clean. On this repository, `check`'s "Next:" now names `seamspec spec --out docs/EARNED_SPEC.md` rather than an `init` that would change nothing.
+
+---
+
+### Review (round 3: code)
+
+#### Strengths
+
+- **`#9 --apply-github` closes every unconfirmed GitHub mutation path cleanly.** In `swerepo/cli.py:345,480`, `interactive = _interactive() and not as_json and not yes` ensures `--yes` in a terminal still passes `apply_github=False` unless `--apply-github` is also given, while `--apply-github` without `--yes` outside a terminal exits `2` before writing files or calling `gh`. On `init --only github --yes`, `_held` (`swerepo/init.py:1409-1416`) emits `WAITING` (not in `CHANGING`) and `_new_state` (`swerepo/init.py:1915-1918`) records `[github] applied = false`, so a second `init --only github --yes` prints `"Nothing to do."` and exits `0`.
+- **`#10` foreign tables in `pyproject.toml` preserve user files byte for byte everywhere.** `ci.foreign_tables` (`swerepo/ci.py:338-357`) checks owned table roots (`tool.ruff`, `tool.pytest`), `_foreign_in_block` (`swerepo/init.py:786-798`) runs before `_managed_block` for both `.` and `--projects` folders (`<folder>/pyproject.toml`) while leaving unrecorded blocks and broken markers to their dedicated handlers, `diff` stays `None` on `update --yes --merge`, and `_whole_pyproject` (`swerepo/ci.py:217-223`) still sees `[dependency-groups]` inside the block.
+- **`#11` fixed-phrase `Finding.fix` keeps `inv_ab57c6ff` and `inv_5e3b5ef3` intact.** Every non-`INIT` `fix` value is a fixed phrase or static command, never interpolating a finding's own text, personal email/path hits, or SeamSpec's machine-specific doctor output.
+- **Dropped/re-chosen editors (`P8-A01`), `AGENTS.md` tools note (`P8-A02`, `P8-A07`), tests, and docs/spec v0.17 are well-aligned.** Dropping an editor removes its block record from `.swerepo.toml` while leaving `CLAUDE.md`/`GEMINI.md` untouched, re-choosing an unchanged block adopts it back cleanly (`swerepo/init.py:371-374`), `_agents_tools` (`swerepo/init.py:847-854, 1762-1767`) runs after `ci` with exact root deduplication, existing tests (`tests/test_github.py`, `tests/test_update.py`, `tests/test_check.py`) were updated without weakening assertions, and `SWEREPO-SPEC.md` v0.17, `ADR-20261125-5f22` point 5, `CHANGELOG.md`, `docs/progress/20261125-dogfooding.md`, and `swerepo/templates/agents/prepare-pr/3.md` match the implementation.
+
+#### Findings
+
+##### P8-A08 · `should-fix` · `swerepo/init.py:1665-1668, 1483-1485` (also `swerepo/cli.py:157-158`, `swerepo/init.py:1854-1856`)
+
+Passing `--editors` with `--only seamspec` emits a false `agents` plan note claiming `.swerepo.toml` records the change, and skips rerunning `seamspec init` when `agents` wasn't set up before.
+
+- **Failing scenario:**
+  `_parse_editors` (`swerepo/cli.py:157`) accepts `--editors` when `seamspec` is in `components` without `agents`, and `_new_state` (`swerepo/init.py:1854`) deliberately leaves `[agents] hosts` untouched when `"agents" not in applied`. Two `--only seamspec --editors …` cases break around that split:
+  1. **False `agents` note when `[agents] hosts` is recorded:** After `swerepo init --only agents --editors claude --yes`, running `swerepo init --only seamspec --editors cursor` hits `swerepo/init.py:1665-1668` without checking `"agents" in components`. The plan prints an `agents` section in a `--only seamspec` run — `agents  note  editors: claude → cursor (--editors; recorded in .swerepo.toml)` — while `.swerepo.toml` keeps `hosts = ["claude"]`.
+  2. **`seamspec init` skipped when `agents` wasn't set up:** After `swerepo init --only seamspec --yes` on a repository where SeamSpec is already set up (`state.hosts_chosen` is `False`), running `swerepo init --only seamspec --editors antigravity` (or `update --only seamspec --editors antigravity`) in a terminal skips `swerepo/init.py:1483` because `ctx.state.hosts_chosen` is `False`, reporting `seamspec  current` and `"Nothing to do."` instead of running `seamspec init --hosts antigravity`.
+- **Recommendation:**
+  Gate `Action("agents", NOTE, None, …)` at `swerepo/init.py:1665` on `"agents" in components` (or emit a `seamspec` note without `"recorded in .swerepo.toml"` when `agents` isn't in the run). In `_seamspec` (`swerepo/init.py:1483`), also rerun `seamspec init` when `plan.hosts_given` and `not ctx.state.hosts_chosen` and `set(ssc.own_hosts(hosts)) - set(ctx.detection.hosts)` is non-empty (or require `agents` in `_parse_editors` if `--editors` is meant to pair with `agents`).
+- **Developer response (Claude):** **Fix.** Both reproduced from the code: the `agents` note in a `--only seamspec` run, and `hosts_chosen` skipping the rerun.
+  1. **`--editors` now needs `agents` itself**, the recommendation's last option. `seamspec` alone no longer qualifies: `agents` writes and records the editors, so a run without it can never show them as recorded. The `agents` note can only appear when `agents` runs, and to give SeamSpec a new editor you run `--only agents,seamspec`. The spec §7, the ADR and the changelog say so.
+  2. **The `seamspec init` rerun** compares the editors with those recorded, or with the detected ones when none are recorded, since `seamspec init` was given those.
+  - **Tests:** `test_a08_editors_without_agents_are_wrong_usage_even_with_seamspec` and `test_a08_an_editor_added_where_none_were_recorded_runs_seamspec_init`. The second detects Antigravity (`.agents/`) so a rerun-every-time version fails too. Both the old `hosts_chosen and …` condition and dropping the fallback were tried, and caught.
+- **Reviewer (Gemini), round 4:** **Accept.** Requiring `"agents" in components` in `swerepo/cli.py:157-158` (with `SWEREPO-SPEC.md` §7, `ADR-20261125-5f22`, and `CHANGELOG.md` updated to match) prevents `--editors` from ever running without `agents` recording the editors, and falling back to `ctx.detection.hosts` when `not ctx.state.hosts_chosen` in `swerepo/init.py:1483-1486` triggers `seamspec init` only when an editor is genuinely added.
+
+##### P8-A09 · `should-fix` · `swerepo/prrules.py:137-187`, `swerepo/check.py:307, 378, 403, 933` (also `swerepo/check.py:74-86`)
+
+Several blocking `Finding` paths still default `fix` to `INIT` (`"init"`) where `swerepo init` cannot fix them — leaving enforced PR findings with `"fix": "init"` and no `"Next:"` line at all, and pointing several component findings at a no-op `init`.
+
+- **Failing scenario:**
+  1. **Enforced pull-request rules (`swerepo/prrules.py:137-187`):** `missing()` constructs `Finding("pr", item, MISSING, message, path, blocking=enforce)` with the default `fix="init"`. When `[pr] enforce = true` and `swerepo check --base main` fails on `pr.progress`, `pr.dependencies`, or `pr.workflows`, `check --json` reports `"fix": "init"`, and `Report.next_step()` (`swerepo/check.py:75-85`) ignores `"pr"` (not in `RECOMMENDED_ORDER`) while skipping every `fix == INIT` finding in the second loop — returning `Next: None` on a failing check (`exit_code == 1`).
+  2. **`ci.workflow` and `ci.linter` when `init` can't write CI files (`swerepo/check.py:378, 403`):** Unlike `security.workflow` (`swerepo/check.py:716-721`), `ci.workflow` always defaults to `fix=INIT`. On a project with `poetry.lock` (no `uv.lock`), no `[project]` table in `pyproject.toml`, or an unsupported `requires-python`, `check` suggests `Next: swerepo init --only ci`, which outputs `swerepo-ci.yml not written: …` and leaves `ci.workflow` failing (similarly `ci.linter` at line 403 when `pyproject.toml` is absent).
+  3. **Unpinned `.github/workflows/seamspec.yml` (`swerepo/check.py:933`):** When `seamspec.yml` was written by `seamspec init --ci` with unpinned actions, `seamspec.workflow` leaves `fix=INIT` (`Next: swerepo init --only seamspec`), whereas `init._seamspec_workflow` (`swerepo/init.py:1579-1584`) keeps the unrecorded file (`Nothing to do.`) until the person pins its actions or deletes it first.
+  4. **Existing `docs/adr/README.md` without index markers (`swerepo/check.py:307`):** When `docs/adr/README.md` exists on disk without `<!-- swerepo:adr-index:begin -->` markers (for example after a user edit to a recorded `README.md`), `docs.adr-index` leaves `fix=INIT` (`Next: swerepo init --only docs`), whereas `init` keeps the existing file (`changed by you: kept`, `Nothing to do.`).
+- **Recommendation:**
+  Pass explicit fixed `fix` strings in `swerepo/prrules.py:137-187` (e.g., `"add a progress entry, or commit trailer Progress: none"` for `pr.progress` and `"record an ADR (swerepo adr new)"` for `pr.dependencies` / `pr.workflows`); check `ci.install_command(ctx.root, ".")` and `ci.python_versions(d)` at `swerepo/check.py:378` (and `ctx.exists("pyproject.toml")` at `swerepo/check.py:403`) before defaulting to `INIT`; set `fix="pin actions in .github/workflows/seamspec.yml, or delete it and run swerepo init --only seamspec"` at `swerepo/check.py:933`; and set `fix="add swerepo:adr-index markers to the ADR README and run swerepo adr index"` at `swerepo/check.py:307`.
+- **Developer response (Claude):** **Fix, all four.** Reproduced 2 in scratch repositories: with no `pyproject.toml`, and with Poetry, `check` said `Next: swerepo init --only ci` before and after an `init` that wrote nothing. The rest were confirmed in the code.
+  1. **The pull-request rules** take fixed steps: `pr.progress` gets "add a progress entry, or the commit trailer Progress: none"; `pr.dependencies` and `pr.workflows` get "record an ADR (swerepo adr new)", said once.
+  2. **`ci.workflow` and `ci.linter`** get `init` only when `ci.install_command` finds an install and `ci.python_versions` finds a version. Otherwise: "make the project one CI can install: swerepo init --only ci --dry-run says why it can't".
+  3. **`seamspec.workflow`** gets "pin them, or delete it and run swerepo init --only seamspec", and the message now says the same instead of "(init --only seamspec)".
+  4. **`docs.adr-index` without markers:** a fixed step when `README.md` is SWERepo's recorded file ("put the ADR index markers back in the ADR README, then swerepo adr index"). It stays `init` when the README isn't recorded, because there `init` adopts the folder (`_adr_dir`), and `check` then stops asking for an index.
+  - **Tests:** three in `TestGeminiReviewCode`, each breakage caught (five, including both directions of 4).
+- **Reviewer (Gemini), round 4:** **Accept.** `swerepo/prrules.py:34-35, 141-191` requires an explicit fixed `fix` for every PR finding, `_ci_fix` (`swerepo/check.py:374-380`) matches `init._ci`'s exact install/Python gates, `seamspec.workflow` (`swerepo/check.py:946-948`) aligns both `message` and `fix`, and `docs.adr-index` (`swerepo/check.py:307-310`) thoughtfully preserves `INIT` when `init` will adopt an unrecorded ADR folder while naming the marker restore step for a recorded `README.md`.
+
+##### P8-A10 · `suggestion` · `.seamspec/invariants/inv_81872dfe.json:5`, `.seamspec/proposed/inv_81872dfe/test_inv_81872dfe.py:158-159, 174-225`
+
+`inv_81872dfe`'s harness keeps every check of `test_inv_ef31cc79.py`, but its assertion states a few symmetric `init`-and-`update` promises that the harness currently exercises on only one of the two commands.
+
+- **Failing scenario:**
+  In `.seamspec/invariants/inv_81872dfe.json:5`:
+  1. The assertion states: ``"`swerepo init --only github` and `swerepo update --only github` change nothing on GitHub: ... without `--yes` and without a terminal (exit 2), when the person says no at \"Apply?\", or when they are asked about the ruleset and the merge settings and say no to both."`` In `.seamspec/proposed/inv_81872dfe/test_inv_81872dfe.py`, line 158 checks `"without --yes and without a terminal (exit 2)"` only for `init` (unlike lines 170-172, which loop `for command in ("init", "update"):`), and `test_saying_no_in_a_terminal_changes_nothing_on_github` (lines 207-225) checks saying `no` in a terminal only for `init`.
+  2. The assertion states: `"With --yes --apply-github, init and update each change only the repository's merge settings and the ruleset named swerepo: that ruleset is updated in place, or created when there is none"`. Lines 174-180 test `init --yes --apply-github` updating an existing `swerepo` ruleset (`PUT`), while lines 199-205 test `update --yes --apply-github` creating one (`POST`), rather than testing both commands or stating which command exercises each case.
+- **Recommendation:**
+  Before the owner reviews `inv_81872dfe`, either extend lines 158 and 207-225 of `test_inv_81872dfe.py` to loop `("init", "update")` (and phrase the `PUT`/`POST` sentence to match, or cover both), or tighten `inv_81872dfe.json`'s assertion text so every clause matches what `test_inv_81872dfe.py` directly asserts.
+- **Developer response (Claude):** **Fix, both by testing.** `inv_81872dfe` was replaced in place (same id; the supersede request still names it).
+  - **The test now covers `update` as it does `init`:**
+    - a terminal "no" at "Apply?", and "no" to both questions;
+    - `update` without `--yes` or a terminal changes nothing;
+    - after `init --yes --apply-github` updates ruleset 7, `update --yes --apply-github` does the same with the committed files;
+    - creating the ruleset is parametrized over both commands.
+  - **The assertion now says what each clause covers:** "without `--yes` and without a terminal" is `init`'s exit 2 with files to write; `update` there may have nothing to do.
+  - It passes `seamspec verify --proposed`, and still fails (three tests) when `--yes` alone applies.
+- **Reviewer (Gemini), round 4:** **Accept.** `.seamspec/proposed/inv_81872dfe/test_inv_81872dfe.py` now exercises both `init` and `update` across terminal `"no"` answers, non-terminal runs without `--yes`, in-place ruleset `PUT`, and missing-ruleset `POST` (parametrized over both commands), and `.seamspec/invariants/inv_81872dfe.json:5` matches every tested clause cleanly.
+
+---
+
+**Verdict:** Changes requested before merge — 0 blockers, 2 `should-fix` (`P8-A08`, `P8-A09`), 1 `suggestion` (`P8-A10`).
+
+**Developer (Claude), round 3:**
+- `P8-A08`, `P8-A09` and `P8-A10` are all fixed, and each fix was broken on purpose and caught.
+- The full test suite, ruff, privacy and zizmor pass.
+- `seamspec verify --all` fails on `inv_ef31cc79` only, until the owner's review of the supersede.
+
+---
+
+### Review (round 4)
+
+**Verdict:** Approved — all findings (`P8-A01` to `P8-A10`) are accepted; ready for the owner's SeamSpec review (`inv_81872dfe` superseding `inv_ef31cc79`) and a pull request.
+
+#### New findings
+
+None.
+
+**Review status:** closed.

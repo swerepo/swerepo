@@ -35,6 +35,15 @@ All notable changes to this project are documented here. The format is based on 
 
 - Standard 1 has six components: `docs`, `agents`, `ci`, `security`, `github` and `seamspec`. `openspec` and `release` are gone, with their placeholders: SWERepo never sets up package publishing.
 - The `seamspec` CI job and SWERepo's `seamspec.yml` fetch tags, so locked rules can read release tags.
+- A codebase that has never been linted, in a repository with commits, moves to ruff gradually (only the files each change touches), so CI isn't red on day one; a new project still gets full ruff.
+- A project without tests is warned: `init`'s plan and `check` (`ci.tests`, a warning) say the test job fails until there is one, and `prepare-pr.md` tells agents to write a real test, never to mask the job.
+- `swerepo init` and `swerepo update` take `--editors claude,antigravity` (or `none`): the editors are set without the terminal question and recorded, replacing what was; the plan shows the change.
+- When `agents` writes its commands without `ci` in the run, the plan says which tools `uv sync` won't install.
+- The tools note names an optional extra `uv sync` doesn't install; a privacy finding about an address or a path says how to clear a placeholder; "dependency graph off" is said once.
+- `swerepo init --yes` and `swerepo update --yes` no longer change GitHub: the ruleset and merge settings wait until `--yes --apply-github`, or a yes in a terminal after each is shown. `--apply-github` without `--yes` and without a terminal exits 2.
+- A table another tool appends inside SWERepo's `pyproject.toml` block (such as uv's `[dependency-groups]`) is named with the fix, "move it above `# swerepo:begin`", and the file is left alone; the project's dependencies are read from the whole file.
+- `swerepo check`'s "Next:" names what fixes each failing gap: `init` only for what it can write, then applying GitHub's settings, a command, or a step that is the person's. `--json` findings carry `fix`.
+- `--editors` needs the `agents` component, counts a repeated name once, and refuses an empty list or `none` with other names. A dropped editor's file becomes the person's; choosing the editor again manages its unchanged block again, and an added non-Claude editor runs `seamspec init` again. The editors `seamspec init` set up are recorded (`[seamspec] hosts`) only once it succeeds, so one added while it waits is set up later. `[values] commands` moves on only when `AGENTS.md`'s block takes the new render, and `testpaths` set inside SWERepo's `pyproject.toml` block count. The tools note for `AGENTS.md` comes only for a project `uv sync` installs, for the tools its commands run through `uv run`, and once.
 
 ### Fixed
 

@@ -8,6 +8,7 @@ from click import unstyle
 from repo_helpers import commit, git, git_init, make, snapshot
 from typer.testing import CliRunner
 
+from swerepo import ci
 from swerepo.check import CHANGED, MISSING, NOT_CHOSEN, OK, OUTDATED, UNKNOWN, Finding, Report, UsageError, run_check
 from swerepo.cli import app
 from swerepo.fingerprint import fingerprint
@@ -56,6 +57,7 @@ STANDARD_FILES = {
     ".seamspec/config.toml": 'mode = "enforced"\n',
     "docs/EARNED_SPEC.md": "# Spec\n",
     "SPEC.md": "# Demo · Specification\n",
+    "tests/test_demo.py": "def test_demo():\n    assert True\n",
 }
 
 
@@ -88,7 +90,13 @@ def test_an_empty_folder(tmp_path: Path):
     report = run_check(tmp_path)
     assert report.exit_code == 1
     assert by_item(report)["repository.git"].status == UNKNOWN
-    assert report.next_step() == "swerepo init --only docs,agents"
+    # init first; then what init can't fix there: CI with no pyproject.toml, and the privacy workflow from an
+    # unreleased SWERepo (ADR-20261125-5f22)
+    no_ci = "; make the project one CI can install: swerepo init --only ci --dry-run says why it can't"
+    waiting = (
+        "" if ci.released() else "; wait for a released SWERepo, or swerepo init --only security --with-governance"
+    )
+    assert report.next_step() == "swerepo init --only docs,agents" + no_ci + waiting
     assert by_item(report)["docs.license"].status == NOT_CHOSEN  # a license is asked for, never assumed
 
 

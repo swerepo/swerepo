@@ -13,7 +13,7 @@ import os
 import re
 import subprocess
 import tomllib
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -149,10 +149,14 @@ class Detection:
     pytest_configured: bool
     seamspec: bool
     errors: tuple[str, ...]
+    # every file listed, repository-relative, so callers reuse the listing instead of asking git again (P8-G06)
+    files: tuple[str, ...] = field(default=(), repr=False)
 
     def to_dict(self) -> dict[str, Any]:
-        """Plain JSON data (lists, not tuples) for `--json`; holds only repository-relative paths."""
-        return json.loads(json.dumps(asdict(self)))
+        """Plain JSON data (lists, not tuples) for `--json`; holds only repository-relative paths, not the listing."""
+        data = asdict(self)
+        data.pop("files")
+        return json.loads(json.dumps(data))
 
 
 def detect(root: Path, *, ignore: tuple[str, ...] | list[str] = ()) -> Detection:
@@ -191,6 +195,7 @@ def detect(root: Path, *, ignore: tuple[str, ...] | list[str] = ()) -> Detection
         pytest_configured=_pytest_configured(present, pyproject, setup_cfg, tox_ini),
         seamspec=(root / ".seamspec" / "config.toml").is_file(),
         errors=tuple(errors),
+        files=tuple(files),
     )
 
 
@@ -200,7 +205,8 @@ def detect(root: Path, *, ignore: tuple[str, ...] | list[str] = ()) -> Detection
 def _git(root: Path, *args: str) -> subprocess.CompletedProcess[str] | None:
     try:
         return subprocess.run(
-            ["git", "-C", str(root), *args], capture_output=True, text=True, check=False, timeout=60
+            ["git", "--no-optional-locks", "-C", str(root), *args],
+            capture_output=True, text=True, check=False, timeout=60,
         )  # fmt: skip
     except (OSError, subprocess.TimeoutExpired):
         return None

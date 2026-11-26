@@ -36,3 +36,11 @@ GITHUB_FILES = (
 
 # Markdown files in an ADR folder that aren't decisions (lower-cased names).
 NOT_ADRS = frozenset({"readme.md", "template.md", "index.md"})
+
+# Each editor's own file, written by the agents component when one of its editors is chosen (spec §6.6)
+EDITOR_FILES = {"CLAUDE.md": ("claude",), "GEMINI.md": ("antigravity", "gemini")}
+
+
+def editor_chosen(path: str, hosts: list[str]) -> bool:
+    """Whether the editor file at `path` belongs to an editor in `hosts`."""
+    return bool(set(EDITOR_FILES[path]) & set(hosts))

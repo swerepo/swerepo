@@ -123,17 +123,57 @@ def check(
     raise typer.Exit(result.exit_code)
 
 
+EDITORS_HELP = (
+    "agents: the editors in use, comma-separated (claude, cursor, vscode, antigravity, gemini), or none; "
+    "replaces the recorded ones"
+)
+
+
+APPLY_GITHUB_HELP = (
+    "github: with --yes, also apply the ruleset and merge settings on GitHub (in a terminal you're shown each and "
+    "asked; --yes alone never changes GitHub)"
+)
+
+
 def _interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def _editor_names(text: str, given: str) -> list[str]:
+    """Editor names from a comma- or space-separated list, without repeats; [] for `none` (review P8-A01)."""
+    names = list(dict.fromkeys(h.strip().lower() for h in text.replace(" ", ",").split(",") if h.strip()))
+    if not names:
+        raise UsageError(f"{given}: name the editors ({', '.join(HOSTS)}), or none")
+    if "none" in names and len(names) > 1:
+        raise UsageError(f"{given}: none means no editor; it can't go with others")
+    return [] if names == ["none"] else names
+
+
+def _parse_editors(text: str | None, components: list[str]) -> list[str] | None:
+    """`--editors claude,antigravity` (or `none`): the editors to set up and record; None when not given. Only with
+    `agents`, which writes and records them, so they're never shown as recorded when they aren't (P8-A01, P8-A08)."""
+    if text is None:
+        return None
+    if "agents" not in components:
+        raise UsageError("--editors sets up and records the editors' files: it needs the agents component")
+    return _editor_names(text, "--editors")
+
+
 def _ask_hosts(detected: list[str]) -> list[str]:
     """Which editors the project uses (spec §6.6), pre-filled from what detection found."""
-    answer = typer.prompt(
-        f"Editors in use ({', '.join(HOSTS)}; 'none' for none)", default=", ".join(detected) or "none"
-    )
-    names = [h.strip().lower() for h in answer.replace(" ", ",").split(",") if h.strip()]
-    return [] if names == ["none"] else names
+    while True:
+        answer = typer.prompt(
+            f"Editors in use ({', '.join(HOSTS)}; 'none' for none)", default=", ".join(detected) or "none"
+        )
+        try:
+            names = _editor_names(answer, "editors")
+        except UsageError as error:
+            typer.echo(str(error))
+            continue
+        unknown = [h for h in names if h not in HOSTS]
+        if not unknown:
+            return names
+        typer.echo(f"unknown editor {', '.join(unknown)} (known: {', '.join(HOSTS)})")
 
 
 def _ask_lint() -> str:
@@ -231,6 +271,10 @@ def _seamspec_after(plan, path: Path, interactive: bool) -> list[str]:
     return lines
 
 
+HELD_NEXT = ("Then apply the ruleset and merge settings on GitHub: swerepo init --only github in a terminal (each is "
+             "shown first), or swerepo init --only github --yes --apply-github")  # fmt: skip
+
+
 def _apply_github(plan, path: Path, yes: bool) -> list[str]:
     """Show each GitHub change as JSON and apply what the person says yes to (all of them with --yes)."""
     labels = {"ruleset": 'Apply ruleset "swerepo" on the default branch?', "settings": "Apply merge settings?"}
@@ -268,6 +312,8 @@ def init(
         list[str] | None,
         typer.Option("--adopt", help="seamspec: NAME=ID, a locked rule of yours covering a hygiene rule."),
     ] = None,
+    editors: Annotated[str | None, typer.Option("--editors", help=EDITORS_HELP)] = None,
+    apply_github: Annotated[bool, typer.Option("--apply-github", help=APPLY_GITHUB_HELP)] = False,
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Print the plan and stop.")] = False,
     yes: Annotated[bool, typer.Option("--yes", help="Apply without asking (for scripts).")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Print one JSON result instead of text.")] = False,
@@ -279,9 +325,19 @@ def init(
     try:
         components, skipped = _selection(only, ctx.args)
         listed = [p.strip() for p in projects.split(",") if p.strip()] if projects is not None else None
-        options = {"only": components, "skip": skipped, "with_governance": with_governance, "projects": listed,
-                   "mode": mode, "code_owner": code_owner, "copilot_review": copilot_review,
-                   "adopt": _parse_adopt(adopt), "terminal": interactive and not dry_run}  # fmt: skip
+        options = {
+            "only": components,
+            "skip": skipped,
+            "with_governance": with_governance,
+            "projects": listed,
+            "mode": mode,
+            "code_owner": code_owner,
+            "copilot_review": copilot_review,
+            "adopt": _parse_adopt(adopt),
+            "terminal": interactive and not dry_run,
+            "hosts": _parse_editors(editors, resolve_components(components, skipped)),
+            "apply_github": apply_github or interactive,  # a terminal shows each change and asks first
+        }  # a terminal shows each change and asks first
         plan = make_plan(path, **options)
         if interactive and not dry_run:
             asked: dict[str, object] = {}
@@ -333,8 +389,11 @@ def init(
     for line in [*github_lines, *seamspec_lines]:
         typer.echo(one_line(line))
     github_waits = any(a.verb == "waiting" and a.component == "github" for a in plan.actions)
-    if github_waits and plan.github_remote:  # on GitHub, gh missing or logged out
-        typer.echo("Next: review the changes (git status, git diff), commit them on a new branch, open a pull request.")
+    if plan.github_held:  # GitHub differs, and --yes alone never changes it (ADR-20261125-5f22 point 5)
+        typer.echo("Next: review the changes (git status, git diff), commit them on a branch, open a pull request.")
+        typer.echo(HELD_NEXT)
+    elif github_waits and plan.github_remote:  # on GitHub, gh missing or logged out
+        typer.echo("Next: review the changes (git status, git diff), commit them on a branch, open a pull request.")
         typer.echo("Then, with gh installed and logged in (gh auth login), apply the ruleset and merge settings:")
         typer.echo("  swerepo init --only github")
     elif github_waits:
@@ -343,13 +402,20 @@ def init(
         typer.echo("  2. create the repository and push: gh repo create --source . --push")
         typer.echo("  3. apply the ruleset and merge settings: swerepo init --only github")
     else:
-        typer.echo("Next: review the changes (git status, git diff), commit them on a new branch, open a pull request.")
+        typer.echo("Next: review the changes (git status, git diff), commit them on a branch, open a pull request.")
     warning = noreply_warning(path.resolve())
     if warning:
         typer.echo(warning)
 
 
-def _update_plan(path: Path, components: list[str] | None, skipped: list[str], command: str, **options: Any):
+def _update_plan(
+    path: Path,
+    components: list[str] | None,
+    skipped: list[str],
+    command: str,
+    editors: str | None = None,
+    **options: Any,
+):
     """The update plan for the components SWERepo set up here (all of them, or those asked for)."""
     _, state = _repository(path, command)
     if state is None:
@@ -359,7 +425,8 @@ def _update_plan(path: Path, components: list[str] | None, skipped: list[str], c
     missing = [c for c in chosen if c not in state.components]
     if missing:
         raise UsageError(f"not set up here: {', '.join(missing)} (swerepo init --only {','.join(missing)})")
-    return make_plan(path, only=chosen, skip=skipped, update=True, **options)
+    hosts = _parse_editors(editors, [c for c in resolve_components(chosen, skipped) if c in state.components])
+    return make_plan(path, only=chosen, skip=skipped, update=True, hosts=hosts, **options)
 
 
 @app.command(context_settings=EXTRA_ARGS, epilog=SHORTHAND)
@@ -374,6 +441,8 @@ def update(
     merge: Annotated[
         bool, typer.Option("--merge", help="With --yes: also merge the update into files you edited.")
     ] = False,
+    editors: Annotated[str | None, typer.Option("--editors", help=EDITORS_HELP)] = None,
+    apply_github: Annotated[bool, typer.Option("--apply-github", help=APPLY_GITHUB_HELP)] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Print one JSON result instead of text.")] = False,
     path: Annotated[Path, typer.Option("--path", help="The repository to update.")] = Path("."),
 ) -> None:
@@ -383,7 +452,8 @@ def update(
     try:
         components, skipped = _selection(only, ctx.args)
         plan = _update_plan(path, components, skipped, "update", merge=merge or interactive,
-                            enforce_pr_rules=enforce_pr_rules, terminal=interactive and not dry_run)  # fmt: skip
+                            enforce_pr_rules=enforce_pr_rules, terminal=interactive and not dry_run,
+                            editors=editors, apply_github=apply_github or interactive)  # fmt: skip
     except UsageError as error:
         raise _fail(error, 2, "update") from error
     except InitError as error:
@@ -423,7 +493,9 @@ def update(
     left = sum(1 for a in plan.actions if a.verb in (CONFLICT, CANT_MERGE))
     if left:
         typer.echo(f"{left} file(s) left as they are: swerepo diff shows the change to make by hand.")
-    typer.echo("Next: review the changes (git status, git diff), commit them on a new branch, open a pull request.")
+    typer.echo("Next: review the changes (git status, git diff), commit them on a branch, open a pull request.")
+    if plan.github_held:
+        typer.echo(HELD_NEXT)
 
 
 @app.command()

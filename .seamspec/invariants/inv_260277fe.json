@@ -1,0 +1,35 @@
+{
+  "schema_version": "1",
+  "id": "inv_260277fe",
+  "title": "Missing tests never fail check --ci",
+  "assertion": "In a git repository where `swerepo init --only ci --yes` wrote `swerepo-ci.yml`, with no file named `test_*.py` or `*_test.py` outside the folders pytest skips by default (dot-folders such as `.seamspec/`, and `build`, `dist`, `venv`, `node_modules`, `*.egg`, `CVS`, `_darcs`, `{arch}`) and under the project's `testpaths` when it sets them: `swerepo check --only ci --json` reports `ci.tests` as missing with `blocking` false and nothing blocking; `swerepo check --only ci --ci` exits 0, printing no annotation outside GitHub Actions and, in GitHub Actions, one `::warning` per non-blocking gap and no `::error`. Once a test exists under `tests/`, `ci.tests` is no longer reported.",
+  "scope": {
+    "paths": [
+      "swerepo/check.py",
+      "swerepo/ci.py",
+      "swerepo/detect.py",
+      "swerepo/init.py"
+    ],
+    "tags": []
+  },
+  "status": "LOCKED",
+  "origin": {
+    "type": "manual",
+    "text": "ADR-20261125-5f22 (the owner's choice, 2026-11-25): a project without tests is warned, never failed, by SWERepo's own report; its CI's test job still fails until a real test exists, and agents are told to write one. Gemini's review added pytest's own discovery (P8-G01). Checked by breaking it: the warning made blocking, skipped folders counted, the plan note dropped, and a warning never cleared each fail the rule. Refreshed on the owner's watchouts: structure only (the finding's status and blocking flag, the exit code, warning rather than error annotations, `.seamspec/` not silencing it), never English sentences; `init`'s plan note is covered by ordinary tests instead. Refreshed after SeamSpec's reviewer: the rule says what the code checks (named files, pytest's default skips, `testpaths`; not `python_files` or `norecursedirs`, as the warning never blocks), and `check --ci` exits 0 outside GitHub Actions too.",
+    "ref": null
+  },
+  "verification": {
+    "runner": "pytest",
+    "harness_path": ".seamspec/tests/test_inv_260277fe.py",
+    "harness_sha256": "01296bf35304e34456aa4ebfe003b6576a7afb4be7b88b9f0ac3983533797b60",
+    "assertion_sha256": "058e9eae2d1ea18970fc34570befcf130bcde12ee8c408ea529e22e7f32a084f"
+  },
+  "adr_id": null,
+  "created_at": "2026-11-25T10:12:13.999149Z",
+  "approved_at": "2026-11-25T10:32:12.130123Z",
+  "approved_by": "Vamshidhar Pandrapagada <25401978+vamshidhar-pandrapagada@users.noreply.github.com>",
+  "superseded_by": null,
+  "status_reason": null,
+  "decided_via": "terminal",
+  "critical": false
+}
