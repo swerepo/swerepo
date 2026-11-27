@@ -430,8 +430,8 @@ class TestCopilotReviewPR8:
         make(project, {"services/api/pyproject.toml": '[project]\nname = "api"\n'})
         found = notes(make_plan(project, only=["ci"], hosts=[], projects=["services/api"]))
         assert (
-            "not among services/api/'s installed dependencies: pytest, ruff (uv add --dev pytest ruff in services/api)"
-            in found
+            "not among services/api/'s installed dependencies: pytest, ruff "
+            "(uv add --directory services/api --dev pytest ruff)" in found
         )
 
     def test_a_projects_inputs_are_recorded_and_rebuild_its_jobs(self, project: Path):

@@ -33,6 +33,7 @@ from swerepo import spec as specs
 from swerepo.adr import AdrError, list_adrs, with_index
 from swerepo.blocks import ADR_INDEX, append_block, file_fingerprint, inside, read_exact, replace_block_content, wrap
 from swerepo.check import _UNRELEASED, UsageError, one_line
+from swerepo.commands import commands, uv_run_tools
 from swerepo.detect import KNOWN_PYTHONS, Detection, detect
 from swerepo.fingerprint import HTML, BlockError, comment_style, find_block, fingerprint
 from swerepo.render import TemplateError, TemplateStore, parse_id
@@ -171,43 +172,6 @@ def _project_name(root: Path) -> str:
     project = data.get("project")
     name = project.get("name") if isinstance(project, dict) else None
     return name if isinstance(name, str) and name.strip() else root.name
-
-
-def _make_targets(root: Path) -> set[str]:
-    try:
-        text = (root / "Makefile").read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return set()
-    return set(re.findall(r"^(install|test|lint|check)\s*:", text, re.MULTILINE))
-
-
-_KEPT_LINT = {"black": "black --check .", "isort": "isort --check-only .", "flake8": "flake8", "pylint": "pylint ."}
-
-
-def commands(
-    root: Path, detection: Detection, adopted_linters: list[str] | None = None, lint_mode: str | None = None
-) -> dict[str, list[str]]:
-    """The commands agents and people run, from what the project uses (spec §6.6): uv by default, poetry
-    when it has a poetry.lock, a Makefile's `install`, `test` and `lint` targets when it has them, and the
-    linters recorded under `[adopted] linters` (as `check` reads them) before the detected ones. `lint_mode`
-    (the `ci` component's choice) decides between ruff and kept linters, the same on every run (P4-F07)."""
-    poetry = (root / "poetry.lock").is_file() and not (root / "uv.lock").is_file()
-    runner, install = ("poetry run", "poetry install") if poetry else ("uv run", "uv sync")
-    linters = set(adopted_linters) if adopted_linters else {linter.name for linter in detection.linters}
-    if lint_mode == "gradual":
-        files = "--force-exclude <changed .py files>"
-        lint = [f"{runner} ruff check {files}", f"{runner} ruff format --check {files}"]
-    elif lint_mode == "ruff" or (lint_mode is None and ("ruff" in linters or not linters)):
-        lint = [f"{runner} ruff check .", f"{runner} ruff format --check ."]
-    else:
-        lint = [f"{runner} {_KEPT_LINT[name]}" for name in sorted(linters) if name in _KEPT_LINT]
-    targets = _make_targets(root)
-    return {
-        "install": ["make install" if "install" in targets else install],
-        "test": ["make test" if "test" in targets else f"{runner} pytest"],
-        "lint": ["make lint"] if "lint" in targets else lint,
-        "check": ["swerepo check"],
-    }
 
 
 def _code(items: list[str]) -> str:
@@ -835,20 +799,10 @@ def _foreign_in_block(ctx: _Context, path: str) -> str:
 
 
 def _missing_tools(ctx: _Context, folder: str, lint: str, linters: list[str], needed: list[str] | None = None) -> str:
-    """A note naming the tools a project's jobs run (or `needed`) that `uv sync` there won't install, or ""."""
-    if needed is None:
-        needed = ["pytest", *(["ruff"] if lint in ("ruff", "gradual") else linters)]
-    missing = [name for name in needed if name not in ci.installed_dependencies(ctx.root, folder)]
-    if not missing:
-        return ""
-    where = "the project's" if folder == "." else f"{folder}/'s"
-    run = "" if folder == "." else f" in {folder}"
-    note = f"not among {where} installed dependencies: {', '.join(missing)} (uv add --dev {' '.join(missing)}{run})"
-    extras = ci.extras_holding(ctx.root, folder)
-    in_extras = [f"{name} is in the optional extra `{extras[name]}`" for name in missing if name in extras]
-    if in_extras:  # uv sync installs no extras (ADR-20261125-5f22)
-        note += f"; {', '.join(in_extras)}, which uv sync doesn't install: move it to a dependency group"
-    return note
+    """A note naming the tools a project's jobs run (or `needed`) that `uv sync` there won't install, or "": the
+    same text `check` reports as `ci.tools` (review P8-K)."""
+    missing = ci.missing_tools(ctx.root, folder, ci.tools_needed(lint, linters) if needed is None else needed)
+    return ci.missing_tools_note(ctx.root, folder, missing) if missing else ""
 
 
 def _agents_tools(ctx: _Context, lint: str, linters: list[str]) -> str:
@@ -857,8 +811,7 @@ def _agents_tools(ctx: _Context, lint: str, linters: list[str]) -> str:
     if ci.install_command(ctx.root, ".")[0] is None:
         return ""
     listed = commands(ctx.root, ctx.detection, linters or None, lint)
-    run = [line.split()[2] for key in ("test", "lint") for line in listed[key] if line.startswith("uv run ")]
-    return _missing_tools(ctx, ".", lint, linters, needed=list(dict.fromkeys(run)))
+    return _missing_tools(ctx, ".", lint, linters, needed=uv_run_tools(listed))
 
 
 def _project_inputs(ctx: _Context, folders: list[str]) -> tuple[list[Action], list[ci.Project]]:
@@ -1142,6 +1095,10 @@ class _GitHubChoice:
     ask_owner: bool  # likewise for the code owner, with `settings.code_owner` (or none) as the default
     owner_none: bool = False  # the person said "none": no CODEOWNERS, and the repository owner isn't proposed
     owner_given: bool = False  # --code-owner (or its question) answered in this run
+    owner_default: str = github.NO_OWNER  # what the code-owner question offers
+    owner_note: str = ""  # what GitHub said about the owner given in this run, or that it couldn't be checked (P8-K)
+    # the recorded owner is the question's example: nothing is written from it; the ruleset keeps its render (P8-K05)
+    owner_example: bool = False
 
 
 def _github_choice(
@@ -1160,21 +1117,56 @@ def _github_choice(
     chosen = mode or recorded_mode or ("team" if owner_type == "Organization" else "solo")
     if chosen not in ("solo", "team"):
         raise UsageError(f"--mode {chosen}: solo or team")
-    if code_owner is not None and code_owner != github.NO_OWNER and not github.valid_owner(code_owner):
-        raise UsageError("--code-owner: a GitHub @login or @org/team, or none")
+    refusal, owner_note = owner_check(hub, code_owner) if code_owner is not None else (None, "")
+    if refusal:
+        raise UsageError(f"--code-owner {code_owner}: {refusal}")
     recorded_owner = state.values.get("code_owner") if state else None
+    owner_example = code_owner is None and github.example_owner(recorded_owner)
     given = code_owner if code_owner is not None else recorded_owner
     owner_none = given == github.NO_OWNER  # said once, kept: never replaced by the repository owner (P5-F04)
     owner = given if github.valid_owner(given) else None
-    if owner is None and not owner_none and owner_type == "User" and github.valid_owner(f"@{owner_login}"):
-        owner = f"@{owner_login}"
+    proposed = f"@{owner_login}" if owner_type == "User" and github.valid_owner(f"@{owner_login}") else None
+    if owner is None and not owner_none and proposed:
+        owner = proposed
     recorded_copilot = state.github.get("copilot_review") if state else None
     copilot = copilot_review if copilot_review is not None else recorded_copilot is not False
     extra = tuple(str(c) for c in (state.github.get("extra_required_checks") or [])) if state else ()
     ask_mode = mode is None and recorded_mode is None
-    ask_owner = code_owner is None and recorded_owner is None
+    ask_owner = code_owner is None and (recorded_owner is None or owner_example)  # an example is asked again (P8-K05)
     settings = github.Settings(chosen, owner, copilot, extra)
-    return _GitHubChoice(settings, hub, ask_mode, ask_owner, owner_none, code_owner is not None)
+    default = (proposed or github.NO_OWNER) if owner_example else (settings.code_owner or github.NO_OWNER)
+    return _GitHubChoice(settings, hub, ask_mode, ask_owner, owner_none, code_owner is not None, default, owner_note,
+                         owner_example)  # fmt: skip
+
+
+def owner_check(hub: github.GitHub | None, owner: str) -> tuple[str | None, str]:
+    """(why the code owner given is refused, or None; a note for the plan, or "") for `--code-owner` and the terminal's
+    answer (review P8-K): wrong syntax or the question's example always; with `gh`, an owner GitHub says can't be
+    one. An owner without access yet, or one that couldn't be checked, is accepted with a note: offline, `check`
+    looks it up once it can. Reads only."""
+    if owner == github.NO_OWNER:
+        return None, ""
+    if not github.valid_owner(owner):
+        return "a GitHub @login or @org/team, or none", ""
+    if github.example_owner(owner):
+        return "that's the question's example, not an owner: your GitHub @login, or an @org/team", ""
+    if hub is None:
+        return None, f"code owner {owner} not checked on GitHub (needs gh, logged in); swerepo check does once it can"
+    verdict, reason = hub.owner_verdict(owner)
+    if verdict == github.OWNER_WRONG:
+        return reason, ""
+    if verdict == github.OWNER_ACCESS:
+        return None, f"code owner {owner}: {reason}"
+    if verdict == github.OWNER_UNKNOWN:
+        return None, f"code owner {owner} not checked on GitHub ({reason})"
+    return None, ""
+
+
+def code_owner_refusal(root: Path, owner: str) -> str | None:
+    """Why the terminal's code-owner answer is refused, or None: `owner_check` with the repository's GitHub, so the
+    question is asked again (review P8-K)."""
+    hub = github.GitHub.connect(root)
+    return owner_check(hub, owner.strip())[0]
 
 
 @dataclass
@@ -1342,7 +1334,13 @@ def _github(ctx: _Context, choice: _GitHubChoice, plan: Plan, files: _SettingsFi
     else:
         for name, kind in (("bug", "issue-bug"), ("feature", "issue-feature")):
             actions.append(_starter(ctx, c, f".github/ISSUE_TEMPLATE/{name}.md", f"github/{kind}", ctx.values))
-    if settings.code_owner:
+    if choice.owner_note:
+        actions.append(Action(c, NOTE, None, choice.owner_note))
+    if choice.owner_example and settings.code_owner:  # nothing written from the question's example (P8-K05)
+        note = (f"the recorded code owner {settings.code_owner} is the code-owner question's example, not an owner: "
+                "swerepo init --only github --code-owner …")  # fmt: skip
+        actions.append(Action(c, NOTE, None, note))
+    elif settings.code_owner:
         path = ctx.detection.documents.get("codeowners") or github.CODEOWNERS
         template = ctx.store.latest("github", "codeowners")
         lines = github.codeowners_lines(settings.code_owner)
@@ -1707,7 +1705,7 @@ def make_plan(
             from_file = files.ruleset_verb not in (CREATE, REWRITE) and files.mode is not None
             plan.github_ask["mode"] = files.mode if from_file and files.mode else choice.settings.mode
         if choice.ask_owner:
-            plan.github_ask["code_owner"] = choice.settings.code_owner or github.NO_OWNER
+            plan.github_ask["code_owner"] = choice.owner_default
         plan.github_question = bool(plan.github_ask)
     if files is not None and files.copilot_review is not None:
         copilot = files.copilot_review  # the ruleset the repository commits decides (P5-F10)
@@ -1790,7 +1788,7 @@ def make_plan(
         ci_said = any(a.component == "ci" and a.verb == NOTE and a.note == _missing_tools(ctx, ".", lint_mode, kept)
                       for a in plan.actions)  # fmt: skip
         if missing and not ci_said:  # the commands agents are told to run must run (ADR-20261125-5f22)
-            plan.actions.append(Action("agents", NOTE, None, f"AGENTS.md's commands won't run yet: {missing}"))
+            plan.actions.append(Action("agents", NOTE, None, ci.AGENTS_TOOLS + missing))
     if plan.dependency_graph_read:  # github said whether it's on: ci's general note would repeat it (ADR-20261125-5f22)
         plan.actions = [a for a in plan.actions if not (a.verb == NOTE and a.note == DEPENDENCY_GRAPH_NOTE)]
     if ctx.update and state is not None:
