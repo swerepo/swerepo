@@ -23,6 +23,7 @@ RULESET_NAME = "swerepo"
 RULESET_FILE = ".github/swerepo/ruleset.json"
 SETTINGS_FILE = ".github/swerepo/repo-settings.json"
 CODEOWNERS = ".github/CODEOWNERS"
+ACCEPT = "application/vnd.github+json"
 COPILOT_REVIEWER = "copilot-pull-request-reviewer[bot]"
 # Governance paths a code owner reviews in team mode (spec §6.1).
 GOVERNANCE_PATHS = (
@@ -40,9 +41,10 @@ _REMOTE = re.compile(
 class GitHubError(RuntimeError):
     """A `gh` call failed. The message names the request, never a token or a local path."""
 
-    def __init__(self, message: str, *, not_found: bool = False) -> None:
+    def __init__(self, message: str, *, not_found: bool = False, status: int | None = None) -> None:
         super().__init__(message)
         self.not_found = not_found  # GitHub answered 404, as opposed to a timeout, a limit or a refusal
+        self.status = status  # GitHub's HTTP status, when gh said it (review P8-K07); None for a timeout
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,44 @@ def valid_owner(owner: object) -> bool:
     return isinstance(owner, str) and bool(OWNER.fullmatch(owner))
 
 
+# The code-owner prompt's own examples: one source for the prompt, `--code-owner`'s help and the checks refusing
+# them, since neither names anyone on GitHub (review P8-K; `users/login` and `orgs/org/teams/team` answer 404)
+OWNER_EXAMPLES = ("@login", "@org/team")
+
+
+def example_owner(owner: object) -> bool:
+    """Whether `owner` is one of the prompt's examples, copied rather than replaced (any case)."""
+    return isinstance(owner, str) and owner.strip().lower() in OWNER_EXAMPLES
+
+
+_EMAIL_OWNER = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_UNESCAPED_SPACE = re.compile(r"(?<!\\)\s+")  # a pattern may hold an escaped space: `getting\ started/` (P8-K11)
+_COMMENT = re.compile(r"(?:^|(?<=\s))(?<!\\)#.*$")
+
+
+def codeowners_rules(content: str) -> list[tuple[str, list[str]]]:
+    """The rule lines of a CODEOWNERS text, as (pattern, owners): blank and `#` lines skipped, a trailing unescaped
+    ` #` comment stripped (review P8-K03)."""
+    rules = []
+    for line in content.splitlines():
+        words = _UNESCAPED_SPACE.split(_COMMENT.sub("", line).strip())
+        words = [word for word in words if word]
+        if words:
+            rules.append((words[0], words[1:]))
+    return rules
+
+
+def readable_owner(token: str) -> bool:
+    """An owner GitHub can read in CODEOWNERS: `@login`, `@org/team`, or an email address."""
+    return valid_owner(token) or bool(_EMAIL_OWNER.fullmatch(token))
+
+
+# What GitHub says about a code owner (review P8-K): fine; wrong (it can't be one: `init` refuses it); without access
+# here (it exists, and access can be granted: `init` notes it); or can't tell (`init` notes it, `check` shows `?`)
+OWNER_OK, OWNER_WRONG, OWNER_ACCESS, OWNER_UNKNOWN = "ok", "wrong", "access", "unknown"
+REPOSITORY_JSON = "application/vnd.github.v3.repository+json"  # the team-access read's body with permissions
+
+
 def has_copilot_review(ruleset: dict[str, Any]) -> bool:
     """Whether a ruleset requests Copilot's review: what decides whether CI waits for one (review P5-F10)."""
     rules = ruleset.get("rules") if isinstance(ruleset, dict) else None
@@ -223,8 +263,8 @@ class GitHub:
             return None
         return cls(slug, command) if done.returncode == 0 else None
 
-    def _run(self, method: str, path: str, body: dict[str, Any] | None = None) -> Any:
-        args = [self.command, "api", "-X", method, path, "-H", "Accept: application/vnd.github+json"]
+    def _run(self, method: str, path: str, body: dict[str, Any] | None = None, *, accept: str = ACCEPT) -> Any:
+        args = [self.command, "api", "-X", method, path, "-H", f"Accept: {accept}"]
         if body is not None:
             args += ["--input", "-"]
         try:
@@ -236,14 +276,18 @@ class GitHub:
             raise GitHubError(f"{method} {path}: gh didn't answer ({type(error).__name__})") from error
         if done.returncode != 0:
             reason = _reason(done.stdout, done.stderr)
-            raise GitHubError(f"{method} {path}: {reason}", not_found=reason.startswith("Not Found"))
+            status = _status(done.stdout, done.stderr)
+            # GitHub's 404 isn't always "Not Found": an unknown login is "<login> is not a user" (review P8-K07)
+            not_found = status == 404 or reason.startswith("Not Found")
+            raise GitHubError(f"{method} {path}: {reason}", not_found=not_found, status=status)
         try:
             return json.loads(done.stdout) if done.stdout.strip() else None
         except json.JSONDecodeError as error:
             raise GitHubError(f"{method} {path}: not JSON") from error
 
-    def get(self, path: str) -> Any:
-        return self._run("GET", path)
+    def get(self, path: str, *, accept: str = ACCEPT) -> Any:
+        """A read: GET only, with one `Accept` header (another media type only where GitHub needs it, P8-K06)."""
+        return self._run("GET", path, accept=accept)
 
     # reading
     def repo(self) -> dict[str, Any]:
@@ -267,6 +311,72 @@ class GitHub:
         """(login, "User" or "Organization") of the repository's owner."""
         owner = self.repo().get("owner", {})
         return str(owner.get("login", "")), str(owner.get("type", ""))
+
+    def owner_verdict(self, owner: str) -> tuple[str, str]:
+        """What GitHub says about the code owner `owner` (`@login` or `@org/team`), as (verdict, reason): reads only,
+        GET requests (review P8-K, P8-K01, P8-K02). The reason is a fixed phrase, or GitHub's own message when it
+        can't tell."""
+        try:
+            login, kind = self.owner_login()
+        except GitHubError as error:
+            return OWNER_UNKNOWN, f"can't tell ({error})"
+        name = owner.removeprefix("@")
+        if "/" not in name:
+            return self._user_verdict(name, login, kind)
+        org, team = name.split("/", 1)
+        if kind != "Organization" or org.lower() != login.lower():  # no call: such a team can never have access here
+            return OWNER_WRONG, "a team of another organisation, or on a user's repository, can't own files here"
+        quoted = f"orgs/{urllib.parse.quote(org, safe='')}/teams/{urllib.parse.quote(team, safe='')}"
+        try:
+            data = self.get(quoted)
+        except GitHubError as error:
+            if not error.not_found:
+                return OWNER_UNKNOWN, f"can't tell ({error})"
+            try:  # 404 also hides a team from a non-member: only someone who can list the teams knows (P8-K01)
+                self.get(f"orgs/{urllib.parse.quote(org, safe='')}/teams?per_page=1")
+            except GitHubError:
+                return OWNER_UNKNOWN, f"can't tell (you can't see @{org}'s teams)"
+            return OWNER_WRONG, "no team by that name that you can see"
+        if isinstance(data, dict) and data.get("privacy") == "secret":
+            return OWNER_ACCESS, "a secret team: GitHub ignores it as a code owner"
+        try:
+            access = self.get(f"{quoted}/repos/{self.slug}", accept=REPOSITORY_JSON)
+        except GitHubError as error:
+            if error.not_found:
+                return OWNER_ACCESS, "has no access to this repository"
+            return OWNER_UNKNOWN, f"can't tell ({error})"
+        permissions = access.get("permissions") if isinstance(access, dict) else None
+        if not (isinstance(permissions, dict) and permissions.get("push") is True):
+            return OWNER_ACCESS, "no write access to this repository: GitHub ignores it as a code owner"
+        return OWNER_OK, ""
+
+    def _user_verdict(self, name: str, login: str, kind: str) -> tuple[str, str]:
+        if kind == "User" and name.lower() == login.lower():  # the repository's owner: admin, no call (P8-K02)
+            return OWNER_OK, ""
+        organisation = "an organisation: name a person or an @org/team"
+        try:
+            data = self.get(f"repos/{self.slug}/collaborators/{urllib.parse.quote(name, safe='')}/permission")
+        except GitHubError as error:
+            if error.not_found:
+                return OWNER_WRONG, "no such GitHub user"
+            if error.status != 403:
+                return OWNER_UNKNOWN, f"can't tell ({error})"
+            try:  # without push access, even on a public repository: whether the login exists is still public
+                user = self.get(f"users/{urllib.parse.quote(name, safe='')}")
+            except GitHubError as fallback:
+                if fallback.not_found:
+                    return OWNER_WRONG, "no such GitHub user"
+                return OWNER_UNKNOWN, f"can't tell ({fallback})"
+            if isinstance(user, dict) and user.get("type") == "Organization":
+                return OWNER_WRONG, organisation
+            return OWNER_UNKNOWN, "can't tell whether it has write access (reading that needs push access)"
+        user = data.get("user") if isinstance(data, dict) else None
+        if isinstance(user, dict) and user.get("type") == "Organization":
+            return OWNER_WRONG, organisation
+        pushes = isinstance(user, dict) and (user.get("permissions") or {}).get("push") is True
+        if isinstance(data, dict) and (data.get("permission") in ("admin", "write") or pushes):
+            return OWNER_OK, ""
+        return OWNER_ACCESS, "no write access to this repository: GitHub ignores it as a code owner"
 
     def find_ruleset(self) -> dict[str, Any] | None:
         """The repository's ruleset named `swerepo`, in full, or None. Every page is read, 100 at a time: a
@@ -313,6 +423,21 @@ class GitHub:
             raise GitHubError(f"merge settings not sent: {problem}")
         self._run("PATCH", f"repos/{self.slug}", settings)
         self._repo = None
+
+
+_HTTP_STATUS = re.compile(r"\(HTTP (\d{3})\)")
+
+
+def _status(stdout: str, stderr: str) -> int | None:
+    """The HTTP status of a failed `gh api` call: GitHub's JSON `status`, else gh's `(HTTP nnn)` (review P8-K07)."""
+    try:
+        status = json.loads(stdout).get("status")
+    except (json.JSONDecodeError, AttributeError):
+        status = None
+    if isinstance(status, (str, int)) and str(status).isdigit():
+        return int(status)
+    found = _HTTP_STATUS.findall(stderr or "")
+    return int(found[-1]) if found else None
 
 
 def _reason(stdout: str, stderr: str) -> str:

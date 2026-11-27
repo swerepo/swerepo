@@ -440,6 +440,39 @@ def extras_holding(root: Path, folder: str = ".") -> dict[str, str]:
     return found
 
 
+AGENTS_TOOLS = "AGENTS.md's commands won't run yet: "  # before the tools note, for the agents' commands
+
+
+def tools_needed(lint: str, linters: list[str]) -> list[str]:
+    """The tools a project's CI jobs run through `uv run`: pytest, then ruff (full or gradual) or the kept linters."""
+    return ["pytest", *(["ruff"] if lint in ("ruff", "gradual") else [n for n in sorted(linters) if n in KEPT_LINT])]
+
+
+def missing_tools(root: Path, folder: str, needed: list[str]) -> list[str]:
+    """Of `needed`, the tools `uv sync` won't install for the project in `folder`, in order."""
+    installed = installed_dependencies(root, folder)
+    return [name for name in needed if name not in installed]
+
+
+def tools_fix(folder: str, missing: list[str]) -> str:
+    """The command that adds `missing` to the project's dev dependencies, runnable as written (review P8-K)."""
+    where = "" if folder == "." else f"--directory {folder} "
+    return f"uv add {where}--dev {' '.join(missing)}"
+
+
+def missing_tools_note(root: Path, folder: str, missing: list[str]) -> str:
+    """What `init`'s plan and `check` say about tools `uv sync` won't install: one wording for both (review P8-K).
+    Tool names come from a fixed set and folders from `[projects] listed`; nothing else from the project is repeated
+    except an optional extra's name, which `uv sync` skips (ADR-20261125-5f22)."""
+    where = "the project's" if folder == "." else f"{folder}/'s"
+    note = f"not among {where} installed dependencies: {', '.join(missing)} ({tools_fix(folder, missing)})"
+    extras = extras_holding(root, folder)
+    in_extras = [f"{name} is in the optional extra `{extras[name]}`" for name in missing if name in extras]
+    if in_extras:  # uv sync installs no extras (ADR-20261125-5f22)
+        note += f"; {', '.join(in_extras)}, which uv sync doesn't install: move it to a dependency group"
+    return note
+
+
 # --- rendering -------------------------------------------------------------------------------------------
 
 
@@ -462,7 +495,10 @@ class Project:
 
     @classmethod
     def from_inputs(cls, folder: str, values: dict[str, Any]) -> Project | None:
-        """A project from its recorded inputs, or None if they aren't ones standard 1 writes (P4-F03)."""
+        """A project from its recorded inputs, or None if they aren't ones standard 1 writes (P4-F03), its folder
+        included: a plain relative name, never `..`, an absolute path or a command-line option (review P8-K08)."""
+        if not valid_folder(folder):
+            return None
         python, install = values.get("python"), values.get("install")
         lint, linters = values.get("lint"), values.get("linters", [])
         if not (isinstance(python, list) and python and all(v in KNOWN_PYTHONS for v in python)):

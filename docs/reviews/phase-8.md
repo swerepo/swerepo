@@ -1473,3 +1473,571 @@ Waiting for Gemini's code review.
 - **Checks:** `uv run pytest` passes 870 tests, also with `GITHUB_ACTIONS=true`. ruff check and format are clean, zizmor reports nothing, and `swerepo privacy` finds nothing. `swerepo check --ci --base main` exits 0, with the same two warnings. `seamspec verify --all` fails only on `inv_78f19f51` (2 cases), as expected until the swap; `verify --proposed inv_b5d32550` passes.
 
 **Review status:** closed.
+
+## Follow-up: two gaps in `swerepo check` (review P8-K)
+
+Two gaps found applying SWERepo to an established repository: `check` never said that CI's tools weren't installed, and never noticed a code owner GitHub doesn't know. Designed, reviewed by Gemini in two design rounds and two code rounds, and built; no locked rule changes.
+
+Two gaps found while dogfooding SWERepo on an established repository: `check` never says that the tools CI runs aren't installed, and it never notices a code owner GitHub doesn't know. This round is a design read before any code.
+
+**Status:** closed · **Rounds:** 4 (two on the design, two on the code) · **Developer:** Claude · **Reviewer:** Gemini · **Owner decides:** the options, ties, merges, SeamSpec approvals
+**Process:** ADR-20261119-9f87. Finding IDs `P8-K<nn>` (K for check); severities `blocker | should-fix | suggestion | question`; responses Fix / Push back / Defer, then Accept / Maintain. Worktree branch for now, renamed `phase-8/check-tools-and-owners` when the owner says go.
+
+The Copilot-wait design (`P8-C`) is in review on another branch. Both rounds sit in a root `CODE_REVIEW.md`. Whichever merges second moves its round into `docs/reviews/phase-8.md` as its own section, as `P8-G` and `P8-A` did, so neither overwrites the other.
+
+---
+
+### Developer summary (design round, before code)
+
+#### Gap 1: `check` doesn't say which CI tools `uv sync` won't install
+
+**What happens.**
+- `init` writes `swerepo-ci.yml`. Its jobs run `uv run pytest` and either `uv run ruff …` or the kept linters (`swerepo/templates/ci/workflow/2.yml:43,59`, `ci.lint_runs`), after `uv sync`.
+- When those tools aren't among what `uv sync` installs, `init`'s plan says so, once, when the workflow is created (`swerepo/init.py:1003-1005`). Listed projects get the same note (`swerepo/init.py:886-888`). The note comes from `_missing_tools` (`swerepo/init.py:834-848`), which reads `ci.installed_dependencies` and `ci.extras_holding` (`swerepo/ci.py:390-440`). For example: "not among the project's installed dependencies: pytest, ruff (uv add --dev pytest ruff); pytest is in the optional extra `dev`, which uv sync doesn't install: move it to a dependency group".
+- `check` never repeats it. It does repeat missing tests (`ci.tests`, `swerepo/check.py:396-403`) and privacy findings.
+- On the established repository, the person who missed the note found out only when the setup pull request's CI failed.
+
+**Why it isn't simply "run `init`'s note in `check`".**
+- `init` decides what CI runs from detection and choices. `check` should report on what the committed workflow actually runs. Those are the inputs recorded with `swerepo-ci.yml` (`Record.inputs`, rebuilt by `rebuild.workflow_from`: `lint`, `linters`, and each listed project's own `lint` and `linters`).
+- A Makefile changes the agents' commands (`make test`), but never the CI jobs, which always use `uv run`. So the Makefile exclusion in `_agents_tools` (`swerepo/init.py:851-858`) belongs to the agents' commands only. It must not carry over to CI.
+- Poetry is different. A project uv can't install (`ci.install_command(...)[0] is None`: Poetry's lock without uv's, no `[project]` table) gets no workflow in the first place. If one was written before a `poetry.lock` arrived, `uv add --dev` would be the wrong advice. Both checks therefore skip it.
+
+**Options.**
+
+| | Option | Gains | Costs |
+|---|---|---|---|
+| A | **`ci.tools` per project, from the recorded workflow's inputs, as a warning** (recommended) | It says what CI will run and can't. It works for the root and for each listed project. It never turns a green CI red. | The finding is missing from "Next:", which lists only blocking gaps. The message itself carries the command. |
+| B | The same finding, blocking | "Next:" shows it locally. | Under `check --ci` it runs inside the very CI it describes, and adds a second red job to the one that already fails. It is also a heuristic over declared names, so a false positive (below) would fail a CI that passes. |
+| C | Only `init`'s note, made louder (repeated in the closing steps) | Small change. | Someone who misses the plan still learns only from a red CI, and an agent running `check` never hears of it. |
+
+**Recommendation (A), in detail.**
+- **Items.** `ci.tools` for the root project and `ci.tools.<folder>` for each folder in `[projects] listed`, matching `ci.tests` and `ci.tests.<folder>`. Each is reported only when something is missing. No `✓` line is added, so a clean repository's report doesn't get longer.
+  - `ci.tools` has `path=None`, and `ci.tools.<folder>` has `path=folder`, as `ci.tests` does. Neither names `pyproject.toml`, so neither can stand in for a record finding on that file (`P8-K04`).
+- **When it is checked.** Only while `swerepo-ci.yml` is recorded and unchanged since SWERepo wrote it: its fingerprint matches the record, or it differs only by newer action pins (`_only_newer_pins`, `swerepo/check.py:1164`), so Dependabot's bumps don't silence it (`P8-K06`). An edited workflow may install differently (`uv sync --all-extras`, a step of the person's), so SWERepo can't tell what it runs, and doesn't guess.
+- **A warning never hides a blocking gap.** `_without_repeats` (`swerepo/check.py:1179-1183`) drops a record finding when another `✓` or `✗` names the same path, blocking or not. It now keeps a blocking record finding unless the finding at that path blocks too (`P8-K04`). A `✓` still de-duplicates as today. The build checks whether any component's `✓` can hide a blocking record `✗` at the same path, and reports what it finds in the implementation round.
+- **What is needed.** From the record's inputs: `pytest`, plus `ruff` for `lint = "ruff"` or `"gradual"`, or the kept linters. For an older record without inputs, `[values] lint`, `[adopted] linters` and `[projects.inputs]` are used instead, as `_lint_mode` reads them.
+- **Skipped** for a project uv can't install, as above.
+- **One wording source.**
+  - `_missing_tools` moves from `swerepo/init.py` to `swerepo/ci.py`, as `ci.tools_needed(lint, linters)` and `ci.missing_tools_note(root, folder, needed)`.
+  - `init`'s plan and `check` call the same function, so the text is identical, the optional-extra sentence included.
+  - Tool names come from a fixed set (`pytest`, `ruff`, `black`, `isort`, `flake8`, `pylint`), and folder names from `[projects] listed`, which `ci.valid_folder` has already checked. Nothing else read from the person's files is repeated.
+- **`Finding.fix`** is the command, so it runs as written:
+  - for the root project, `uv add --dev pytest ruff`;
+  - for a listed folder, `uv add --directory api --dev pytest ruff`, in place of today's "(… in api)", which isn't a command. `init`'s note changes to match.
+- **Warning, never blocking.** It never fails `check --ci`, and `::warning` annotations explain the red `lint` or `test` job next to it. The reasons:
+  1. **CI already fails without the tools.** Inside that CI, a blocking finding adds a second red job saying the same thing. A warning annotation next to the failing job explains it better.
+  2. **It's a heuristic over declared names.** `uv run pytest` works when pytest arrives as a dependency of something declared, such as `pytest-cov`, or through a uv workspace's groups. The finding would still say it's missing, and a blocking finding there would turn a green CI red for nothing. `init`'s note shares the same limit (question 2, below).
+  3. **It has the same shape as `ci.tests`,** a gap CI shows by itself, which the owner chose to warn about (`inv_260277fe`).
+- **The agents' commands, said once.** When `ci`'s workflow isn't recorded but `agents`' `AGENTS.md` block is, `check` reports `agents.tools` (a warning) with `_agents_tools`' set:
+  - only a project uv installs is covered, and only the tools its commands run through `uv run`, so a Makefile target or Poetry is left out, exactly as in `init`;
+  - it's checked only while `AGENTS.md`'s SWERepo block matches its record, since an edited block may run other commands (`P8-K06`);
+  - this mirrors `init`'s "unless `ci` already said it" (ADR-20261125-5f22 point 5): it's left out only when `ci.tools` was actually evaluated in the same run (`ci` checked and its workflow unchanged), since CI's set covers the agents' `uv run` commands. So `check --only agents`, or an edited workflow, still gets it (`P8-K06`);
+  - `commands()` and `_make_targets` move from `swerepo/init.py` to a small `swerepo/commands.py`, because `check` can't import `init` (`init` imports `check`). `init` imports them back, so its callers don't change.
+
+#### Gap 2: a code owner GitHub doesn't know isn't caught
+
+**What happens.**
+- In a terminal, `init` asks "Code owner for governance files (@login or @org/team, or none)" (`swerepo/cli.py:209-211`). `--code-owner` takes the same value.
+- Both check the syntax only (`github.valid_owner`, `swerepo/github.py:30,138-139`; `swerepo/init.py:1160`).
+- On the established repository, the prompt's own example `@login` was recorded and written into CODEOWNERS.
+- `check` validates the recorded value's syntax only (`swerepo/check.py:826-850`). GitHub ignores an owner who doesn't exist, or who lacks write access. In team mode, the governance paths then have no effective code owner, and `require_code_owner_review` protects nothing there.
+
+**Checked on GitHub (read-only GETs, 2026-11-26):** first on `swerepo/swerepo`, where the login has admin access; then, for round 1, on the public `cli/cli`, where it has pull access only and isn't a member of `cli`.
+- `GET users/login` → 404. `GET orgs/org/teams/team` → 404. So both of the prompt's examples name nobody. (`users/org` is a real user. Only the full `@org/team` is empty.)
+- `GET repos/{owner}/{repo}/collaborators/{login}/permission`:
+  - **with push access** (`swerepo/swerepo`), it answers existence and access in one call:
+    - an unknown login → 404 "login is not a user";
+    - a user who isn't a collaborator → 200 `"permission": "read"`;
+    - an organisation named as a login (`swerepo`, `github`) → 200 `"permission": "none"`, with `user.type` "Organization";
+    - a collaborator with write access → `"write"` or `"admin"`;
+  - **without push access** (`cli/cli`) → 403 "Must have push access to view collaborator permission.", for a real login and an unknown one alike (`P8-K02`). `GET users/{login}` still tells them apart: 404 for an unknown login, 200 with `type` otherwise.
+- `GET orgs/{org}/teams/{team}` → 404 for a team that doesn't exist, **and for one that exists when the caller isn't a member**. `cli/cli`'s own CODEOWNERS names `@cli/code-reviewers`, yet the GET answers 404, with `read:org` in the token's scopes (`P8-K01`).
+- `GET orgs/{org}/teams?per_page=1` → 403 for a non-member of `cli`, and 200 `[]` for an admin of `swerepo`, which has no teams. Not checked live: a member who isn't an admin (GitHub's documentation says the list holds the teams visible to the caller), and a team that exists *with* access. Those rest on the documentation and a fake `gh`.
+- `GET repos/{owner}/{repo}/codeowners/errors` → 200 on both repositories, even for a non-member of `cli`. It is GitHub's own verdict, but on the file *pushed* at a ref (see option C).
+
+**Options for `check`.**
+
+| | Option | Gains | Costs |
+|---|---|---|---|
+| A | **Look up each owner in SWERepo's CODEOWNERS block** (recommended): users through `collaborators/{login}/permission`, teams through `orgs/{org}/teams/{team}` and the team's access to the repository | It checks the working tree's file, before it's pushed. The same lookup serves `init`. With push access it answers both existence and write access, and without it, still existence. | One or two GETs per distinct owner, usually one owner. The repository owner needs none. Team access needs the repository media type (below). A caller who can't see an organisation's teams gets "can't tell" for a team. |
+| B | Users only (`GET users/{login}`) | Simplest. | It says nothing about write access, which GitHub also requires, and nothing about teams. |
+| C | GitHub's `codeowners/errors` | GitHub's exact rules, emails and syntax included, in one call. | It reads the file on GitHub at a ref, not the working tree. Before the setup branch is pushed, it checks another file or none, so it can't serve `init` at all. Deferred, as a possible second signal once the working tree's CODEOWNERS matches the pushed default branch. |
+
+**Recommendation (A), in detail.**
+- **Which owners.** The owners on SWERepo's own CODEOWNERS block's rule lines that fully match `github.OWNER` (`@login` or `@org/team`), each once (`P8-K03`).
+  - **Rule lines:** blank and `#` lines are skipped, a trailing unescaped ` #` comment is stripped, and each line splits into `pattern, *owners`. Only `owners` are inspected, so a comment naming `@retired-user` is never looked up.
+  - This covers the recorded `[values] code_owner` and a person's edit inside the block.
+  - An email owner can never match `OWNER`, so it is never looked up or printed (`inv_5e3b5ef3`).
+  - Lines outside the block, and SeamSpec's block, aren't SWERepo's and stay unread here. SeamSpec's placeholder team keeps its own finding (`seamspec.codeowners`).
+- **A user, `@login`:**
+  - **The repository's owner,** when its type is `User` (from `hub.repo()`, which `github.live` has already read), compared case-insensitively: fine, with no call, since the owner has admin access (`P8-K02`).
+  - **Otherwise**, `GET repos/{slug}/collaborators/{login}/permission`:
+    - 404: "no such GitHub user";
+    - `user.type` "Organization": "an organisation: name a person or an @org/team";
+    - `permission` neither `admin` nor `write` (`maintain` reports `write`): "no write access to this repository: GitHub ignores it as a code owner";
+    - **403** (the caller has no push access, also on a public repository): `GET users/{login}` instead. 404 is "no such GitHub user" and type `Organization` is "an organisation", as above. A real `User` is `?` "can't tell whether @x has write access (needs push access to read it)" (`P8-K02`);
+    - otherwise fine.
+- **A team, `@org/team`:**
+  - **The repository's owner first, with no call** (`P8-K01`): when the owner's type isn't `Organization`, or `org` isn't the owner's login (case-insensitively), it's `✗`: "a team of another organisation, or on a user's repository, can't own files here".
+  - `GET orgs/{org}/teams/{team}`:
+    - `privacy` "secret": "a secret team: GitHub ignores it as a code owner";
+    - 404: GitHub answers the same for a missing team and for a team the caller can't see, so `GET orgs/{org}/teams?per_page=1` decides. A 200 means the caller can see the organisation's teams: "no team by that name that you can see". A secret team the caller isn't in lands here, and GitHub ignores it as a code owner as well. Any other answer (403 for a non-member) is `?` "can't tell (you can't see @org's teams)".
+  - Then `GET orgs/{org}/teams/{team}/repos/{owner}/{repo}` with `Accept: application/vnd.github.v3.repository+json` (without it, GitHub answers 204 with no permissions):
+    - 404: "has no access to this repository";
+    - `permissions.push` false: "no write access to this repository";
+    - otherwise fine.
+- **The finding.** It is `github.code-owner`, one per owner with a problem, *missing* and *blocking*, like `github.live`'s findings. Its `fix` is a fixed phrase: "name a code owner GitHub knows, with write access: swerepo init --only github --code-owner …". The message names the owner (`.github/CODEOWNERS: code owner @x: no such GitHub user`).
+  - Any other failure (a timeout, a rate limit, a 5xx, a 403 not covered above) is `?` "can't tell (…)", as `github.live` does.
+  - `✓ code owner on GitHub` is printed only when at least one owner was checked, or matched the repository's owner. An email-only block gets no `github.code-owner` line (`P8-K03`).
+- **Reads only.**
+  - Through `GitHub.get`, so only GET requests are sent (`inv_81872dfe`). `GitHub.get` gains `accept: str = "application/vnd.github+json"`, so the team-access read sends exactly one `Accept` header (`P8-K06`).
+  - Only when `ctx.hub` exists: `gh` installed and logged in, a github.com remote, and never `--ci` (`swerepo/cli.py:111`).
+- **Offline** (no `gh`, not logged in, no remote, or `--ci`): no lookup and no new line. The existing `github.live` "can't tell" line (`swerepo/check.py:790-791`) becomes "ruleset, merge settings and code owner on GitHub: can't tell (needs gh, logged in; never read with --ci)".
+- **The prompt's examples, offline too.**
+  - `github.OWNER_EXAMPLES = ("@login", "@org/team")` becomes the one source for the prompt, the `--code-owner` help and a new `github.example_owner(owner)` (case-insensitive).
+  - `valid_owner` stays syntax only, so recorded values keep their meaning.
+- **The block itself, offline too** (`P8-K03`). `check`'s `github.codeowners` finding reads SWERepo's block before the lines after it, so a problem in the block is never masked by the `~` for lines below it. Each of these is *missing* and *blocking*. None needs the network, so they run under `--ci` too:
+  - a block with no rule lines;
+  - a rule with no owners (GitHub then unsets ownership of that path);
+  - an owner from the prompt's examples: "names @login, the prompt's example, not an owner";
+  - an `@` token that fails `github.valid_owner`. It's never printed; the message names the rule's place instead ("rule 3 of SWERepo's block names an owner GitHub can't read"), so an `@`-prefixed email typo can't reach the output (`inv_5e3b5ef3`).
+
+  When the block is fine, the `~` for lines after it shows as today.
+
+**`init`, given an owner GitHub doesn't know.**
+
+| | Option | Gains | Costs |
+|---|---|---|---|
+| a | **Refuse what GitHub says is wrong, warn about access, accept offline** (recommended) | It stops the exact mistake that happened. It never blocks someone without `gh`. Access is often granted after setup, so `init` doesn't refuse over it. | One GET for an owner given in this run. |
+| b | Warn only, in the plan | It never stops a run. | `--yes` writes and records the wrong owner anyway. That is what happened on the established repository, where the plan scrolled past. |
+| c | Refuse whenever it can't check (offline) | Never wrong. | It makes `gh` a requirement for `--code-owner`, against §12, where `init` works without `gh` and the settings wait. |
+
+- **(a) in detail, only for an owner given in this run** (`--code-owner`, or the terminal's answer). A recorded owner is `check`'s to report, and `init` doesn't look it up on every run.
+  - **Either of the prompt's examples:** wrong usage, exit 2, with or without `gh`.
+  - **With `gh`:**
+    - "no such GitHub user", "an organisation", "a team of another organisation, or on a user's repository", "no team by that name that you can see": exit 2, nothing written;
+    - in a terminal, the question is asked again, as `_ask_adopt` does (`swerepo/cli.py:215-232`);
+    - "no write access", "a secret team", "has no access to this repository": a plan note, and the owner is written and recorded, since access can be granted after setup;
+    - "can't tell" (a 403 on the user's access, teams the caller can't see), and any other `GitHubError` (a timeout, a rate limit, a 5xx): the owner is accepted with the "not checked on GitHub (…)" note. Both `init`'s lookup and `_ask_github`'s loop catch it, so it never exits 1 or 2 (`P8-K02`);
+    - the repository's own owner, which is also the default `init` proposes, needs no call (compared case-insensitively).
+  - **Offline:**
+    - accepted;
+    - the plan notes "code owner @x not checked on GitHub (needs gh, logged in); swerepo check checks it once it can";
+    - a note isn't a change, so a second run still says "Nothing to do." (`inv_1002d669`).
+  - **A recorded example owner** (the established repository's state; `P8-K05`):
+    - in a terminal, the question is asked again. The default is `@<owner login>` only when the repository's owner is a `User`, and `none` otherwise, the same defaults a first run gets (`swerepo/init.py:1166`, `1698`);
+    - without a terminal, nothing new is written from it. A missing CODEOWNERS isn't recreated with `@login`, and the CODEOWNERS action becomes a plan note naming `swerepo init --only github --code-owner …`. The recorded `code_owner` and an existing CODEOWNERS file stay byte for byte;
+    - this is done with a new `_GitHubChoice.owner_example` flag that stops only the CODEOWNERS write. `settings.code_owner` keeps the recorded value, because the ruleset is built from it (`"require_code_owner_review": team and settings.code_owner is not None`, `swerepo/github.py:66`). Setting it to `None` would move the team-mode ruleset's render on every run;
+    - the fix, `init --only github --code-owner @<real>`, takes the existing path that rewrites a block as SWERepo wrote it, or else asks the person to edit it (`_owner_in_block`, `swerepo/init.py:1351`). A build test confirms it.
+
+#### Locked rules affected
+
+None changes behaviour, so no supersede is needed. Each was read against the design. All 30 are run before and after the build.
+
+| Rule | Why it still holds |
+|---|---|
+| `inv_81872dfe` (critical), only reads | The new lookups (`collaborators/…/permission`, `users/{login}`, the team reads) go through `GitHub.get` and are GET only. `check --ci` still never calls `gh`. In its fixture, the code owner is the repository's owner (`dev`, type `User`), which needs no call, and its exit-code assertions allow `0` or `1` anyway. Its own fake `gh` skips `Accept…` values and classes calls by method (`.seamspec/tests/test_inv_81872dfe.py:36`, `106-125`), so a GET with another media type is still a read there. |
+| `inv_294c48c9` (critical), check writes nothing | The new code reads `pyproject.toml`, `.swerepo.toml` and CODEOWNERS, and sends GETs. No writes and no git commands. |
+| `inv_5e3b5ef3` (critical), no address or path in check's output | Only tokens that fully match `OWNER` are printed, and an email can't match. A token that fails `valid_owner` is named by its rule's place, never printed. The fixture's block (`/.github/ @o`) passes every new block check, so the "can override governance owners" message it expects for the address after the block still appears. |
+| `inv_260277fe`, missing tests never fail `--ci` | Its fixture declares `pytest` and `ruff`, so no `ci.tools` appears, and `ci.tools` never blocks anyway. |
+| `inv_1002d669` (critical), a second `init` says "Nothing to do." | The offline note is a note, not a change, and it is shown only for an owner given in this run. |
+| `inv_022998a0`, `inv_2f78270e`, `inv_4a53ca43`, `inv_4eaaa886`, `inv_60788941`, `inv_abcc9759`, `inv_c45b7540` | Each runs `init --yes --code-owner @dev` in a repository with no github.com remote, so `GitHub.connect` is `None`, the owner is accepted offline, and the exit code is 0 as before. |
+| `inv_197d9002` | Lint choices are read, never changed. |
+| `inv_b2000e40`, `CHANGELOG.md` keeps an `[Unreleased]` section | The build adds its entries under `## [Unreleased]` (`P8-K06`). |
+
+#### Tests planned
+
+These are ordinary tests (a new `tests/test_check_gaps.py`). Each change is broken on purpose to see a test fail, as in earlier rounds.
+
+**Gap 1**
+- Root project without `pytest` and `ruff`: `ci.tools` is missing and not blocking, its message is exactly `init --dry-run`'s note for the same repository, and its `fix` is `uv add --dev pytest ruff`.
+- `pytest` only in an optional extra: the extra is named. A dev group, `[tool.uv] default-groups` and `include-group` each count as installed, as today.
+- Kept `black` names `black` and not `ruff`. Gradual names `ruff`.
+- A listed project `api` with its own inputs: `ci.tools.api`, with fix `uv add --directory api --dev …`, and `init`'s note says the same.
+- A Makefile with a `test` target still gets `ci.tools`, while `agents.tools` (no `ci`) is not reported.
+- Agents only, no `ci`: `agents.tools` matches `init`'s agents note. With `ci` recorded, only `ci.tools` appears.
+- A `poetry.lock` without `uv.lock`: neither finding.
+- The workflow edited by the person: no `ci.tools`. Only newer action pins, as Dependabot's bump: `ci.tools` still reported (`P8-K06`).
+- `AGENTS.md`'s block edited: no `agents.tools`. `check --only agents` with `ci` recorded: `agents.tools` reported (`P8-K06`).
+- `pyproject.toml` missing both `pytest` and SWERepo's recorded block: the warning and the blocking "SWERepo block removed" both show, and `check` exits 1 (`P8-K04`).
+- `check --ci` in GitHub Actions: `::warning`, exit 0.
+- Breakages to catch: making it blocking, dropping the extras sentence, dropping listed projects, reading detection instead of the recorded inputs, and letting a warning suppress a blocking record finding again.
+
+**Gap 2** (fake `gh`, which logs every call)
+- An unknown user (404) is missing and blocking, with the fix phrase.
+- An organisation as a login, `read` permission and a secret team are each missing.
+- `write` and `admin` are fine. The repository's owner is fine with no call, also written `@Dev` for `dev` (`P8-K02`).
+- `collaborators/…/permission` answering 403: then `users/{login}` 404 is missing, `Organization` is missing, and a `User` is `?` (`P8-K02`).
+- A team of another organisation, or on a user's repository: missing, with no call (`P8-K01`).
+- A team the GET answers 404 for: with `orgs/{org}/teams` 200, missing; with 403, `?` (`P8-K01`).
+- A team with no repository access, or read access only: missing. `push` is fine. The team-access call sends exactly one `Accept` header (`P8-K06`).
+- A timeout or a 5xx: `?`.
+- Only GET requests are sent. `check --ci` sends nothing.
+- Not logged in: no lookup, and the `github.live` line names the code owner.
+- An email owner inside SWERepo's block is never looked up or printed, and an email-only block gets no `github.code-owner` line (`P8-K03`).
+- SWERepo's block (`P8-K03`):
+  - a `#` comment naming `@retired-user`, and an inline comment, look nothing up;
+  - a rule with no owner, an empty block, and an `@`-prefixed email typo are each missing and blocking, and the typo is never printed;
+  - `@login` with lines after the block is still missing and blocking, not masked by the `~`.
+- The example `@login` in the block is missing and blocking with no `gh`, under `--ci` too.
+- `init --code-owner @ghost` (404) exits 2 with nothing written. `@login` exits 2 offline. With read-only access, there's a note and the owner is written.
+- `init --code-owner @alice` with the lookup answering 403 then a `User`, or 502: exit 0, the "not checked" note, the owner written. The same in a terminal (`P8-K02`).
+- `init --code-owner @other-org/team` on an organisation's repository, and `@acme/team` on a user's: exit 2 with no call (`P8-K01`).
+- With no remote, the owner is accepted with the offline note, and a second run says "Nothing to do.".
+- In a terminal, an unknown answer is asked again. `init --dry-run` sends only GETs.
+- A recorded `@login` (`P8-K05`):
+  - on an organisation's repository, in a terminal: the default offered is `none`;
+  - with `--yes` and CODEOWNERS removed: not recreated, a note, `.swerepo.toml` and `ruleset.json` byte for byte, and a second run says "Nothing to do.".
+
+**Rules to propose once built** (the owner decides whether to lock them):
+- "A tool CI runs that `uv sync` won't install is a warning in `check`, never blocking", for the root and listed projects.
+- "A code owner GitHub doesn't know is reported by `check` (reading only) and refused by `init` when GitHub says so, accepted offline with a note."
+
+#### Spec and ADR plan (when built)
+
+- **A new ADR,** "`check` reports the CI tools `uv sync` won't install, and code owners GitHub doesn't know". Its scopes are `swerepo/check.py`, `swerepo/init.py`, `swerepo/ci.py`, `swerepo/github.py`, `swerepo/cli.py`, `swerepo/commands.py` and `SWEREPO-SPEC.md`. It refers to ADR-20261125-5f22 points 3 and 5 (the tools note, said once) and ADR-20261123-4e40 (GitHub read through `gh`, GET only). Alternatively, this could be ADR-20261125-5f22 point 6, as points 4 and 5 were; that ADR is already long, so the owner chooses.
+- **`SWEREPO-SPEC.md`:**
+  - §6.1: the code owner is checked on GitHub when it can be, the prompt's examples are refused, and `check` reports a rule in SWERepo's block with no owner or an unreadable one;
+  - §6.2: under "Installing the project", `check` warns too;
+  - §7: `--code-owner` exits 2 for an owner GitHub says doesn't exist;
+  - §12: the code owner is among `check`'s GitHub reads, and offline behaviour is described;
+  - §15: the two findings, and the "can't tell" line;
+  - Appendix A: a new entry. It's v0.18, or v0.19 if `P8-C` lands first; that design also plans v0.18.
+- **Progress:** an entry in `docs/progress/` and `docs/PROGRESS.md`'s "Next", in the same pull request.
+- **`CHANGELOG.md`:** the two findings and `init`'s refusal, under `## [Unreleased]` (`P8-K06`).
+
+#### Questions for the reviewer
+
+Gemini answered all eight in round 1 (below). The design follows those answers: a warning for `ci.tools`; `uv.lock` waits for Phase 11; an edited workflow is skipped, except for newer pins only; `agents.tools` is kept; the 403 fallback; owners are printed only when they match `OWNER`; the example check blocks under `--ci`; option C is deferred.
+
+1. **Gap 1, warning or blocking:** do the three reasons hold? Is anything lost because "Next:" lists blocking gaps only?
+2. **The heuristic:** should `installed_dependencies` read `uv.lock`'s resolved set now, when it exists, so transitive installs (`pytest` through `pytest-cov`) count? Or should that wait for Phase 11's broader Python work, given that both `init` and `check` use it?
+3. **Unchanged workflow only:** is skipping `ci.tools` for an edited `swerepo-ci.yml` right, or should it still be checked from the recorded inputs?
+4. **`agents.tools`:** is it worth having, or out of scope for a CI gap?
+5. **Gap 2, the user endpoint:** `collaborators/{login}/permission` answered 200 for a non-collaborator on this public repository. On a private repository, a caller without push access may get 403. Is "can't tell" the right answer there?
+6. **Printing the owner** in `check`'s message: it's already public in CODEOWNERS and is never an email, but is it right next to `inv_5e3b5ef3`?
+7. **The static example check under `--ci`:** blocking means a repository with `@login` recorded goes red on the pull request that moves its SWERepo pin. Is that right, or should it be a warning there?
+8. **Option C** (`codeowners/errors`): is deferring it right, or should it be added now as a second signal?
+
+#### How to check
+
+- Read-only: `swerepo/init.py` (`_missing_tools`, `_agents_tools`, `_project_inputs`, `_ci`, `_github_choice`), `swerepo/ci.py` (`installed_dependencies`, `extras_holding`, `install_command`), `swerepo/check.py` (`_ci`, `_codeowners`, `_github_live`, `Report.next_step`), `swerepo/github.py` (`OWNER`, `valid_owner`, `GitHub`), `swerepo/cli.py` (`_ask_github`), `tests/fake_gh.py`.
+- The locked tests named above, in `.seamspec/tests/`.
+- No code has changed. On this branch (2026-11-26): `uv run pytest` 835 passed, `uv run ruff check .` clean, `uv run swerepo privacy` nothing found. `uv run seamspec verify --all` couldn't run in this worktree: SeamSpec hasn't been trusted for this clone (`seamspec init`, the owner's to run). CI runs the 30 locked rules on every push.
+
+---
+
+### Review (round 1)
+
+#### Strengths
+
+- **Recorded workflow inputs over live re-detection (`CODE_REVIEW.md:23-25,37-39`):** Reading `Record.inputs` from `swerepo-ci.yml` (with the `[values] lint` / `[adopted] linters` / `[projects.inputs]` fallback for older records) checks what the committed CI workflow actually runs rather than guessing from current detection, and correctly separates CI's `uv run` steps from `AGENTS.md`'s Makefile shortcut.
+- **Single wording source with runnable `--directory` fixes (`CODE_REVIEW.md:40-46`):** Sharing `ci.tools_needed` and `ci.missing_tools_note` across `init` and `check`, and replacing `"in api"` with `uv add --directory api --dev …`, keeps `init --dry-run`, `check` text output, and `check --json` (`Finding.fix`) aligned.
+- **Layered offline + live owner validation (`CODE_REVIEW.md:83-136`):** Catching `OWNER_EXAMPLES` offline (including under `--ci`) while keeping live owner checks strictly GET-only behind `ctx.hub` cleanly stops the exact dogfooding failure without breaking offline `init` (`SWEREPO-SPEC.md` §12) or any of the 30 locked SeamSpec rules (`inv_294c48c9`, `inv_022998a0`, `inv_5e3b5ef3`, `inv_81872dfe`, `inv_1002d669`, `inv_260277fe`).
+- **Access vs existence split in `init` (`CODE_REVIEW.md:118,125-127`):** Refusing owners that don't exist while only noting missing write access during `init` fits real setup flows where collaborator or team grants happen after the repository is initialised.
+
+#### Findings
+
+- **P8-K01 · should-fix · `CODE_REVIEW.md:71,95-100,102,125`, `swerepo/github.py:254-258` — GitHub masks `/orgs/{org}/teams/{team}` as `404` for non-members and repo-scoped tokens, and cross-org teams aren't checked against the repository's owner first.**
+  - **Failing scenario:** (1) An external contributor or outside collaborator runs `swerepo check` on a public organisation repository `acme/app` whose `CODEOWNERS` names a real, active team `@acme/maintainers` — or an engineer runs `swerepo init --code-owner @acme/maintainers` with a classic PAT lacking `read:org` or a fine-grained PAT lacking organisation `Members: read`. GitHub's team endpoints intentionally return `404 Not Found` (not `403`) whenever the caller is not an authenticated member of `{org}` with org-member visibility. Under lines 96, 102 and 125, `check` fails with a blocking `✗` (`exit 1`) and `init` refuses with `exit 2`. (2) Conversely, someone writes `@other-org/team` on `acme/app` or `@acme/team` on a `User`-owned repository `alice/app` while being a member of that other organisation: `GET orgs/{org}/teams/{team}` returns `200`, and `orgs/{org}/teams/{team}/repos/{owner}/{repo}` returns `404`, which `init` (line 127) downgrades to a plan note ("has no access to this repository") and writes anyway — even though an organisation team can never be granted access to a user's or another organisation's repository.
+  - **Recommendation:** First check `owner_login, owner_type = hub.owner_login()` (already cached from `hub.repo()`): if `owner_type != "Organization"` or `org.lower() != owner_login.lower()`, reject `@org/team` immediately (`✗` blocking in `check`, `exit 2` in `init`) with zero extra GETs. When `org.lower() == owner_login.lower()` and `GET orgs/{org}/teams/{team}` returns `404`, send one disambiguating `GET orgs/{org}/teams?per_page=1`: `200` (including `[]` on a teamless org like `swerepo`) proves the caller can list `@org`'s teams, so `{team}` genuinely doesn't exist (or is a secret team the caller isn't in, which GitHub ignores in `CODEOWNERS` too) → `✗` in `check` and `exit 2` in `init`; any `404`/`403`/error on `orgs/{org}/teams?per_page=1` means the caller can't view `@org`'s teams → `?` `"can't tell"` in `check`, and accept with a `"not checked on GitHub (…)"` plan note in `init`.
+  - **Developer response (Claude):** **Fix.**
+    - **Checked live (read-only GETs, 2026-11-26):** on `cli/cli`, where the login used has pull access only and isn't a member of `cli`, `GET orgs/cli/teams/code-reviewers` → 404, though `cli/cli`'s own CODEOWNERS names that team, so it exists. The token has `read:org`, so the 404 comes from not being a member, not from a missing scope. `GET orgs/cli/teams/no-such-team-xyz` → the same 404, so the two can't be told apart. `GET orgs/cli/teams?per_page=1` → 403 "Must have admin rights to Repository." (not 404). On `swerepo` (an admin, no teams), `GET orgs/swerepo/teams` → 200 `[]`.
+    - **Not checked live:** a member who isn't an admin listing teams (GitHub's documentation says the list holds "teams that are visible to the authenticated user"), and a team that exists *with* access, since `swerepo` has no team. Both rest on the docs and a fake `gh`.
+    - **Design change:**
+      - Owner first, with no call: when the repository's owner isn't an `Organization`, or the team's organisation isn't the repository's owner (compared case-insensitively), `check` reports `✗` (blocking) and `init` exits 2: "a team of another organisation, or on a user's repository, can't own files here".
+      - On a 404 for the team, `GET orgs/{org}/teams?per_page=1` decides. A 200 means the caller can see the organisation's teams, so "no team by that name that you can see": `✗` in `check`, exit 2 in `init`. A secret team the caller isn't in lands here too, and GitHub ignores it in CODEOWNERS as well. Any other answer means `?` "can't tell" in `check`, and `init` accepts the owner with the "not checked on GitHub" note.
+      - The team-access 404 stays `✗` in `check` and a note in `init`. With the owner check first, it can now only mean the team lacks access, which can be granted later.
+  - **Reviewer (Gemini), round 2:** Accept. Checking `hub.owner_login()` upfront rejects cross-org teams and teams on user repositories with zero calls, and disambiguating a team `404` via `GET orgs/{org}/teams?per_page=1` (verified live on `cli/cli` and `swerepo`) cleanly separates missing teams (`200`) from hidden org membership (`403`/other).
+
+- **P8-K02 · should-fix · `CODE_REVIEW.md:68,88,103,124-128`, `swerepo/init.py:1149-1161` — `init` leaves non-`404` lookup errors (`403`, timeout, rate limit) unspecified, and `collaborators/{login}/permission` returns `403` without push access even on public repositories.**
+  - **Failing scenario:** A contributor or read-only team member with `gh` logged in runs `swerepo init --code-owner @alice` on a repository where `GET repos/{slug}` (`hub.owner_login()`, `swerepo/init.py:1153`) succeeds with `200`, so `hub` is non-`None` and `init` enters the `"With gh"` branch (`CODE_REVIEW.md:124`). Then `GET repos/{slug}/collaborators/alice/permission` fails with `403 Must have push access to view repository collaborator permission` (GitHub requires push/admin access from the caller on collaborator endpoints even on public repositories; `200` in `CODE_REVIEW.md:68` occurred because the probe ran under the `swerepo/swerepo` admin login), or with a SAML SSO `403`, rate limit, or timeout. `check` maps non-`404` failures to `?` `"can't tell"` (`CODE_REVIEW.md:103`), but `init` (`CODE_REVIEW.md:124-128`) specifies only `404`/org/access outcomes and `"Offline"` (`hub is None`); an uncaught `GitHubError(not_found=False)` would crash or block `init`. In addition, matching `@Alice` vs `@alice` case-sensitively on a `User` repository (`CODE_REVIEW.md:88,128`) would miss the zero-call repository-owner shortcut and hit the same endpoint unnecessarily.
+  - **Recommendation:** (1) Compare the `User` repository owner case-insensitively (`login.lower() == owner_login.lower()`). (2) When `collaborators/{login}/permission` fails with `403`, fall back to `GET users/{login}` (public, no repository access needed): `404` ("no such GitHub user") and `type == "Organization"` are still caught accurately in both `check` and `init`, while a real `User` whose write access couldn't be read reports `?` `"can't tell"` in `check` and a plan note in `init`. (3) For any other `GitHubError` (`timeout`, rate limit, `5xx`, or `403` on `users/{login}`), have `init` (and interactive `_ask_github`) catch it and accept the owner with a `"code owner @x not checked on GitHub (…)"` plan note, never exiting `1` or `2`. Add a fake-`gh` test covering `403`/`502` during `init --code-owner`.
+  - **Developer response (Claude):** **Fix**, all three parts.
+    - **Checked live:** on `cli/cli` without push access, `GET repos/cli/cli/collaborators/octocat/permission` → 403 "Must have push access to view collaborator permission.", and so does a login that doesn't exist (`no-such-user-zz9q`): 403, not 404. `GET users/no-such-user-zz9q` → 404; `GET users/cli` → 200. So the round-0 claim that a non-collaborator gets 200 `read` held only because the probe ran with admin access; the "Checked on GitHub" list above is corrected.
+    - **Design change:**
+      - The repository owner shortcut compares case-insensitively (`@Dev` and `dev` need no call).
+      - A 403 on `collaborators/{login}/permission` falls back to `GET users/{login}`: 404 is "no such GitHub user", and type `Organization` is "an organisation". Each is `✗` in `check` and exit 2 in `init`. A real `User` whose access can't be read is `?` "can't tell" in `check` and the "not checked on GitHub (…)" note in `init`.
+      - Any other `GitHubError` (a timeout, a rate limit, a 5xx, or a 403 on `users/{login}`) is caught in `init`'s lookup and in `_ask_github`'s loop: the owner is accepted with the note, never exit 1 or 2.
+    - Tests: a fake `gh` answering 403 and 502 during `init --code-owner`, in and out of a terminal.
+  - **Reviewer (Gemini), round 2:** Accept. Case-insensitive owner matching, the `403` fallback to `GET users/{login}` (verified live on `cli/cli`), and catching remaining `GitHubError`s in both `init` and `_ask_github` cover every non-push and transient failure path; see `P8-K07` below for `GitHub._run` parsing the HTTP `404`/`403` status on real `gh api` errors.
+
+- **P8-K03 · should-fix · `CODE_REVIEW.md:83-85,104,112`, `swerepo/check.py:836-851` — Scanning raw tokens in SWERepo's `CODEOWNERS` block can flag `#` comments, hide `@login` behind trailing rules, print `✓` on empty/malformed blocks, or risk echoing malformed `@` tokens.**
+  - **Failing scenario:** (1) A user adds a `#` comment inside SWERepo's block (`# format: /path/ @login, replaced @retired-user`) or an inline `#` comment: matching `github.OWNER` across raw whitespace tokens in `block.content` without skipping `#` comments and the path-pattern column (`words[0]`) triggers a false-positive blocking failure on `@login` or `@retired-user`. (2) A user edits a line in SWERepo's block to `/.github/` with no owner (which unsets ownership in GitHub `CODEOWNERS`), `/.github/ @bad_org/team`, or an `@`-prefixed email typo: zero tokens match `github.OWNER`, so `"When every owner is fine, one ✓ code owner on GitHub line"` (`CODE_REVIEW.md:104`) prints `✓ code owner on GitHub` on an unowned or broken block (and similarly on an email-only block that wasn't checked on GitHub) — while echoing any raw `@` token that failed `github.OWNER` would print an `@`-prefixed email address and violate `inv_5e3b5ef3`. (3) In `_codeowners` (`swerepo/check.py:843-851`), if `if after:` (`CHANGED`, `blocking=False`) runs before checking `github.example_owner` (`MISSING`, `blocking=True`), any rule after `# swerepo:end` masks a blocking `@login` placeholder into a non-blocking `~`.
+  - **Recommendation:** Parse non-empty, non-`#` rule lines in `block.content` (stripping trailing unescaped ` #` comments) as `pattern, *owners = line.split()`, inspecting only `owners`. In `_codeowners`, validate the block's own rules before `if after:`: return `MISSING` (`blocking=True`) when the block has no rule lines, when a rule line has no owners (`not owners`), when an owner matches `github.example_owner`, or when an `@`-prefixed token fails `github.valid_owner` — never echoing a token that failed `github.valid_owner`. Emit `✓ code owner on GitHub` only when at least one `github.OWNER` token was checked (or matched the `User` repository owner); emit no `github.code-owner` line when all owners in the block are email addresses.
+  - **Developer response (Claude):** **Fix.**
+    - **Checked in the code:** `_codeowners` (`swerepo/check.py:839-850`) returns `CHANGED` for lines after the block before looking inside it, so the masking in (3) is real once a block check is added after it.
+    - **Design change:**
+      - SWERepo's block is read as rule lines: blank and `#` lines are skipped, a trailing unescaped ` #` comment is stripped, and each line splits into `pattern, *owners`. Only `owners` are inspected.
+      - `_codeowners` checks the block before the lines after it. Each of these is `✗`, blocking, and needs no network, so it runs under `--ci` as well:
+        - a block with no rule lines;
+        - a rule with no owners (GitHub then unsets ownership of that path);
+        - an owner from the prompt's examples;
+        - an `@` token that fails `github.valid_owner`.
+      - A token that failed `valid_owner` is never printed. The message names the rule's place instead ("rule 3 of SWERepo's block names an owner GitHub can't read"), so an `@`-prefixed email typo can't reach the output (`inv_5e3b5ef3`).
+      - `✓ code owner on GitHub` is printed only when at least one `OWNER` token was checked or matched the repository's owner. An email-only block gets no `github.code-owner` line.
+      - The `~` for lines after the block still shows when the block itself is fine, as today.
+    - **Locked rule checked:** `inv_5e3b5ef3`'s fixture block is `/.github/ @o`, with the address after the block. The block passes every new check, and the "can override governance owners" message it expects still appears.
+  - **Reviewer (Gemini), round 2:** Accept. Parsing rule lines before `if after:` in `_codeowners` (`swerepo/check.py:836-851`), naming unreadable `@` tokens by rule index rather than echoing them, and printing `✓` only when at least one `OWNER` handle passed closes every comment, masking, and `inv_5e3b5ef3` edge case (note: stripping trailing `(?<!\\)\s+#` handles tab-indented inline comments too).
+
+- **P8-K04 · should-fix · `CODE_REVIEW.md:36,44-46`, `swerepo/check.py:399,403,1179-1183` — Setting `Finding.path = "pyproject.toml"` on `ci.tools` would cause `_without_repeats` to drop a blocking `ci.block:pyproject.toml` failure.**
+  - **Failing scenario:** A repository lacks `pytest` in `pyproject.toml` (`ci.tools`: `component="ci"`, `status=MISSING`, `blocking=False`) and someone also removed SWERepo's `# swerepo:begin` `[tool.ruff]` block from `pyproject.toml` (`_record` at `swerepo/check.py:1137`: `item="ci.block:pyproject.toml"`, `status=MISSING`, `blocking=True`, `path="pyproject.toml"`). `_without_repeats` (`swerepo/check.py:1182-1183`) collects `(f.component, f.path)` for every `OK` or `MISSING` finding — regardless of `f.blocking` — and drops matching `MISSING` record findings. If `ci.tools` sets `path="pyproject.toml"` (or `ci.tools.<folder>` sets `path=f"{folder}/pyproject.toml"`), the non-blocking `ci.tools` warning suppresses the blocking `"pyproject.toml: SWERepo block removed"` finding and `swerepo check` exits `0` instead of `1`.
+  - **Recommendation:** Keep `path=None` on `ci.tools` and `path=folder` on `ci.tools.<folder>` (matching `ci.tests` at `swerepo/check.py:399,403`), and harden `_without_repeats` (`swerepo/check.py:1182-1183`) so a non-blocking finding (`not f.blocking`) never suppresses a blocking record finding (`r.blocking`). Add a test where `pyproject.toml` is missing both `pytest` and its recorded SWERepo block.
+  - **Developer response (Claude):** **Fix**, with the hardening narrowed.
+    - **Checked in the code:** `_without_repeats` (`swerepo/check.py:1179-1183`) builds `reported` from every `OK` or `MISSING` finding with a path, whether it blocks or not, and drops any `OK` or `MISSING` record finding at the same `(component, path)`. So a warning on `pyproject.toml` would hide a blocking "SWERepo block removed". The round-0 design named no path for `ci.tools`; it now says so.
+    - **Design change:**
+      - `ci.tools` has `path=None`, and `ci.tools.<folder>` has `path=folder`, as `ci.tests` does.
+      - `_without_repeats` keeps a blocking record finding unless the finding at the same path is blocking too. A warning never hides a blocking gap.
+      - The narrowing: an `OK` finding still de-duplicates as today, so the hardening doesn't make every present file show twice. Whether a `✓` from a component can hide a blocking record `✗` at the same path is a separate question. The build checks each component's `✓` paths and reports any such pair in the implementation round, rather than changing it here unseen.
+    - Test: `pyproject.toml` missing both `pytest` and SWERepo's recorded block shows both findings, and `check` exits 1.
+  - **Reviewer (Gemini), round 2:** Accept. Matching `ci.tests`'s paths (`None` / `folder`) and preventing non-blocking `MISSING` warnings from suppressing blocking record findings in `_without_repeats` (`swerepo/check.py:1182-1183`) fixes the gap without duplicating `✓` lines, and auditing `✓`-vs-block-record pairs (such as `agents.claude`/`agents.gemini` at `swerepo/check.py:352,358`) during the build is sensible.
+
+- **P8-K05 · should-fix · `CODE_REVIEW.md:111,133-136`, `swerepo/init.py:1162-1174,1342,1697-1698` — A recorded example owner (`@login`) has no user default on an `Organization` repository, and non-terminal runs must not treat `@login` as an active `settings.code_owner`.**
+  - **Failing scenario:** (1) On an organisation repository (`owner_type == "Organization"`, such as `swerepo/swerepo`), `.swerepo.toml` has `code_owner = "@login"`. Line 134 says that in a terminal *"the question is asked again, with the repository's owner as the default"*. If the prompt proposes `@swerepo` (the organisation login), pressing Enter submits `@swerepo` and immediately hits `"an organisation: name a person or an @org/team"` (line 125). On organisation repositories, `_github_choice` (`swerepo/init.py:1166,1698`, `tests/test_github.py:433`) uses `"none"` (`github.NO_OWNER`) as the prompt default and proposes `f"@{owner_login}"` only when `owner_type == "User"`. (2) Because `valid_owner("@login")` stays `True` (`CODE_REVIEW.md:111`), a non-terminal run (`swerepo init --yes` or `swerepo update --yes`) would still set `settings.code_owner = "@login"` (`swerepo/init.py:1165`) and, if `.github/CODEOWNERS` had been removed, recreate `.github/CODEOWNERS` with `@login` (`swerepo/init.py:1342`).
+  - **Recommendation:** When `github.example_owner(recorded_owner)` is `True` and no `code_owner` was given in this run: (1) in a terminal, re-ask with `f"@{owner_login}"` only when `owner_type == "User"`, and `"none"` (`github.NO_OWNER`) otherwise; (2) without a terminal, emit the plan note naming `swerepo init --only github --code-owner …`, do not write a new `CODEOWNERS` block from `@login` (`settings.code_owner = None`), and leave the existing `CODEOWNERS` file and recorded `code_owner` untouched in `_new_state`.
+  - **Developer response (Claude):** **Fix (1). Fix (2) in part, with a push back on how.**
+    - **(1)** Re-asking for a recorded example owner proposes `@<owner login>` only when the owner's type is `User`, and `none` otherwise, the same defaults `_github_choice` gives a first run (`swerepo/init.py:1166`, `1698`).
+    - **(2) Agreed:** without a terminal, nothing new is written from `@login`. A missing CODEOWNERS isn't recreated with it, and the CODEOWNERS action becomes a plan note naming `swerepo init --only github --code-owner …`. The recorded `code_owner` and an existing CODEOWNERS file stay byte for byte.
+    - **(2) Pushed back: not by setting `settings.code_owner = None`.**
+      - The ruleset is built from the same `Settings`: `"require_code_owner_review": team and settings.code_owner is not None` (`swerepo/github.py:66`), rendered and recorded at `swerepo/init.py:1264-1265`.
+      - In team mode, `None` changes the ruleset's render and its recorded inputs. Every run would then show `ruleset.json` out of step, or rewrite it without code-owner review, a governance change nobody asked for. A second run would no longer say "Nothing to do." (`inv_1002d669`'s spirit, though its fixture doesn't reach this case).
+      - Instead, `_GitHubChoice` gains `owner_example: bool`. It stops only the CODEOWNERS write and adds the note. `settings.code_owner` keeps the recorded value, so the ruleset's render doesn't move.
+    - Tests:
+      - an organisation repository with `@login` recorded, in a terminal: the default is `none`;
+      - `--yes` with CODEOWNERS removed: not recreated, a note, `.swerepo.toml` and `ruleset.json` byte for byte, and a second run says "Nothing to do.".
+  - **Reviewer (Gemini), round 2:** Accept. The pushback on `settings.code_owner = None` is right — `_ruleset_v1` (`swerepo/github.py:66`) and `_settings_files` (`swerepo/init.py:1264-1265`) derive `require_code_owner_review` from `settings.code_owner is not None`, so gating only the `CODEOWNERS` write and `github_ask["code_owner"]` default on `_GitHubChoice.owner_example` keeps team-mode `ruleset.json` and `.swerepo.toml` byte-for-byte unchanged.
+
+- **P8-K06 · suggestion · `CODE_REVIEW.md:37,51-53,98,186-196`, `swerepo/check.py:1142,1246-1253`, `swerepo/github.py:225-245`, `tests/fake_gh.py:25` — Small alignment edges: Dependabot-bumped `swerepo-ci.yml`, edited or `--only agents` `agents.tools`, single `Accept` header in `GitHub.get`, and `CHANGELOG.md`.**
+  - **Failing scenario:** (1) Dependabot bumps an action SHA in `swerepo-ci.yml`: `seen != record.written`, yet `_only_newer_pins(store, record, text)` (`swerepo/check.py:1142`) is `True` and `_record` reports `current, newer action pins`; requiring exact `seen == record.written` (line 37) stops `ci.tools` after the first Dependabot Actions bump. (2) Running `swerepo check --only agents` when `swerepo-ci.yml` is recorded (or when `swerepo-ci.yml` was hand-edited so `ci.tools` was skipped) suppresses `agents.tools` under line 51's `"when ci's workflow isn't recorded"` rule even though `ci.tools` never ran; conversely, an edited `AGENTS.md` block (`uv sync --all-extras`) would still warn if its block fingerprint isn't checked. (3) `GitHub._run` (`swerepo/github.py:226`) hardcodes `-H Accept: application/vnd.github+json`, so adding a second `-H` for `application/vnd.github.v3.repository+json` sends duplicate `Accept` headers (and `tests/fake_gh.py:25` only lists the default `Accept` header in `skip`). (4) `CODE_REVIEW.md:186-196` omits `CHANGELOG.md` (`## [Unreleased]`), which the repository's locked `changelog` rule requires.
+  - **Recommendation:** (1) Treat `seen == record.written or _only_newer_pins(store, record, text)` as unchanged for `ci.tools`. (2) Check `agents.tools` only while `AGENTS.md`'s block matches `record.written`, and suppress it only when `ci` is checked in the same run with an unchanged `swerepo-ci.yml`. (3) Give `GitHub.get` / `_run` an `accept: str = "application/vnd.github+json"` parameter (and teach `tests/fake_gh.py:25` to skip `-H` pairs cleanly). (4) Add `CHANGELOG.md` (`## [Unreleased]`) to the build plan.
+  - **Developer response (Claude):** **Fix**, all four.
+    - **(1)** A workflow whose only change is newer action pins (`_only_newer_pins`, `swerepo/check.py:1164`) counts as unchanged for `ci.tools`. Dependabot's bumps don't silence it.
+    - **(2)** `agents.tools` is checked only while `AGENTS.md`'s SWERepo block matches its record. It's left out only when `ci.tools` was actually evaluated in the same run (`ci` checked, workflow unchanged). So `check --only agents`, or an edited workflow, still gets it.
+    - **(3)** Checked: `GitHub._run` hard-codes one `Accept` header (`swerepo/github.py:226`). `GitHub.get` gains `accept: str = "application/vnd.github+json"`, and the team-access read passes the repository media type, so exactly one `Accept` is sent. `tests/fake_gh.py` skips the value after every `-H`. The locked `inv_81872dfe` keeps its own fake, which already skips `Accept…` values and classes calls by method (`.seamspec/tests/test_inv_81872dfe.py:36`, `106-125`), so a GET with another media type is still a read there.
+    - **(4)** `CHANGELOG.md` `## [Unreleased]` joins the build plan; the locked `inv_b2000e40` keeps that section.
+  - **Reviewer (Gemini), round 2:** Accept. All four points are cleanly folded into the design and test plan, and `inv_81872dfe` / `inv_b2000e40` compatibility was verified directly against their tests.
+
+#### Answers to questions for the reviewer
+
+1. **Gap 1, warning or blocking (`CODE_REVIEW.md:200`):** All three reasons hold — warning (Option A) is right. Nothing practical is lost from `"Next:"` omitting warnings because the warning line itself prints the runnable command `(uv add [--directory <folder>] --dev …) (warning)` in text output (`swerepo/check.py:120-121`), `--json` exposes `Finding.fix` directly (`swerepo/check.py:106`), and `--ci` emits a `::warning` annotation beside the failing `lint`/`test` job without breaking repositories that satisfy `pytest` transitively.
+2. **Reading `uv.lock` now vs Phase 11 (`CODE_REVIEW.md:201`):** Wait for Phase 11. In `uv`, `uv.lock` contains `[[package]]` entries for *every* optional extra and non-default dependency group in the project so `uv sync --extra …` is reproducible; reading `[[package]]` names flatly from `uv.lock` would count `pytest` inside `[project.optional-dependencies] dev` as installed and break the exact optional-extra warning `ADR-20261125-5f22` added. Walking the active dependency/default-group graph in `uv.lock` (including workspaces) belongs in Phase 11, and keeping `ci.tools` a warning avoids any CI failure from transitive `pytest` in the meantime.
+3. **Unchanged workflow only (`CODE_REVIEW.md:202`):** Skipping `ci.tools` when a person edited `swerepo-ci.yml` is right — an edited workflow may run `uv sync --all-extras` or `uvx ruff`, so warning from recorded inputs would produce false positives on deliberate edits — with the `P8-K06` refinement that Dependabot action-pin-only updates (`_only_newer_pins`) still count as unchanged.
+4. **`agents.tools` (`CODE_REVIEW.md:203`):** Worth keeping. It reuses the same `missing_tools_note` helper, closes the parallel gap for `--no-ci` setups where `AGENTS.md` tells agents to run `uv sync` and `uv run pytest`, and preserves symmetry with `init` (`ADR-20261125-5f22` point 5; `swerepo/init.py:1776-1781`), with the two small `P8-K06` guards.
+5. **The user endpoint and `403` (`CODE_REVIEW.md:204`):** `"can't tell"` (`?`) is the right answer for *write access* on `403`, and note that `403` happens on **public** repositories too whenever the caller lacks push/admin access (`200` on `swerepo/swerepo` worked only because the probe used the repository admin's login). As detailed in `P8-K02`, falling back to public `GET users/{login}` on `403` still catches non-existent logins (`404`) and organisations (`type == "Organization"`), leaving only write access as `?` `"can't tell"` in `check` and a plan note in `init`.
+6. **Printing the owner next to `inv_5e3b5ef3` (`CODE_REVIEW.md:205`):** Yes, printing a token that has matched `github.OWNER` (`^@[A-Za-z0-9]…`, with no second `@` and no domain in the login) is safe alongside `inv_5e3b5ef3` and `SWEREPO-SPEC.md` §15: it is a public GitHub handle already committed in `.github/CODEOWNERS`, can never match an email address, and is needed when a block names multiple owners. Just ensure tokens that *fail* `github.OWNER` (such as an `@`-prefixed email address) are never echoed (`P8-K03`).
+7. **Static example check blocking under `--ci` (`CODE_REVIEW.md:206`):** Blocking is right. On a pull request that bumps SWERepo's pin, `@login` / `@org/team` means governance paths currently have no real code owner on GitHub because SWERepo's own prompt placeholder was committed; failing `--ci` prompts a one-line fix (`swerepo init --only github --code-owner @<real>`) in that same pull request instead of letting broken governance ownership stay merged silently.
+8. **Option C (`codeowners/errors`, `CODE_REVIEW.md:207`):** Deferring Option C is right. Because `codeowners/errors` inspects a ref on GitHub rather than the working tree, it can't help `init` or pre-push `check` and would introduce working-tree vs pushed-ref drift for minimal extra signal over Option A.
+
+**Verdict:** Sound design on both gaps (options A and a, with all 30 locked rules preserved); resolve `P8-K01`–`P8-K05` before building.
+
+
+**Developer (Claude), round 1:**
+- **P8-K01:** Fix. The owner and organisation are checked first, with no call. A team's 404 is settled by `orgs/{org}/teams`: 200 means missing, anything else means can't tell. Checked live: an existing `cli` team answers 404 to a non-member, and listing `cli`'s teams answers 403.
+- **P8-K02:** Fix. The owner comparison is case-insensitive. A 403 falls back to `users/{login}`. `init` catches every other `GitHubError` and adds the "not checked" note. Checked live: a 403 on `cli/cli` without push access, for real and unknown logins alike.
+- **P8-K03:** Fix. Rule lines are parsed and comments skipped. The block is checked before the lines after it: no rules, no owner, an example owner, or an unreadable token is blocking, and the token is never printed. `✓` comes only when something was checked.
+- **P8-K04:** Fix, with the hardening narrowed. The `ci.tools` paths match `ci.tests`, and a warning never suppresses a blocking record finding (confirmed in `_without_repeats`). A `✓` still de-duplicates; the build audits that case.
+- **P8-K05:** Fix (1). Fix (2), with a push back on how: an `owner_example` flag stops the CODEOWNERS write, rather than `settings.code_owner = None`, which would move the team-mode ruleset's render.
+- **P8-K06:** Fix, all four: newer pins count as unchanged, `agents.tools` is guarded both ways, `GitHub.get` gains an `accept` parameter (and `tests/fake_gh.py` skips `-H` values), and `CHANGELOG.md` is in the plan.
+
+The design sections above now include these changes. Still no code. The design waits for Gemini's Accept or Maintain on each finding, `P8-K05`'s push back in particular, then the owner's agreement.
+
+---
+
+### Review (round 2)
+
+**Verdict:** Ready to build once the owner agrees — all six round-1 findings (`P8-K01`–`P8-K06`) are accepted, with one implementation seam in `GitHub._run` (`P8-K07`) to fold directly into the build.
+
+#### Findings
+
+- **P8-K07 · should-fix · `swerepo/github.py:42-45,236-238,306-313`, `tests/fake_gh.py:28-31` — `GitHub._run` detects `404` only via `reason.startswith("Not Found")` and records no HTTP status for `403`.**
+  - **Failing scenario:** `GitHub._run` (`swerepo/github.py:237-238`) sets `not_found=reason.startswith("Not Found")`, where `_reason` (`swerepo/github.py:308-313`) extracts `json.loads(stdout).get("message")` and discards both JSON `"status"` (`"404"`, `"403"`) and `stderr` (`"gh: … (HTTP 404)"`, `"gh: … (HTTP 403)"`). As checked live (`CODE_REVIEW.md:71`), on `GET repos/{owner}/{repo}/collaborators/{login}/permission` for an unknown user, GitHub returns HTTP `404` with `"message": "login is not a user"` rather than `"Not Found"`. Against real GitHub, `reason.startswith("Not Found")` is `False`, so `error.not_found` is `False`: `check` would report `?` `"can't tell"` instead of blocking `✗` for an unknown user, and `init --code-owner @ghost` would accept `@ghost` with a `"not checked"` note instead of exiting `2`. Likewise, `GitHubError` (`swerepo/github.py:39-45`) currently carries no HTTP status to distinguish `403` on `collaborators/…/permission` (`CODE_REVIEW.md:75,100`) from `502`, `401`, or timeouts, and `tests/fake_gh.py:28-31` currently emits only `{"message": "Not Found"}`.
+  - **Recommendation:** Carry `status: int | None = None` on `GitHubError` (parsed in `GitHub._run` from JSON `stdout`'s `"status"` field or `\(HTTP (\d{3})\)` on `stderr`, with `not_found = status == 404 or reason.startswith("Not Found")`), and let `tests/fake_gh.py` simulate non-`200` statuses and messages — including a test whose `collaborators/…/permission` `404` returns `{"message": "ghost is not a user", "status": "404"}`.
+  - **Developer response (Claude):** **Fix**, built as recommended.
+    - **Checked live (read-only, 2026-11-26):** `GET repos/swerepo/swerepo/collaborators/no-such-user-zz9q/permission` exits 1 with stdout `{"message": "no-such-user-zz9q is not a user", …, "status": "404"}` and stderr `gh: no-such-user-zz9q is not a user (HTTP 404)`. So today's `startswith("Not Found")` misses it, as the finding says. A 403 prints `… (HTTP 403)` on stderr. One surprise: `ghost` is a real account (GitHub's placeholder for deleted users; its permission read answers 200 `read`), so `@ghost` stands for an unknown login only against the fake `gh`.
+    - **Built:**
+      - `GitHubError.status` comes from the JSON `status`, else `(HTTP nnn)` on stderr;
+      - `not_found` is `status == 404 or reason.startswith("Not Found")`;
+      - `tests/fake_gh.py` answers a canned `{"status": …, "message": …}` failure on stdout and stderr, as `gh` does.
+  - **Reviewer (Gemini), round 3:** Accept. `_status` (`swerepo/github.py:429-438`), `not_found` (`swerepo/github.py:279`), and `FakeGh.fail` (`tests/fake_gh.py:61-63`) handle both JSON `"status"` and `(HTTP nnn)` on stderr cleanly, and every existing `GitHubError` caller across `check`, `init`, `cli`, and `threads` keeps its expected behaviour.
+
+
+**Developer (Claude), round 2:** `P8-K07` Fix, built (above).
+
+#### Brought up to date with `main` before building (PR #24, `39f3fc7`)
+
+The worktree was fast-forwarded to `39f3fc7`, and the branch renamed `phase-8/check-gaps`. PR #24 added `GitHub.branch_requests_copilot`, `Plan.copilot_unrequested`, and `COPILOT_NOTE` with `_copilot_note` in `swerepo/cli.py`, plus the locked rule `inv_b5d32550` (the Copilot job's template, which this build doesn't touch). The design was re-read against it, and nothing in it changes:
+- `_github_choice`, `_codeowners`, `_without_repeats`, `_missing_tools` and `_agents_tools` are as they were. Only `swerepo/init.py`'s line numbers moved, by about 12.
+- `branch_requests_copilot` catches every `GitHubError`, so the richer `GitHubError` (`P8-K07`) leaves it as it is.
+- `dependency_graph` uses `not_found`, so a 404 with another message now also reads as "off". That's what its 404 means.
+
+---
+
+### Developer summary (build, for review)
+
+The owner agreed the design on 2026-11-26, and it was built on `phase-8/check-gaps` (from `main` at `39f3fc7`), with `P8-K07` included. Nothing is committed yet.
+
+#### Where each change is
+
+**Gap 1: the CI tools `uv sync` won't install**
+- **One wording source** (`swerepo/ci.py:443-473`): `AGENTS_TOOLS`, `tools_needed`, `missing_tools`, `tools_fix` and `missing_tools_note`. `init`'s `_missing_tools` and `_agents_tools` now call them, so the plan and `check` print the same text. A listed project's fix is `uv add --directory <folder> --dev …`, in `init`'s note too.
+- **`commands()` and `_make_targets`** moved from `swerepo/init.py` to the new `swerepo/commands.py`, with `uv_run_tools` beside them. `init` imports them back.
+- **`check`** (`swerepo/check.py`):
+  - `_ci_unchanged` (`:374`): the workflow's record, while the file is as SWERepo wrote it or differs only by newer pins. `Context` gains `store` and `checking` for that.
+  - `_ci_projects`: the recorded inputs, with the older-record fallback.
+  - `_ci_tools` (`:411`): `ci.tools` and `ci.tools.<folder>`, warnings, with `path=None` or `folder`.
+  - `_agents_tools` (`:434`): `agents.tools`, read from `[values] commands` while `AGENTS.md`'s block is unchanged, and left out when `ci.tools` was evaluated in the same run.
+  - `_without_repeats` (`:1328`): a warning never hides a blocking record finding; a `✓` still de-duplicates.
+
+**Gap 2: code owners GitHub doesn't know**
+- **`swerepo/github.py`:**
+  - `GitHubError.status`, `_status` (`:429`), and `not_found` for any 404 (`P8-K07`);
+  - `GitHub.get(…, accept=…)`, so exactly one `Accept` header is sent (`P8-K06`);
+  - `OWNER_EXAMPLES` and `example_owner` (`:147`), `codeowners_rules` (`:159`) and `readable_owner`;
+  - `GitHub.owner_verdict` (`:313`) and `_user_verdict` (`:351`): the lookups designed in `P8-K01` and `P8-K02`, GET only.
+- **`swerepo/check.py`:**
+  - `_block_owner_problem` (`:954`) runs inside `_codeowners` before the lines after the block;
+  - `_code_owner_live` (`:971`) gives `github.code-owner`, with `OWNER_FIX`;
+  - the offline `github.live` line names the code owner.
+- **`swerepo/init.py`:**
+  - `owner_check` (`:1142`) and `code_owner_refusal` (`:1165`);
+  - `_github_choice` (`:1104`) refuses or notes the owner, and sets `owner_default` and `owner_example`;
+  - the CODEOWNERS action becomes a note for a recorded example (`:1339`). `settings.code_owner` keeps the recorded value, so the ruleset doesn't move.
+- **`swerepo/cli.py`:** `_ask_github` (`:201`) asks again after a refusal, with the prompt's examples taken from `OWNER_EXAMPLES`. The `--code-owner` help uses them too.
+- **`tests/fake_gh.py`:** `FakeGh.fail(key, status, message)` prints a failure as `gh` does: JSON with `status` on stdout, and `(HTTP nnn)` on stderr. `accepts()` lists the headers sent, and the path is found by skipping every option's value.
+
+**Docs**
+- ADR-20261126-a7ce (new, as the design planned), with the ADR index regenerated.
+- `SWEREPO-SPEC.md` v0.19: §6.1, §6.2, §6.6, §7, §12, §15 and Appendix A.
+- `CHANGELOG.md` under `## [Unreleased]`.
+- `docs/progress/20261126-check-tools-and-code-owners.md`, and a line in `docs/PROGRESS.md`'s "Next".
+
+#### Tests
+
+- **`tests/test_check_gaps.py`, 69 tests,** one or more for every case in "Tests planned":
+  - `TestCiTools` (17) and `TestAgentsTools` (5);
+  - `TestCodeOwnerOnGitHub` (21) and `TestCodeOwnersBlock` (9);
+  - `TestInitCodeOwner` (11) and `TestRecordedExample` (4);
+  - `TestGitHubError` (2).
+- **Two existing tests changed, for behaviour the design changes on purpose:**
+  - `tests/test_init_ci.py`: a listed project's note now says `uv add --directory services/api --dev pytest ruff`.
+  - `tests/test_init.py::test_check_then_finds_docs_and_agents_complete`: `check --only docs,agents` on a project that declares neither pytest nor ruff now warns with `agents.tools`. The test still requires docs and agents to be complete, and now also requires that `agents.tools` is the only gap, as a warning.
+- **Breakages:** 41 changes were broken on purpose, one at a time, each run against the new tests with the file restored after. All 41 were caught.
+  - One was first missed: accepting a secret team still showed `✗`, because it fell through to "has no access". The test now checks each team case's reason, and the breakage is caught.
+  - The design's push back in `P8-K05` is guarded too: setting `settings.code_owner = None` for a recorded example fails the test that keeps `ruleset.json` byte for byte.
+
+#### SeamSpec
+
+- **No new rule proposed.** The design and ADR-20261126-a7ce name two candidates: `ci.tools` never fails `check --ci`, and code owners are reported by `check` (reading only) and refused by `init`. A proposal must be verified with `seamspec verify --proposed`, which can't run in this worktree: SeamSpec hasn't been trusted for this clone (`seamspec init`, the owner's to run). SeamSpec's MCP tools here answer for the main checkout. So proposing waits for the owner's word, in a trusted clone.
+- **The existing rules were run directly** with pytest from `.seamspec/tests/`, without changing them. Results are below.
+
+#### Results (2026-11-26, on this branch)
+
+- **pytest:** `uv run pytest` 946 passed, and 946 passed with `GITHUB_ACTIONS=true`.
+- **Locked rules:** their tests, run directly from `.seamspec/tests/`, 123 passed. `seamspec verify --all` itself can't run until the owner trusts this clone (above).
+- **Lint and audit:** `ruff check .` and `ruff format --check .` clean (one new test file reformatted). `uvx zizmor==1.32.0 --offline .github/workflows`: no findings.
+- **Privacy:** `uv run swerepo privacy` found nothing. No home-folder path, personal address or other repository's name is added in tracked files.
+- **`uv run swerepo check --ci --base main`:** exit 0, with the progress entry found. The three "can't tell" lines are GitHub reads that `--ci` never makes, one of them now naming the code owner.
+
+#### Questions for the reviewer
+
+1. **`_without_repeats`:** a `✓` still de-duplicates a blocking record `✗` at the same path, as before. No component was found reporting both for one path; is leaving that as it was right?
+2. **`agents.tools`:** it reads `[values] commands` rather than re-deriving the commands. Is that the right source, given ADR-20261125-5f22 point 5 (values move only with their file)?
+3. **The team-list call** (`orgs/{org}/teams?per_page=1`) is only reached after a 404 on the team. Is one extra GET there acceptable?
+
+**Status:** waiting for Gemini's code review.
+
+---
+
+### Review (round 3: code)
+
+#### Strengths
+
+- **Clean single-source helpers (`swerepo/ci.py:443-473`, `swerepo/commands.py:23-53`, `swerepo/check.py:411-459`):** `tools_needed`, `missing_tools`, `tools_fix`, and `missing_tools_note` keep `init --dry-run` and `check` byte-for-byte consistent, never fail `--ci`, handle Dependabot's `_only_newer_pins` (`swerepo/check.py:384`), and keep warnings from hiding blocking record findings in `_without_repeats` (`swerepo/check.py:1328-1337`).
+- **Disciplined read-only GitHub lookups (`swerepo/github.py:286-378,429-438`, `swerepo/check.py:971-1000`, `swerepo/init.py:1142-1169`):** All lookups go exclusively through `GitHub.get` with a single `Accept` header, never run under `--ci` or without `gh`, short-circuit `User` owners and mismatched organisations with zero calls, handle both `403` push-access fallbacks (`users/{login}`) and hidden-team `404`s (`orgs/{org}/teams?per_page=1`), and preserve team-mode `ruleset.json` byte-for-byte via `owner_example` (`swerepo/init.py:1124,1339`).
+- **`P8-K07` verified across all callers (`swerepo/github.py:44-47,276-280,429-438`):** `GitHubError.status` and `not_found` work for `"<login> is not a user"` `404`s and `403`s without regressing any existing caller in `check`, `init`, `update`, `threads`, or `apply_github` (`dependency_graph` even handles non-`"Not Found"` `404` messages more reliably).
+- **Strong behavioural test suite and locked-rule preservation (`tests/test_check_gaps.py`, `.seamspec/tests/`):** All 946 tests in `tests/` (including 69 focused behavioural tests in `tests/test_check_gaps.py`), all 123 tests in `.seamspec/tests/` (covering `inv_294c48c9`, `inv_022998a0`, `inv_5e3b5ef3`, `inv_81872dfe`, `inv_b5d32550`, and the other locked rules), `ruff check`, `ruff format --check`, `swerepo privacy`, and `swerepo check --ci --base main` pass without weakening `tests/test_init.py`, `tests/test_init_ci.py`, or `tests/fake_gh.py`.
+
+#### Findings
+
+- **P8-K08 · should-fix · `swerepo/ci.py:497-509`, `swerepo/check.py:419-428` — `Project.from_inputs` and `_ci_tools` don't enforce `ci.valid_folder` or `inside(ctx.root, ctx.root / folder)`.**
+  - **Failing scenario:** `.swerepo.toml` contains an edited or crafted `files.".github/workflows/swerepo-ci.yml".inputs.projects` entry (`_check_inputs` at `swerepo/state.py:494-496` accepts any string value, and `_ci_unchanged` at `swerepo/check.py:382` returns `record` whenever `file_fingerprint(text, record.template) == record.written` without rebuilding `record.inputs`), such as `folder = "../outside"`, an absolute path, an address, or `"api --index-url https://…"`; or a listed project directory `api` is replaced with a symlink pointing outside `ctx.root`. `Project.from_inputs` (`swerepo/ci.py:497-509`) validates `python`, `install`, `lint`, and `linters` but never checks `valid_folder(folder)` (`swerepo/ci.py:610-613`). `_ci_tools` (`swerepo/check.py:419-428`) then reads `(ctx.root / folder / "pyproject.toml")` outside the repository (unlike `_listed_projects` at `swerepo/init.py:863-865` and `_kept_text` at `swerepo/init.py:1228`, which check `inside(ctx.root, ctx.root / folder)`) and interpolates `folder` directly into `Finding.message` and `Finding.fix` (`uv add --directory {folder} --dev …`), allowing outside-repository reads, CLI flag injection in `fix`, and echoing unvalidated strings into `check` output.
+  - **Recommendation:** Require `valid_folder(folder)` inside `Project.from_inputs` (`swerepo/ci.py:499`, which also hardens `rebuild.workflow_from`), and check `inside(ctx.root, ctx.root / folder)` in `_ci_tools` (`swerepo/check.py:420`) before inspecting `folder != "."`.
+  - **Developer response (Claude):** **Fix.**
+    - **Reproduced first,** in `tests/test_check_gaps.py::TestReviewRound3`:
+      - `Project.from_inputs("../outside", …)` returned a project;
+      - with the record's `projects` input edited to `../outside` (the workflow's fingerprint still matching), `check` read `../outside/pyproject.toml` and printed `ci.tools.../outside` with `fix` `uv add --directory ../outside --dev pytest ruff`;
+      - with `api/` replaced by a link to a folder outside the repository, `check` read through it.
+    - **Fixed:**
+      - `Project.from_inputs` (`swerepo/ci.py`) returns `None` unless `valid_folder(folder)`, so `..`, absolute paths, options with spaces, `a//b` and `.` are refused there, for `rebuild.workflow_from` too;
+      - `_ci_tools` (`swerepo/check.py`) skips a listed folder that isn't `inside(ctx.root, …)`.
+    - **Tests:** three, with five refused folder spellings. Two breakages, both caught.
+  - **Reviewer (Gemini), round 4:** Accept. `Project.from_inputs` (`swerepo/ci.py:500-501`) rejects every non-`valid_folder` spelling across both `_ci_projects` paths and `rebuild.workflow_from`, and `_ci_tools` (`swerepo/check.py:420-421`) skips symlinks resolving outside `ctx.root`, verified in `TestReviewRound3` (`tests/test_check_gaps.py:582-610`).
+
+- **P8-K09 · should-fix · `swerepo/commands.py:49-53`, `swerepo/check.py:443,452-458` — `uv_run_tools` raises `IndexError` on trailing-space `` `uv run ` `` and echoes unvalidated `[values] commands` tokens into `agents.tools`.**
+  - **Failing scenario:** `_agents_tools` (`swerepo/check.py:443,450-458`) checks `fingerprint(block.content) == record.written` on `AGENTS.md`, then parses `ctx.state.values.get("commands")` in `.swerepo.toml` (which is not covered by `record.written`). (1) If `[values] commands` is edited to ``- Test: `uv run   ` ``, `line.startswith("uv run ")` is `True` while `line.split()` has length `2`, so `line.split()[2]` (`swerepo/commands.py:52`) crashes `swerepo check` with `IndexError`. (2) If `[values] commands` contains ``- Test: `uv run --frozen pytest` `` or any other third token (a flag, path, or address), `uv_run_tools` passes that raw token into `missing_tools_note` and `tools_fix` (`uv add --dev …`) without checking the fixed tool set (`{"pytest", "ruff", *_KEPT_LINT}`), breaking `swerepo/ci.py:465`'s fixed-set guarantee (whereas `ci.tools_needed` at `swerepo/ci.py:448` filters to `KEPT_LINT`).
+  - **Recommendation:** In `uv_run_tools` (`swerepo/commands.py:52`), check `len(words := line.split()) >= 3` and keep only names in `{"pytest", "ruff", *_KEPT_LINT}` (and consider reading `(record.inputs or {}).get("commands")` or `block.content` itself in `_agents_tools` so the parsed commands are backed by the verified block).
+  - **Developer response (Claude):** **Fix**, both parts, with the alternative Gemini offered taken.
+    - **Reproduced:** `[values] commands` edited to ``- Test: `uv run   ` `` made `swerepo check` raise `IndexError` at `swerepo/commands.py:52`.
+    - **Fixed:**
+      - `uv_run_tools` keeps a third word only when the line starts `uv run`, there is a third word, and it is in the fixed set `commands.TOOLS` (`pytest`, `ruff` and the kept linters). A flag, a path or an address is never a tool;
+      - `_agents_tools` now reads the commands from `AGENTS.md`'s block itself, which it has just matched to its record, never from `[values] commands`. An edit to `.swerepo.toml` apart from the block can't change what is reported.
+    - **Tests:** two (`uv run   `, `uv run --frozen pytest` and an address; and `[values]` edited while the block is unchanged). Three breakages, all caught.
+  - **Reviewer (Gemini), round 4:** Accept. Filtering `uv_run_tools` to `commands.TOOLS` with `len(words) >= 3` (`swerepo/commands.py:21,54-58`) and reading `block.content` directly after matching `record.written` (`swerepo/check.py:452-455`) eliminates both the `IndexError` and any drift from `.swerepo.toml` edits (`tests/test_check_gaps.py:611-628`).
+
+- **P8-K10 · should-fix · `swerepo/check.py:922-929` — Missing `CODEOWNERS` with a recorded example owner (`@login`) sets `fix = INIT` (`Next: swerepo init --only github`), which refuses to recreate `CODEOWNERS`, and line `926` still suggests `--code-owner @login`.**
+  - **Failing scenario:** Take the repository state tested in `TestRecordedExample.test_without_a_terminal_nothing_is_written_from_it` (`tests/test_check_gaps.py:536-546`): `.swerepo.toml` has `components = ["github"]`, `code_owner = "@login"`, and `.github/CODEOWNERS` was removed (`path is None`). Running `swerepo check` reaches `_codeowners` (`swerepo/check.py:924-928`): because `github.valid_owner("@login")` is `True`, line `928` returns `_missing(c, item, "CODEOWNERS missing (.github/CODEOWNERS)", ".github/CODEOWNERS")` with default `fix = INIT`. `Report.next_step()` then prints `Next: swerepo init --only github`, yet running `swerepo init --only github --yes` intentionally refuses to recreate `CODEOWNERS` from `@login` (`swerepo/init.py:1339-1342`), violating `ADR-20261125-5f22` point 5 (`"Next:"` names `init` only when `init` can write the missing file). Right above at `swerepo/check.py:926`, the no-owner warning also still prints `(swerepo init --only github --code-owner @login)`, a command `init` now rejects with `exit 2`.
+  - **Recommendation:** In `_codeowners` (`swerepo/check.py:923-929`), when `path is None` and `github.example_owner(recorded)` is `True`, pass `fix=OWNER_FIX` (and note that the recorded example isn't an owner) so `Next:` points to `swerepo init --only github --code-owner …`; and replace `--code-owner @login` at `swerepo/check.py:926` with `--code-owner …`.
+  - **Developer response (Claude):** **Fix.**
+    - **Reproduced:** with `code_owner = "@login"` recorded and CODEOWNERS removed, `github.codeowners` had `fix` `init`, so "Next:" said `swerepo init --only github`, which writes nothing from the example. The no-owner warning also still suggested `--code-owner @login`, which `init` now refuses.
+    - **Fixed** in `_codeowners`:
+      - a recorded example with CODEOWNERS missing says so ("the recorded code owner @login is the question's example"), with `fix=OWNER_FIX`, so "Next:" names `swerepo init --only github --code-owner …`;
+      - the no-owner hint says `--code-owner …`.
+    - **Tests:** two. Two breakages, both caught.
+  - **Reviewer (Gemini), round 4:** Accept. `_codeowners` (`swerepo/check.py:928-934`) now points `"Next:"` to `OWNER_FIX` when a recorded example owner accompanies a missing `CODEOWNERS` and drops `@login` from the no-owner hint (`tests/test_check_gaps.py:629-644`).
+
+- **P8-K11 · suggestion · `swerepo/github.py:159-166,327,334,356,363`, `swerepo/cli.py:399-404`, `SWEREPO-SPEC.md:332,334` — Minor polish: escaped spaces in `CODEOWNERS` patterns, `safe=""` in `urllib.parse.quote`, duplicate interactive lookup, and §8 table.**
+  - **Failing scenario:** (1) If a user edits SWERepo's `CODEOWNERS` block to include a path pattern with an escaped space (valid GitHub `CODEOWNERS` syntax, e.g. `/docs/getting\ started/ @dev`), `codeowners_rules` (`swerepo/github.py:163`) uses `.split()`, turning `"started/"` into an owner token that fails `_block_owner_problem`. (2) `owner_verdict` and `_user_verdict` (`swerepo/github.py:327,334,356,363`) call `urllib.parse.quote(...)` with default `safe="/"` instead of `safe=""` (safe via current callers that pre-check `valid_owner`, unlike `branch_requests_copilot` at line `302`). (3) In an interactive terminal (`swerepo/cli.py:399-404`), `code_owner_refusal` connects to `gh` and calls `owner_verdict`, and `make_plan` at line `404` immediately repeats both. (4) `SWEREPO-SPEC.md` §8's component summary table (`SWEREPO-SPEC.md:332,334`) doesn't yet mention `ci.tools` or code-owner checks alongside §§6.1, 6.2, 6.6, 12, and 15.
+  - **Recommendation:** Split stripped rule lines with `re.split(r"(?<!\\)\s+", stripped)` in `codeowners_rules`, pass `safe=""` to `urllib.parse.quote`, reuse or cache the interactive `owner_verdict` lookup, and optionally add a brief phrase to `SWEREPO-SPEC.md:332,334`.
+  - **Developer response (Claude):** **Fix (1), (2) and (4). Push back on (3).**
+    - **(1) Escaped spaces:** `codeowners_rules` splits on unescaped whitespace only, so `/docs/getting\ started/ @dev` keeps its pattern whole. A test was added and one breakage caught.
+    - **(2) `safe=""`:** every `urllib.parse.quote` in `owner_verdict` and `_user_verdict` now passes `safe=""`. Behaviour doesn't change for any owner that passes `valid_owner` (a login or a team slug can't hold `/` once split), so no test can tell; it's consistency with `branch_requests_copilot`.
+    - **(4) §8's table:** the `ci` row says the tools its jobs run are installed (a warning), and the `github` row says the CODEOWNERS block's owners are readable and, with `gh`, known to GitHub.
+    - **(3) Pushed back: the repeated lookup in a terminal.** It costs one to three GETs, in a terminal only, once per answer. Caching the verdict across the two `GitHub` objects (the question's and `make_plan`'s) would add shared state between the CLI and the planner, and a cache invalidated by nothing, for a person typing one answer. If the verdict changed between the two reads, `make_plan`'s answer, the later one, decides, which is the right one. Left as is.
+  - **Reviewer (Gemini), round 4:** Accept (including the pushback on point 3). Splitting on unescaped whitespace (`swerepo/github.py:156,165`), passing `safe=""` (`swerepo/github.py:329-365`), and updating `SWEREPO-SPEC.md:332,334` resolve (1), (2), and (4), and keeping `cli.py` and `make_plan` stateless rather than sharing a cache across layers for one to three interactive GETs is the cleaner trade-off.
+
+#### Answers to questions for the reviewer
+
+1. **`_without_repeats` (`CODE_REVIEW.md:464`):** Leaving `✓` de-duplication as it was is right for this change. (The only theoretical pair in the codebase is `agents.claude` / `agents.gemini` at `swerepo/check.py:352,358`, which report `✓` on `CLAUDE.md` / `GEMINI.md` whenever `@AGENTS.md` / `AGENTS.md` is present even if `<!-- swerepo:begin -->` markers were stripped from a `[blocks]` record; that's pre-existing and harmless while the import itself is intact.)
+2. **`agents.tools` reading `[values] commands` (`CODE_REVIEW.md:465`):** Yes, reading recorded commands rather than live re-detection is right under `ADR-20261125-5f22` point 5 — paired with `P8-K09` (filtering `uv_run_tools` to the fixed tool set, and optionally reading `block.content` or `record.inputs["commands"]` so an un-fingerprinted edit in `[values]` can't drift from the verified block).
+3. **The team-list call (`orgs/{org}/teams?per_page=1`, `CODE_REVIEW.md:466`):** Yes, one extra GET reached only when a same-org team in SWERepo's block returned `404` is completely acceptable — valid visible teams never hit it, and on `404` it's the minimal read-only check that avoids false failures for non-members.
+
+**Verdict:** Clean, faithful implementation with all 946 unit tests and 123 locked-rule tests green; address `P8-K08`–`P8-K10` before opening the pull request.
+
+
+**Developer (Claude), round 3:**
+- **P8-K08:** Fix. Recorded project folders must pass `valid_folder`, and a folder linked out of the repository isn't read. Reproduced, tested, and two breakages caught.
+- **P8-K09:** Fix. `uv_run_tools` keeps only fixed-set tools, with no `IndexError`, and `agents.tools` reads the verified block, not `[values]`. Reproduced, tested, and three breakages caught.
+- **P8-K10:** Fix. A recorded example with CODEOWNERS missing points "Next:" at `--code-owner …`, and no hint names `@login`. Tested, and two breakages caught.
+- **P8-K11:** Fix (1), (2) and (4); push back on (3), the repeated terminal lookup (one to three GETs, versus a cache shared by the CLI and the planner).
+
+**Results after round 3 (2026-11-26):**
+- **pytest:** `uv run pytest` 958 passed, also with `GITHUB_ACTIONS=true` (81 in `tests/test_check_gaps.py`).
+- **Locked rules:** `uv run pytest --noconftest .seamspec/tests` 123 passed.
+- **Lint and audit:** `ruff check .` and `ruff format --check .` are clean; zizmor has no findings.
+- **Privacy:** `swerepo privacy` found nothing.
+- **`swerepo check --ci --base main`:** exit 0 ("0 missing", with the 3 GitHub reads `--ci` never makes).
+- **Docs:** the ADR (points 1, 3 and 8), the progress entry and §8's table follow the fixes. Nothing committed.
+
+**Status:** waiting for Gemini's Accept or Maintain on `P8-K08` to `P8-K11`, `P8-K11`'s push back in particular.
+
+---
+
+### Review (round 4)
+
+**Verdict:** Approved — ready for a pull request once the owner gives the go-ahead (`P8-K08`–`P8-K11` all accepted; 958 unit tests, 123 locked-rule tests, `ruff`, `privacy`, and `check --ci --base main` green).
+
+#### Findings
+
+None.
+
+**Review status:** closed.

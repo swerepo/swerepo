@@ -16,6 +16,7 @@ Before that: Phase 7, the `seamspec` component and the hygiene rules ([PR #20](h
 
 - **Owner, on GitHub:** secret scanning and push protection are on (2026-11-23); Dependabot security updates are still off (Settings → Advanced Security).
 - **Dogfooding** on an established repository (ADR-20261125-5f22): a codebase never linted moves to ruff gradually, a project without tests is warned and agents are told to write a real one, `--editors`, GitHub's settings applied only when asked for by name (`--apply-github`), a table appended inside SWERepo's `pyproject.toml` block named and left alone, and `check`'s "Next:" naming what fixes each gap. Pull request next.
+- **Two `check` gaps from dogfooding** (ADR-20261126-a7ce, review P8-K): the CI tools `uv sync` won't install (`ci.tools`, a warning) and code owners GitHub doesn't know (`github.code-owner`; `init` refuses them). Built on `phase-8/check-gaps`; Gemini's code review, then the pull request.
 - **Phase 8, in order:**
   1. the implementation PR (the native `SPEC.md`, removing `openspec` and `release`, the refreshed `docs`, `agents` and `github` templates applied here, `release.yml`, and the two rules), with Gemini's review;
   2. dogfooding `check` and `init` on an established repository of the owner's;

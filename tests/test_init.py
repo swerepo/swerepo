@@ -75,7 +75,9 @@ class TestNewProject:
     def test_check_then_finds_docs_and_agents_complete(self, new_project: Path):
         init(new_project, hosts=["claude"])
         report = run_check(new_project, only=["docs", "agents"])
-        assert report.count(MISSING) == 0 and report.exit_code == 0
+        # the project declares no pytest or ruff, so AGENTS.md's commands can't run yet: a warning (review P8-K)
+        missing = [f for f in report.findings if f.status == MISSING]
+        assert [(f.item, f.blocking) for f in missing] == [("agents.tools", False)] and report.exit_code == 0
 
     def test_the_state_file_records_what_was_written(self, unreleased, new_project: Path):
         init(new_project, hosts=["claude", "gemini"])

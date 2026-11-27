@@ -9,12 +9,13 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
-from swerepo import __version__, standard
+from swerepo import __version__, github, standard
 from swerepo import seamspec_component as ssc
 from swerepo.adr import AdrError, new_adr, write_index
 from swerepo.blocks import inside
@@ -32,6 +33,7 @@ from swerepo.init import (
     apply,
     apply_github,
     apply_seamspec,
+    code_owner_refusal,
     has_github_remote,
     make_plan,
     noreply_warning,
@@ -196,7 +198,7 @@ def _ask_contact(root: Path) -> str:
     return typer.prompt("Security contact", default=default).strip()
 
 
-def _ask_github(ask: dict[str, str]) -> dict[str, object]:
+def _ask_github(ask: dict[str, str], refuse_owner: Callable[[str], str | None] | None = None) -> dict[str, object]:
     """The mode and the code owner (spec §12), each only when neither given nor recorded, with the default init
     detected (`team` for an organisation's repository, the owner's login for a user's; review P5-F04)."""
     answers: dict[str, object] = {}
@@ -207,8 +209,14 @@ def _ask_github(ask: dict[str, str]) -> dict[str, object]:
         typer.echo("Nobody can approve their own pull request, so team mode needs a second person or identity.")
         answers["mode"] = typer.prompt("Mode (solo, team)", default=ask["mode"]).strip().lower()
     if "code_owner" in ask:
-        prompt = "Code owner for governance files (@login or @org/team, or none)"
-        answers["code_owner"] = typer.prompt(prompt, default=ask["code_owner"]).strip()
+        prompt = f"Code owner for governance files ({' or '.join(github.OWNER_EXAMPLES)}, or none)"
+        while True:  # asked again until GitHub doesn't refuse it; offline, any well-formed owner (review P8-K)
+            answer = typer.prompt(prompt, default=ask["code_owner"]).strip()
+            refusal = refuse_owner(answer) if refuse_owner is not None else None
+            if not refusal:
+                break
+            typer.echo(f"{answer}: {refusal}")
+        answers["code_owner"] = answer
     return answers
 
 
@@ -339,7 +347,10 @@ def init(
     ] = False,
     mode: Annotated[str | None, typer.Option("--mode", help="github: solo or team (spec §12).")] = None,
     code_owner: Annotated[
-        str | None, typer.Option("--code-owner", help="github: governance files' code owner, @login or @org/team.")
+        str | None,
+        typer.Option(
+            "--code-owner", help=f"github: governance files' code owner, {' or '.join(github.OWNER_EXAMPLES)}."
+        ),
     ] = None,
     copilot_review: Annotated[
         bool | None,
@@ -385,7 +396,8 @@ def init(
             if plan.contact_question:
                 asked["contact"] = _ask_contact(path.resolve())
             if plan.github_question:
-                asked.update(_ask_github(plan.github_ask))  # asks only what no flag or record decided
+                refuse = lambda owner: code_owner_refusal(path, owner)  # noqa: E731
+                asked.update(_ask_github(plan.github_ask, refuse))  # asks only what no flag or record decided
             if plan.seamspec_ask:
                 asked["adopt"] = {**options["adopt"], **_ask_adopt(plan.seamspec_ask, plan.seamspec_locked)}
             if asked:

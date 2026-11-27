@@ -1,6 +1,7 @@
 """A fake `gh` for tests (spec §18): answers from a JSON file of canned responses, logs every call, and never
 reaches GitHub. Responses are keyed "METHOD path" (query strings dropped) or "graphql"; a missing key fails the
-call as GitHub would (exit 1, message on stdout as JSON)."""
+call as GitHub would (exit 1, message on stdout as JSON); `fail` answers a status and message as gh prints
+them."""
 
 import json
 import os
@@ -22,13 +23,19 @@ if args[:2] == ["api", "graphql"]:
     key = "graphql"
 else:
     method = args[args.index("-X") + 1] if "-X" in args else "GET"
-    skip = (method, "Accept: application/vnd.github+json")
-    path = [a for a in args[1:] if not a.startswith("-") and a not in skip][0]
+    values = {{i + 1 for i, a in enumerate(args) if a in ("-X", "-H")}}  # an option's value is never the path
+    path = [a for i, a in enumerate(args) if i > 0 and i not in values and not a.startswith("-")][0]
     key = method + " " + path.split("?")[0]
 if key not in responses:
     print(json.dumps({{"message": "Not Found"}}))
     sys.exit(1)
-print(json.dumps(responses[key]))
+answer = responses[key]
+if isinstance(answer, dict) and "$error" in answer:  # a failure, as gh prints one: JSON on stdout, (HTTP nnn) on stderr
+    status, message = answer["$error"]["status"], answer["$error"]["message"]
+    print(json.dumps({{"message": message, "status": str(status)}}))
+    sys.stderr.write(f"gh: {{message}} (HTTP {{status}})\\n")
+    sys.exit(1)
+print(json.dumps(answer))
 """
 
 
@@ -50,6 +57,14 @@ class FakeGh:
     def set(self, key: str, value) -> None:
         self.responses[key] = value
         self.save()
+
+    def fail(self, key: str, status: int, message: str) -> None:
+        """Answer `key` with an HTTP failure, as gh prints one (review P8-K07)."""
+        self.set(key, {"$error": {"status": status, "message": message}})
+
+    def accepts(self) -> list[str]:
+        """The `Accept` headers of every `gh api` call (P8-K06: exactly one each)."""
+        return [a for call in self.calls() for a in call["args"] if a.startswith("Accept:")]
 
     def calls(self) -> list[dict]:
         log = self.folder / "calls.jsonl"

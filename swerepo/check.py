@@ -18,7 +18,8 @@ from typing import Any
 from swerepo import __version__, ci, github, merge, privacy, rebuild, standard
 from swerepo import seamspec_component as ssc
 from swerepo import spec as specs
-from swerepo.blocks import file_fingerprint
+from swerepo.blocks import file_fingerprint, inside
+from swerepo.commands import uv_run_tools
 from swerepo.detect import Detection, detect
 from swerepo.fingerprint import HASH, HTML, BlockError, comment_style, find_block, fingerprint
 from swerepo.render import TemplateError, TemplateStore, parse_id
@@ -157,6 +158,8 @@ class Context:
     state: State | None
     hub: github.GitHub | None = None  # GitHub through gh, when asked for and reachable (never with --ci)
     local: bool = False  # run on a person's machine, not in CI: local git hooks are worth reporting
+    store: TemplateStore | None = None  # the templates, to tell Dependabot's newer pins from a person's edit
+    checking: tuple[str, ...] = ()  # the components this run checks
 
     def exists(self, path: str) -> bool:
         return (self.root / path).is_file()
@@ -358,6 +361,7 @@ def _agents(ctx: Context) -> list[Finding]:
             found.append(_ok(c, "agents.gemini", "GEMINI.md points to AGENTS.md", "GEMINI.md"))
         else:
             found.append(_missing(c, "agents.gemini", "GEMINI.md missing or doesn't point to AGENTS.md", "GEMINI.md"))
+    found.extend(_agents_tools(ctx))
     absent = [path for path in standard.RUNBOOKS if not ctx.exists(path)]
     if absent:
         names = ", ".join(Path(p).name for p in absent)
@@ -365,6 +369,95 @@ def _agents(ctx: Context) -> list[Finding]:
     else:
         found.append(_ok(c, "agents.runbooks", "docs/agents/ runbooks", "docs/agents"))
     return found
+
+
+def _ci_unchanged(ctx: Context) -> Record | None:
+    """`swerepo-ci.yml`'s record while the file is as SWERepo wrote it, or differs only by newer action pins
+    (Dependabot's, review P8-K06); None otherwise: an edited workflow may install differently, so what it runs
+    can't be told (review P8-K)."""
+    record = ctx.state.files().get(standard.CI_WORKFLOW) if ctx.state else None
+    text = ctx.read(standard.CI_WORKFLOW) if record is not None else None
+    if record is None or text is None:
+        return None
+    if file_fingerprint(text, record.template) == record.written:
+        return record
+    return record if ctx.store is not None and _only_newer_pins(ctx.store, record, text) else None
+
+
+def _ci_projects(ctx: Context, record: Record) -> list[tuple[str, str, list[str]]]:
+    """(folder, lint, kept linters) for each project the recorded workflow runs: the root, then each listed one. From
+    the workflow's recorded inputs; for an older record without them, from `[values] lint`, `[adopted] linters` and
+    `[projects.inputs]`, as `init` reads them."""
+    try:
+        inputs = rebuild.workflow_from(record.inputs) if record.inputs is not None else None
+    except (ValueError, KeyError, TypeError, json.JSONDecodeError):
+        inputs = None
+    if inputs is not None:
+        listed = [(p.folder, p.lint, list(p.linters)) for p in inputs.projects]
+        return [(".", inputs.lint, list(inputs.linters)), *listed]
+    state = ctx.state
+    assert state is not None  # a record comes from the state file
+    recorded = state.values.get("lint")
+    adopted = [str(name) for name in state.adopted.get("linters") or [] if name in ci.KEPT_LINT]
+    lint = str(recorded) if recorded in ("ruff", "gradual") else "kept" if adopted else "ruff"
+    found = [(".", lint, adopted if lint == "kept" else [])]
+    for folder, values in state.project_inputs.items():
+        project = ci.Project.from_inputs(folder, values)
+        if project is not None:
+            found.append((folder, project.lint, list(project.linters)))
+    return found
+
+
+def _ci_tools(ctx: Context) -> list[Finding]:
+    """The tools each project's CI jobs run that `uv sync` won't install: a warning, never blocking (review P8-K):
+    CI fails without them anyway, and the names read are declared ones, so a tool installed through another (pytest
+    through pytest-cov) would be reported though CI runs it. The same text as `init`'s plan note."""
+    record = _ci_unchanged(ctx)
+    if record is None:
+        return []
+    found = []
+    for folder, lint, linters in _ci_projects(ctx, record):
+        if folder != "." and not inside(ctx.root, ctx.root / folder):  # never read through a link out (P8-K08)
+            continue
+        if ci.install_command(ctx.root, folder)[0] is None:  # Poetry's lock, no [project]: uv add is the wrong advice
+            continue
+        missing = ci.missing_tools(ctx.root, folder, ci.tools_needed(lint, linters))
+        if missing:
+            # never pyproject.toml's path, which would stand in for a record finding on it (review P8-K04)
+            item, path = ("ci.tools", None) if folder == "." else (f"ci.tools.{folder}", folder)
+            message = ci.missing_tools_note(ctx.root, folder, missing)
+            found.append(_missing("ci", item, message, path, blocking=False, fix=ci.tools_fix(folder, missing)))
+    return found
+
+
+_COMMANDS_LINE = re.compile(r"^- (Test|Lint): (.*)$", re.MULTILINE)
+
+
+def _agents_tools(ctx: Context) -> list[Finding]:
+    """The tools `AGENTS.md`'s test and lint commands run through `uv run` that `uv sync` won't install: a warning, as
+    `init`'s plan says it (ADR-20261125-5f22 point 5). Read from the block itself, and only while it is as SWERepo
+    wrote it, so the commands are the verified ones, never `[values]` edited apart from it (review P8-K09). Left out
+    when `ci.tools` speaks for the same project in this run (review P8-K06); a Makefile target or Poetry runs its own
+    tools."""
+    if "ci" in ctx.checking and _ci_unchanged(ctx) is not None:
+        return []
+    record = ctx.state.blocks().get("AGENTS.md") if ctx.state else None
+    text = ctx.read("AGENTS.md") if record is not None else None
+    if record is None or text is None or ci.install_command(ctx.root)[0] is None:
+        return []
+    try:
+        block = find_block(text, style=HTML)
+    except BlockError:
+        return []
+    if block is None or fingerprint(block.content) != record.written:
+        return []
+    lines = {kind.lower(): re.findall(r"`([^`]+)`", rest) for kind, rest in _COMMANDS_LINE.findall(block.content)}
+    needed = uv_run_tools({"test": lines.get("test", []), "lint": lines.get("lint", [])})
+    missing = ci.missing_tools(ctx.root, ".", needed)
+    if not missing:
+        return []
+    message = ci.AGENTS_TOOLS + ci.missing_tools_note(ctx.root, ".", missing)  # init's words (review P8-K)
+    return [_missing("agents", "agents.tools", message, blocking=False, fix=ci.tools_fix(".", missing))]
 
 
 # How GitHub's settings get applied: in a terminal, shown and asked first; otherwise by name (ADR-20261125-5f22)
@@ -401,6 +494,7 @@ def _ci(ctx: Context) -> list[Finding]:
             if not ci.project_has_tests(ctx.root, files, folder):
                 message = f"{folder}/: no tests yet: its test job fails until there is one"
                 found.append(_missing(c, f"ci.tests.{folder}", message, folder, blocking=False))
+        found.extend(_ci_tools(ctx))
 
     detected = {linter.name for linter in d.linters}
     kept = [str(name) for name in ctx.adopted.get("linters", [])]
@@ -765,6 +859,7 @@ def _github(ctx: Context) -> list[Finding]:
         message = "issue templates missing (.github/ISSUE_TEMPLATE/)"
         found.append(_missing(c, "github.issue-templates", message, ".github/ISSUE_TEMPLATE"))
     found.append(_codeowners(ctx, d.documents.get("codeowners")))
+    found.extend(_code_owner_live(ctx, d.documents.get("codeowners")))
     found.extend(_commit_email(ctx))
     found.extend(_github_live(ctx))
     return found
@@ -787,8 +882,9 @@ def _github_live(ctx: Context) -> list[Finding]:
         if applied is False and github.repository(ctx.root) is None:
             fix = "create the GitHub repository (gh repo create --source . --push)"
             return [_missing(c, "github.live", "ruleset not applied (no GitHub repository yet)", fix=fix)]
-        return [Finding(c, "github.live", UNKNOWN, "ruleset and merge settings on GitHub: can't tell (needs gh, "
-                                                  "logged in; never read with --ci)")]  # fmt: skip
+        message = ("ruleset, merge settings and code owner on GitHub: can't tell (needs gh, logged in; never read "
+                   "with --ci)")  # fmt: skip
+        return [Finding(c, "github.live", UNKNOWN, message)]
     found: list[Finding] = []
     pairs = (("github.ruleset", github.RULESET_FILE, "ruleset"), ("github.merge-settings", github.SETTINGS_FILE, None))
     for item, path, kind in pairs:
@@ -829,8 +925,13 @@ def _codeowners(ctx: Context, path: str | None) -> Finding:
         recorded = ctx.state.values.get("code_owner") if ctx.state else None
         if ctx.state is not None and "github" in ctx.state.components and not github.valid_owner(recorded):
             # init leaves CODEOWNERS out when nobody is named; that's a choice, not a failure (review P5-F03)
-            message = "no CODEOWNERS: no code owner named (swerepo init --only github --code-owner @login)"
+            message = "no CODEOWNERS: no code owner named (swerepo init --only github --code-owner …)"
             return _missing(c, item, message, ".github/CODEOWNERS", blocking=False)
+        if github.example_owner(recorded):  # init writes nothing from the question's example: name an owner (P8-K10)
+            message = (
+                f"CODEOWNERS missing, and the recorded code owner {str(recorded).lower()} is the question's example"
+            )
+            return _missing(c, item, message, ".github/CODEOWNERS", fix=OWNER_FIX)
         return _missing(c, item, "CODEOWNERS missing (.github/CODEOWNERS)", ".github/CODEOWNERS")
     text = ctx.read(path) or ""
     try:
@@ -839,6 +940,9 @@ def _codeowners(ctx: Context, path: str | None) -> Finding:
         return _missing(c, item, f"{path}: SWERepo block markers are broken ({error})", path, fix=MARKERS)
     if block is None:
         return _missing(c, item, f"{path} has no SWERepo block (governance owners)", path)
+    problem = _block_owner_problem(block.content)  # the block first: never masked by the lines after it (P8-K03)
+    if problem:
+        return _missing(c, item, f"{path}: {problem}", path, fix=OWNER_FIX)
     # the same line breaks find_block counts: CR, LF, CRLF; not U+2028 or form feeds (review P5-F08)
     rest = re.split(r"\r\n|\r|\n", text)[block.end_line :]
     after = [line for line in rest if line.strip() and not line.lstrip().startswith("#")]
@@ -849,6 +953,58 @@ def _codeowners(ctx: Context, path: str | None) -> Finding:
         message = f"{path}: rules after the SWERepo block can override governance owners{named}"
         return Finding(c, item, CHANGED, message, path)
     return _ok(c, item, f"{path}: governance block last", path)
+
+
+OWNER_FIX = "name a code owner GitHub knows, with write access: swerepo init --only github --code-owner …"
+
+
+def _block_owner_problem(content: str) -> str | None:
+    """What's wrong with the owners in SWERepo's CODEOWNERS block, read offline, or None (review P8-K, P8-K03). A token
+    GitHub can't read is named by its rule's place, never printed: it may be an address with a typo (inv_5e3b5ef3)."""
+    rules = github.codeowners_rules(content)
+    if not rules:
+        return "SWERepo's block has no rules: the governance paths have no code owner"
+    for number, (_, owners) in enumerate(rules, start=1):
+        if not owners:
+            return f"rule {number} of SWERepo's block names no owner: GitHub leaves that path unowned"
+        for owner in owners:
+            if github.example_owner(owner):
+                return f"names {owner.lower()}, the code-owner question's example, not an owner"
+            if not github.readable_owner(owner):
+                return f"rule {number} of SWERepo's block names an owner GitHub can't read"
+    return None
+
+
+def _code_owner_live(ctx: Context, path: str | None) -> list[Finding]:
+    """The owners in SWERepo's CODEOWNERS block, looked up on GitHub: they exist and can own files here (review P8-K).
+    Read only, through gh with GET requests, never with --ci (ADR-20261123-4e40 point 7). An email owner isn't looked
+    up or printed, and the prompt's examples are reported offline by `github.codeowners`."""
+    text = ctx.read(path) if ctx.hub is not None and path is not None else None
+    try:
+        block = find_block(text, style=HASH) if text is not None else None
+    except BlockError:
+        return []
+    if block is None:
+        return []
+    owners: list[str] = []
+    for _, names in github.codeowners_rules(block.content):
+        for owner in names:
+            looked_up = github.valid_owner(owner) and not github.example_owner(owner)
+            if looked_up and owner.lower() not in (o.lower() for o in owners):
+                owners.append(owner)
+    if not owners:
+        return []
+    c, item, found = "github", "github.code-owner", []
+    for owner in owners:
+        verdict, reason = ctx.hub.owner_verdict(owner)  # type: ignore[union-attr]
+        if verdict in (github.OWNER_WRONG, github.OWNER_ACCESS):
+            found.append(_missing(c, item, f"{path}: code owner {owner}: {reason}", path, fix=OWNER_FIX))
+        elif verdict == github.OWNER_UNKNOWN:
+            found.append(Finding(c, item, UNKNOWN, f"{path}: code owner {owner}: {reason}", path))
+    if not found:
+        named = ", ".join(owners)
+        found.append(_ok(c, item, f"code owner{'s' if len(owners) > 1 else ''} on GitHub ({named})", path))
+    return found
 
 
 def _personal(email: str) -> bool:
@@ -1178,9 +1334,14 @@ def _only_newer_pins(store: TemplateStore, record: Record, text: str) -> bool:
 
 def _without_repeats(findings: list[Finding], records: list[Finding]) -> list[Finding]:
     """Record findings, minus a ✓ or ✗ for a path the component already reported as ✓ or ✗: one line,
-    and one count, per missing file. Changed, outdated and unknown records always show."""
-    reported = {(f.component, f.path) for f in findings if f.path and f.status in (OK, MISSING)}
-    return [r for r in records if r.status not in (OK, MISSING) or (r.component, r.path) not in reported]
+    and one count, per missing file. Changed, outdated and unknown records always show, and a warning never hides
+    a blocking record finding (review P8-K04)."""
+
+    def covers(f: Finding, r: Finding) -> bool:
+        same = bool(f.path) and (f.component, f.path) == (r.component, r.path)
+        return same and (f.status == OK or (f.status == MISSING and (f.blocking or not r.blocking)))
+
+    return [r for r in records if r.status not in (OK, MISSING) or not any(covers(f, r) for f in findings)]
 
 
 # --- running ---------------------------------------------------------------------------------------
@@ -1240,9 +1401,10 @@ def run_check(
         message = "a folder inside a git repository: files are looked for here, not at the repository's top"
         findings.append(Finding("repository", "repository.git", UNKNOWN, message))
     hub = github.GitHub.connect(root) if read_github else None  # read-only GET requests (ADR-20261123-4e40)
-    ctx = Context(root=root, detection=detection, state=state, hub=hub, local=local and detection.git.is_work_tree)
-
     chosen = chosen_components(state, detection)
+    checking = tuple(c for c in COMPONENTS if c not in exclude and (c in only if only is not None else c in chosen))
+    ctx = Context(root=root, detection=detection, state=state, hub=hub, local=local and detection.git.is_work_tree,
+                  store=store or TemplateStore(), checking=checking)  # fmt: skip
     for component in COMPONENTS:
         if component in exclude or (only is not None and component not in only):
             continue
@@ -1252,7 +1414,7 @@ def run_check(
         findings.extend(CHECKERS[component](ctx))
     checked = [c for c in COMPONENTS if c in (chosen if only is None else only) and c not in exclude]
     if state is not None and not newer:
-        findings.extend(_without_repeats(findings, _record_findings(ctx, checked, store or TemplateStore())))
+        findings.extend(_without_repeats(findings, _record_findings(ctx, checked, ctx.store or TemplateStore())))
     if base is not None:
         from swerepo.prrules import pr_findings  # needs git history; kept apart from the file checks
 
