@@ -379,7 +379,8 @@ def _ci_unchanged(ctx: Context) -> Record | None:
     text = ctx.read(standard.CI_WORKFLOW) if record is not None else None
     if record is None or text is None:
         return None
-    if file_fingerprint(text, record.template) == record.written:
+    # as rendered, not merged: after `update --merge` the record's `written` holds the person's edits (PR #25 review)
+    if record.written == record.rendered and file_fingerprint(text, record.template) == record.written:
         return record
     return record if ctx.store is not None and _only_newer_pins(ctx.store, record, text) else None
 
@@ -426,7 +427,8 @@ def _ci_tools(ctx: Context) -> list[Finding]:
             # never pyproject.toml's path, which would stand in for a record finding on it (review P8-K04)
             item, path = ("ci.tools", None) if folder == "." else (f"ci.tools.{folder}", folder)
             message = ci.missing_tools_note(ctx.root, folder, missing)
-            found.append(_missing("ci", item, message, path, blocking=False, fix=ci.tools_fix(folder, missing)))
+            fix = ci.tools_fix(ctx.root, folder, missing)
+            found.append(_missing("ci", item, message, path, blocking=False, fix=fix))
     return found
 
 
@@ -439,8 +441,6 @@ def _agents_tools(ctx: Context) -> list[Finding]:
     wrote it, so the commands are the verified ones, never `[values]` edited apart from it (review P8-K09). Left out
     when `ci.tools` speaks for the same project in this run (review P8-K06); a Makefile target or Poetry runs its own
     tools."""
-    if "ci" in ctx.checking and _ci_unchanged(ctx) is not None:
-        return []
     record = ctx.state.blocks().get("AGENTS.md") if ctx.state else None
     text = ctx.read("AGENTS.md") if record is not None else None
     if record is None or text is None or ci.install_command(ctx.root)[0] is None:
@@ -449,15 +449,20 @@ def _agents_tools(ctx: Context) -> list[Finding]:
         block = find_block(text, style=HTML)
     except BlockError:
         return []
-    if block is None or fingerprint(block.content) != record.written:
-        return []
+    if block is None or record.written != record.rendered or fingerprint(block.content) != record.written:
+        return []  # edited, or merged with the person's edits: the commands may install differently (PR #25 review)
     lines = {kind.lower(): re.findall(r"`([^`]+)`", rest) for kind, rest in _COMMANDS_LINE.findall(block.content)}
     needed = uv_run_tools({"test": lines.get("test", []), "lint": lines.get("lint", [])})
+    ci_record = _ci_unchanged(ctx) if "ci" in ctx.checking else None
+    if ci_record is not None:  # ci.tools speaks for the root's CI tools; AGENTS.md's others are said here (PR #25)
+        root = next(((lint, kept) for folder, lint, kept in _ci_projects(ctx, ci_record) if folder == "."), None)
+        covered = set(ci.tools_needed(*root)) if root is not None else set()
+        needed = [tool for tool in needed if tool not in covered]
     missing = ci.missing_tools(ctx.root, ".", needed)
     if not missing:
         return []
     message = ci.AGENTS_TOOLS + ci.missing_tools_note(ctx.root, ".", missing)  # init's words (review P8-K)
-    return [_missing("agents", "agents.tools", message, blocking=False, fix=ci.tools_fix(".", missing))]
+    return [_missing("agents", "agents.tools", message, blocking=False, fix=ci.tools_fix(ctx.root, ".", missing))]
 
 
 # How GitHub's settings get applied: in a terminal, shown and asked first; otherwise by name (ADR-20261125-5f22)

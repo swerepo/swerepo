@@ -454,20 +454,46 @@ def missing_tools(root: Path, folder: str, needed: list[str]) -> list[str]:
     return [name for name in needed if name not in installed]
 
 
-def tools_fix(folder: str, missing: list[str]) -> str:
-    """The command that adds `missing` to the project's dev dependencies, runnable as written (review P8-K)."""
+# A dependency group's or an extra's name as Python packaging allows it (PEP 685, PEP 735): anything else from the
+# project, an address in a quoted TOML key included, is never repeated in output (PR #25 review)
+_GROUP_NAME = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$")
+
+
+def install_group(root: Path, folder: str = ".") -> str | None:
+    """The dependency group `uv sync` installs that new tools should go to: `dev` when uv installs it (its default,
+    `default-groups = "all"`, or `dev` listed), else the first listed group with a valid name; None when the
+    groups uv installs hold no valid name, `default-groups = []` included (PR #25 review)."""
+    uv = _tool(_whole_pyproject(root / folder), "uv")
+    defaults = uv.get("default-groups", ["dev"]) if isinstance(uv, dict) else ["dev"]
+    if defaults == "all":
+        return "dev"
+    names = [g for g in defaults if isinstance(g, str) and _GROUP_NAME.match(g)] if isinstance(defaults, list) else []
+    return "dev" if "dev" in names else (names[0] if names else None)
+
+
+def tools_fix(root: Path, folder: str, missing: list[str]) -> str:
+    """The command that adds `missing` to a dependency group `uv sync` installs, runnable as written (review P8-K, PR
+    #25 review). With no such group, the dev group, and `dev` to add to `[tool.uv] default-groups`."""
     where = "" if folder == "." else f"--directory {folder} "
-    return f"uv add {where}--dev {' '.join(missing)}"
+    group = install_group(root, folder)
+    to = "--dev" if group in ("dev", None) else f"--group {group}"
+    return f"uv add {where}{to} {' '.join(missing)}"
 
 
 def missing_tools_note(root: Path, folder: str, missing: list[str]) -> str:
     """What `init`'s plan and `check` say about tools `uv sync` won't install: one wording for both (review P8-K).
-    Tool names come from a fixed set and folders from `[projects] listed`; nothing else from the project is repeated
-    except an optional extra's name, which `uv sync` skips (ADR-20261125-5f22)."""
+    Tool names come from a fixed set, folders from `[projects] listed`, and group and extra names only when they are
+    valid names; nothing else from the project is repeated (ADR-20261125-5f22, PR #25 review)."""
     where = "the project's" if folder == "." else f"{folder}/'s"
-    note = f"not among {where} installed dependencies: {', '.join(missing)} ({tools_fix(folder, missing)})"
+    note = f"not among {where} installed dependencies: {', '.join(missing)} ({tools_fix(root, folder, missing)})"
+    if install_group(root, folder) is None:
+        note += '; [tool.uv] default-groups leaves the dev group out: add "dev" there, or uv sync won\'t install it'
     extras = extras_holding(root, folder)
-    in_extras = [f"{name} is in the optional extra `{extras[name]}`" for name in missing if name in extras]
+    in_extras = [
+        f"{name} is in the optional extra `{extras[name]}`" if _GROUP_NAME.match(extras[name])
+        else f"{name} is in an optional extra"
+        for name in missing if name in extras
+    ]  # fmt: skip
     if in_extras:  # uv sync installs no extras (ADR-20261125-5f22)
         note += f"; {', '.join(in_extras)}, which uv sync doesn't install: move it to a dependency group"
     return note

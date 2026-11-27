@@ -47,6 +47,11 @@ The design was reviewed by Gemini in two rounds (`P8-K01` to `P8-K07`, all accep
    - **Read from:** the block's own commands, and only while it is as SWERepo wrote it, never from `[values] commands` edited apart from it. Only a tool from the fixed set counts (`pytest`, `ruff`, the kept linters), never a flag, a path or an address (review P8-K09).
    - **Left out:** when `ci.tools` was evaluated in the same run, and for a Makefile target or Poetry, which run their own tools.
    - **Where the code moved:** `commands()` went from `init.py` to `swerepo/commands.py`, because `check` can't import `init`.
+   - **After Copilot's review of PR #25:**
+     - "As SWERepo wrote it" means as rendered, never as merged. After `update --merge`, a record's `written` holds the person's edits, which may install differently, so neither warning runs from it.
+     - `agents.tools` leaves out only the tools the root's CI jobs run, which `ci.tools` reports; a tool only `AGENTS.md` runs is still said.
+     - The fix names a group `uv sync` installs: `--dev` when `dev` is among `[tool.uv] default-groups` (or by default), else `--group <the first listed>`. With no such group, the note says to add `dev` there.
+     - A group's or an optional extra's name is repeated only when it is a valid name; any other key, an address in a quoted TOML key included, is never shown.
 4. **A warning never hides a blocking gap.** `check` shows one line per missing file. It now drops a blocking record finding only for another blocking finding or a `✓` at the same path, never for a warning.
 5. **`check` reads SWERepo's CODEOWNERS block, offline too.**
    - **How the block is read:** as rule lines, with `#` comments skipped.

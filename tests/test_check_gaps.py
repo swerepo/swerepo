@@ -212,6 +212,97 @@ class TestAgentsTools:
         assert "agents.tools" not in by_item(root, only=["agents"])
 
 
+def _merged(root: Path, path: str, text: str, kind: str = "file") -> None:
+    """The file as `update --merge` leaves it: the person's edit merged in, the record's `written` following it while
+    `rendered` stays SWERepo's."""
+    from swerepo.blocks import file_fingerprint
+    from swerepo.fingerprint import HTML, find_block, fingerprint
+    from swerepo.state import Record, State
+
+    (root / path).write_text(text)
+    state = State.load(root)
+    records = state.files() if kind == "file" else state.blocks()
+    old = records[path]
+    if kind == "file":
+        written = file_fingerprint(text, old.template)
+    else:
+        written = fingerprint(find_block(text, style=HTML).content)
+    (state.set_file if kind == "file" else state.set_block)(
+        path, Record(old.template, old.rendered, written, old.inputs)
+    )
+    state.save(root)
+
+
+class TestCopilotReviewPR25:
+    """Copilot's review of PR #25."""
+
+    def test_a_merged_workflow_or_agents_block_is_left_out(self, tmp_path: Path):
+        root = project_at(tmp_path / "app")
+        init(root, ["agents", "ci"], hosts=["claude"])
+        workflow = (root / WORKFLOW).read_text().replace("uv sync", "uv sync --all-extras")
+        _merged(root, WORKFLOW, workflow)  # an install step of the person's, merged in by update
+        found = by_item(root)
+        assert "ci.tools" not in found and "agents.tools" in found  # the merged workflow may install them
+        agents = (root / "AGENTS.md").read_text().replace("- Install: `uv sync`", "- Install: `uv sync --all-extras`")
+        _merged(root, "AGENTS.md", agents, kind="block")
+        assert "agents.tools" not in by_item(root)
+
+    def test_agents_md_s_own_tools_are_said_beside_ci_s(self, tmp_path: Path):
+        root = project_at(tmp_path / "app", TOOLS)  # pytest and ruff installed: CI's tools are all there
+        init(root, ["agents", "ci"], hosts=["claude"])
+        text = (root / "AGENTS.md").read_text()
+        lint = re.search(r"^- Lint: .*$", text, re.MULTILINE).group(0)
+        recorded = text.replace(lint, "- Lint: `uv run black --check .`")  # an older record: black, as init wrote it
+        _merged(root, "AGENTS.md", recorded, kind="block")
+        from swerepo.state import Record, State
+
+        state = State.load(root)
+        old = state.blocks()["AGENTS.md"]
+        state.set_block("AGENTS.md", Record(old.template, old.written, old.written, old.inputs))  # as rendered then
+        state.save(root)
+        found = by_item(root)
+        assert "ci.tools" not in found
+        assert found["agents.tools"].fix == "uv add --dev black"  # CI runs ruff; AGENTS.md still says black
+
+    @pytest.mark.parametrize(("groups", "fix", "said"), [
+        ('[tool.uv]\ndefault-groups = ["test"]\n', "uv add --group test ruff", ""),
+        ('[tool.uv]\ndefault-groups = "all"\n', "uv add --dev ruff", ""),
+        ('[tool.uv]\ndefault-groups = []\n', "uv add --dev pytest ruff", "default-groups leaves the dev group out"),
+    ])  # fmt: skip
+    def test_the_fix_goes_to_a_group_uv_sync_installs(self, tmp_path: Path, groups: str, fix: str, said: str):
+        pyproject = BARE + '[dependency-groups]\ntest = ["pytest"]\n' + groups
+        root = project_at(tmp_path / "app", pyproject)
+        written = init(root, ["ci"])
+        finding = by_item(root, only=["ci"])["ci.tools"]
+        assert finding.fix == fix and fix in finding.message and said in finding.message
+        assert finding.message in notes(written, "ci")  # init's plan says the same
+
+    def test_a_listed_project_s_fix_uses_its_own_group(self, tmp_path: Path):
+        root = project_at(tmp_path / "app", TOOLS)
+        make(root, {"svc/pyproject.toml": BARE.replace('"app"', '"svc"')
+                    + '[dependency-groups]\ntest = ["pytest"]\n[tool.uv]\ndefault-groups = ["test"]\n'})  # fmt: skip
+        init(root, ["ci"], projects=["svc"])
+        assert by_item(root, only=["ci"])["ci.tools.svc"].fix == "uv add --directory svc --group test ruff"
+
+    def test_a_group_that_isn_t_a_name_is_never_used_or_repeated(self, tmp_path: Path):
+        bad = "ops" + "@" + "acme.test"
+        groups = f'[dependency-groups]\ntest = ["pytest"]\n[tool.uv]\ndefault-groups = ["{bad}", "test"]\n'
+        root = project_at(tmp_path / "app", BARE + groups)
+        init(root, ["ci"])
+        finding = by_item(root, only=["ci"])["ci.tools"]
+        assert (
+            finding.fix == "uv add --group test ruff" and bad not in finding.message and "acme" not in finding.message
+        )
+
+    def test_an_extra_s_key_that_isn_t_a_name_is_never_repeated(self, tmp_path: Path):
+        key = "dev" + "@" + "acme.test"
+        root = project_at(tmp_path / "app", BARE + f'[project.optional-dependencies]\n"{key}" = ["pytest"]\n')
+        init(root, ["ci"])
+        message = by_item(root, only=["ci"])["ci.tools"].message
+        assert "pytest is in an optional extra, which uv sync doesn't install" in message
+        assert key not in message and "acme" not in message
+
+
 # --- Gap 2: code owners GitHub doesn't know ------------------------------------------------------------------------
 
 
